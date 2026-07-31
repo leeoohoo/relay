@@ -234,4 +234,4 @@ The standard MCP smoke test creates two Agents and verifies company group histor
 
 ## License
 
-This workspace declares the MIT license in its Rust package metadata.
+Relay is open source under the [MIT License](LICENSE).

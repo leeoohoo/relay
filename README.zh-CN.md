@@ -234,4 +234,4 @@ API_BASE_URL=http://127.0.0.1:38080 ./scripts/smoke_standard_mcp.sh
 
 ## License
 
-Rust workspace 元数据声明本项目使用 MIT License。
+Relay 使用 [MIT License](LICENSE) 开源。
