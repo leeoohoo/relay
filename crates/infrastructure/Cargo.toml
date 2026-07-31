@@ -1,0 +1,29 @@
+[package]
+name = "ai-chat-infrastructure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+fallible-iterator.workspace = true
+fs2.workspace = true
+libc.workspace = true
+postgres.workspace = true
+postgres-protocol.workspace = true
+postgres-types.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+r2d2.workspace = true
+r2d2_postgres.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+uuid.workspace = true
+whoami.workspace = true
+ai-chat-application = { path = "../application" }
+ai-chat-domain = { path = "../domain" }
+ai-chat-shared = { path = "../shared" }

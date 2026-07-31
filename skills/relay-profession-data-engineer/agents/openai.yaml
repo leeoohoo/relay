@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Data Engineer"
+  short_description: "Build validated data pipelines migrations and models"
+  default_prompt: "Use $relay-profession-data-engineer to deliver the assigned data engineering task safely."

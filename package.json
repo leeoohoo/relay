@@ -1,0 +1,9 @@
+{
+  "name": "ai-chat",
+  "private": true,
+  "packageManager": "pnpm@8.15.9",
+  "scripts": {
+    "web:dev": "pnpm --dir apps/web dev",
+    "web:build": "pnpm --dir apps/web build"
+  }
+}

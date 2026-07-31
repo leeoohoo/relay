@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay UI Designer"
+  short_description: "Create consistent accessible visual interface deliverables"
+  default_prompt: "Use $relay-profession-ui-designer to create and validate the assigned UI design."

@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ai-chat-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_chat
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_chat"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    profiles: ["future"]
+    container_name: ai-chat-redis
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["future"]
+    container_name: ai-chat-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: ai-chat-server
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      REPOSITORY_MODE: postgres
+      DATABASE_URL: ${SERVER_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}
+      ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-true}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-dev-admin-token}
+      ADMIN_API_TOKENS_JSON: ${ADMIN_API_TOKENS_JSON:-}
+      APP_ENV: ${APP_ENV:-development}
+      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-http://127.0.0.1:35173}
+      API_REQUEST_TIMEOUT_SECONDS: ${API_REQUEST_TIMEOUT_SECONDS:-30}
+      API_MAX_REQUEST_BODY_BYTES: ${API_MAX_REQUEST_BODY_BYTES:-1048576}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:35173}
+      REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-false}
+      EMAIL_DELIVERY_WEBHOOK_URL: ${EMAIL_DELIVERY_WEBHOOK_URL:-}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-16}
+      WEB_DIST_DIR: /app/web-dist
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ready || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "${WEB_HOST_PORT:-35173}:8080"
+
+volumes:
+  postgres_data:
+  minio_data:

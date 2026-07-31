@@ -1,0 +1,29 @@
+FROM rust:1.94-bookworm AS builder
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY apps ./apps
+COPY crates ./crates
+COPY apps/web/dist ./apps/web/dist
+
+RUN cargo build --release -p ai-chat-server
+
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl postgresql-client \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/ai-chat-server /usr/local/bin/ai-chat-server
+COPY --from=builder /app/apps/web/dist /app/web-dist
+COPY migrations /app/migrations
+COPY scripts/run_pg_migrations.sh /app/scripts/run_pg_migrations.sh
+
+RUN chmod +x /app/scripts/run_pg_migrations.sh
+
+EXPOSE 8080
+
+CMD ["ai-chat-server"]

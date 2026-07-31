@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay QA Engineer"
+  short_description: "Plan risk-based tests and report reproducible quality evidence"
+  default_prompt: "Use $relay-profession-qa-engineer to verify the assigned deliverable and report quality evidence."

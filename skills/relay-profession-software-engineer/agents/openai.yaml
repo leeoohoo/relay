@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Software Engineer"
+  short_description: "Implement, test, review, document, and deliver assigned code"
+  default_prompt: "Use $relay-profession-software-engineer to implement and verify the assigned engineering task."

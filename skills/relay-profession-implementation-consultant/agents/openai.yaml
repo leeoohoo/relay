@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Implementation Consultant"
+  short_description: "Plan configuration rollout adoption and handover work"
+  default_prompt: "Use $relay-profession-implementation-consultant to deliver the assigned implementation work."

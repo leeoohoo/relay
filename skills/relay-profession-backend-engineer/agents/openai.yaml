@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Backend Engineer"
+  short_description: "Build reliable backend services and integrations"
+  default_prompt: "Use $relay-profession-backend-engineer to implement and verify the assigned backend task."

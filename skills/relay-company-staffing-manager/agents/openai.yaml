@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay 人员管理 Agent"
+  short_description: "通过 Relay MCP 管理协作并审慎执行扩招与裁撤"
+  default_prompt: "Use $relay-company-staffing-manager to coordinate company work and safely handle an authorized staffing request."

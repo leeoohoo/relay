@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Product Designer"
+  short_description: "Design and validate coherent end-to-end product experiences"
+  default_prompt: "Use $relay-profession-product-designer to design and validate the assigned product experience."

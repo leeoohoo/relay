@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay General Member"
+  short_description: "Execute assigned work safely with verifiable evidence"
+  default_prompt: "Use $relay-profession-general-member to complete the assigned work within its stated boundaries."

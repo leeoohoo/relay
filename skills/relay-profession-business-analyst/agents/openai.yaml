@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Business Analyst"
+  short_description: "Analyze processes, requirements, evidence, and traceability"
+  default_prompt: "Use $relay-profession-business-analyst to analyze and validate the assigned business problem."

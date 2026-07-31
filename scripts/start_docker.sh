@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-up}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-$HOME/.docker/daemon.json}"
+KNOWN_BAD_DOCKER_MIRRORS=(
+  "hub-mirror.c.163.com"
+  "mirror.baidubce.com"
+)
+REQUIRED_DOCKER_IMAGES=(
+  "postgres:16"
+  "rust:1.94-bookworm"
+  "debian:bookworm-slim"
+)
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Missing required command: docker" >&2
+  exit 1
+fi
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "Missing required command: pnpm" >&2
+  exit 1
+fi
+
+compose() {
+  docker compose -f "$COMPOSE_FILE" "$@"
+}
+
+build_web_assets() {
+  (cd "$ROOT_DIR" && pnpm --dir apps/web build)
+}
+
+existing_host_port_for() {
+  local container_name="$1"
+  local container_port="$2"
+
+  docker inspect \
+    -f "{{with index .HostConfig.PortBindings \"$container_port\"}}{{(index . 0).HostPort}}{{end}}" \
+    "$container_name" 2>/dev/null || true
+}
+
+ensure_docker_daemon() {
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon is not running. Please start Docker Desktop first." >&2
+    exit 1
+  fi
+}
+
+list_known_bad_mirrors_in_daemon() {
+  local mirror
+
+  [[ -f "$DOCKER_DAEMON_JSON" ]] || return 0
+
+  for mirror in "${KNOWN_BAD_DOCKER_MIRRORS[@]}"; do
+    if grep -q "$mirror" "$DOCKER_DAEMON_JSON"; then
+      printf '%s\n' "$mirror"
+    fi
+  done
+}
+
+list_missing_docker_images() {
+  local image
+
+  for image in "${REQUIRED_DOCKER_IMAGES[@]}"; do
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      printf '%s\n' "$image"
+    fi
+  done
+}
+
+print_registry_mirror_fix() {
+  local detected_mirrors=()
+  local mirror
+
+  while IFS= read -r mirror; do
+    [[ -n "$mirror" ]] && detected_mirrors+=("$mirror")
+  done < <(list_known_bad_mirrors_in_daemon)
+
+  cat >&2 <<EOF
+Detected Docker registry mirror risk in $DOCKER_DAEMON_JSON.
+
+The Docker daemon is configured with one or more failing mirrors, and the required base images are not all available locally.
+This usually prevents Docker from pulling the images needed for:
+- postgres
+- ai-chat-server
+- built-in web assets served by ai-chat-server
+
+Detected risky mirrors:
+EOF
+
+  if (( ${#detected_mirrors[@]} == 0 )); then
+    echo "- unknown mirror from daemon config" >&2
+  else
+    printf -- '- %s\n' "${detected_mirrors[@]}" >&2
+  fi
+
+  cat >&2 <<EOF
+
+Recommended fix:
+1. Edit $DOCKER_DAEMON_JSON
+2. Remove the failing mirror entry, for example keep:
+{
+  "registry-mirrors": [
+    "https://dockerproxy.com"
+  ]
+}
+3. Restart Docker Desktop
+4. Re-run: ./scripts/start_docker.sh up
+EOF
+}
+
+preflight_docker_images() {
+  local missing_images=()
+  local image
+
+  while IFS= read -r image; do
+    [[ -n "$image" ]] && missing_images+=("$image")
+  done < <(list_missing_docker_images)
+
+  if (( ${#missing_images[@]} == 0 )); then
+    return 0
+  fi
+
+  if [[ -n "$(list_known_bad_mirrors_in_daemon)" ]]; then
+    echo "Cannot continue Docker startup because these images are missing locally:" >&2
+    printf -- '- %s\n' "${missing_images[@]}" >&2
+    print_registry_mirror_fix
+    exit 1
+  fi
+}
+
+RESERVED_PORTS=""
+
+port_is_reserved() {
+  local port="$1"
+  [[ " $RESERVED_PORTS " == *" $port "* ]]
+}
+
+reserve_port() {
+  local port="$1"
+  if ! port_is_reserved "$port"; then
+    RESERVED_PORTS="${RESERVED_PORTS} ${port}"
+  fi
+}
+
+port_is_in_use() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$port" -sTCP:LISTEN -n -P >/dev/null 2>&1
+    return $?
+  fi
+
+  docker ps --format '{{.Ports}}' | grep -q ":$port->"
+}
+
+choose_port() {
+  local preferred="$1"
+  local candidate="$preferred"
+
+  while port_is_in_use "$candidate" || port_is_reserved "$candidate"; do
+    candidate=$((candidate + 1))
+  done
+
+  printf '%s\n' "$candidate"
+}
+
+load_existing_port_assignments() {
+  local existing_port=""
+
+  if [[ -z "${POSTGRES_HOST_PORT:-}" ]]; then
+    existing_port="$(existing_host_port_for ai-chat-postgres 5432/tcp)"
+    [[ -n "$existing_port" ]] && POSTGRES_HOST_PORT="$existing_port"
+  fi
+
+  if [[ -z "${API_HOST_PORT:-}" ]]; then
+    existing_port="$(existing_host_port_for ai-chat-server 8080/tcp)"
+    [[ -n "$existing_port" ]] && API_HOST_PORT="$existing_port"
+  fi
+
+  if [[ -z "${WEB_HOST_PORT:-}" ]]; then
+    existing_port="$(existing_host_port_for ai-chat-server 8080/tcp)"
+    [[ -n "$existing_port" ]] && WEB_HOST_PORT="$existing_port"
+  fi
+}
+
+assign_port() {
+  local var_name="$1"
+  local preferred="$2"
+  local selected_port
+
+  selected_port="$(choose_port "$preferred")"
+  reserve_port "$selected_port"
+  printf -v "$var_name" '%s' "$selected_port"
+}
+
+prepare_ports() {
+  local postgres_host_port public_host_port
+
+  load_existing_port_assignments
+
+  if [[ -n "${POSTGRES_HOST_PORT:-}" ]]; then
+    postgres_host_port="$POSTGRES_HOST_PORT"
+    reserve_port "$postgres_host_port"
+  else
+    assign_port postgres_host_port 5432
+  fi
+
+  if [[ -n "${WEB_HOST_PORT:-}" ]]; then
+    public_host_port="$WEB_HOST_PORT"
+    reserve_port "$public_host_port"
+  elif [[ -n "${API_HOST_PORT:-}" ]]; then
+    public_host_port="$API_HOST_PORT"
+    reserve_port "$public_host_port"
+  else
+    assign_port public_host_port 35173
+  fi
+
+  export POSTGRES_HOST_PORT="$postgres_host_port"
+  export API_HOST_PORT="$public_host_port"
+  export WEB_HOST_PORT="$public_host_port"
+  export PG_CONTAINER="${PG_CONTAINER:-ai-chat-postgres}"
+  export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:${POSTGRES_HOST_PORT}/ai_chat}"
+  export SERVER_DATABASE_URL="${SERVER_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}"
+  export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://127.0.0.1:${WEB_HOST_PORT}}"
+}
+
+start_application_services() {
+  compose up -d --build --no-deps server
+  wait_for_container_health ai-chat-server
+}
+
+wait_for_container_health() {
+  local container_name="$1"
+  local retries="${2:-60}"
+  local attempt=1
+
+  while (( attempt <= retries )); do
+    local inspect_output container_status health_status
+    inspect_output="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_name" 2>/dev/null || true)"
+    container_status="${inspect_output%% *}"
+    health_status="${inspect_output#* }"
+
+    if [[ "$health_status" == "healthy" ]]; then
+      return 0
+    fi
+
+    if [[ "$health_status" == "none" && "$container_status" == "running" ]]; then
+      return 0
+    fi
+
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  echo "Container did not become ready in time: $container_name" >&2
+  docker ps --filter "name=$container_name"
+  return 1
+}
+
+wait_for_tcp_port() {
+  local host="$1"
+  local port="$2"
+  local retries="${3:-60}"
+  local attempt=1
+
+  while (( attempt <= retries )); do
+    if command -v nc >/dev/null 2>&1 && nc -z "$host" "$port" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    if (exec 3<>"/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
+      exec 3<&-
+      exec 3>&-
+      return 0
+    fi
+
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  echo "TCP port did not become reachable in time: ${host}:${port}" >&2
+  return 1
+}
+
+run_migrations() {
+  local database_url="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/ai_chat}"
+  local pg_container="${PG_CONTAINER:-ai-chat-postgres}"
+
+  FORCE_DOCKER_PSQL=true \
+  DATABASE_URL="$database_url" \
+  PG_CONTAINER="$pg_container" \
+  bash "$ROOT_DIR/scripts/run_pg_migrations.sh" reset
+}
+
+print_summary() {
+  cat <<EOF
+AI Chat Docker stack is ready.
+
+Services:
+- Web/API: http://127.0.0.1:${WEB_HOST_PORT}
+- Postgres: 127.0.0.1:${POSTGRES_HOST_PORT}
+
+Useful commands:
+- View status: ./scripts/start_docker.sh ps
+- View logs: ./scripts/start_docker.sh logs
+- Stop stack: ./scripts/start_docker.sh down
+EOF
+}
+
+case "$MODE" in
+  up)
+    ensure_docker_daemon
+    preflight_docker_images
+    build_web_assets
+    prepare_ports
+    compose up -d --build postgres
+    wait_for_container_health ai-chat-postgres
+    wait_for_tcp_port 127.0.0.1 "$POSTGRES_HOST_PORT"
+    run_migrations
+    start_application_services
+    print_summary
+    ;;
+  rebuild)
+    ensure_docker_daemon
+    preflight_docker_images
+    build_web_assets
+    prepare_ports
+    compose down
+    compose up -d --build postgres
+    wait_for_container_health ai-chat-postgres
+    wait_for_tcp_port 127.0.0.1 "$POSTGRES_HOST_PORT"
+    run_migrations
+    start_application_services
+    print_summary
+    ;;
+  down)
+    compose down
+    ;;
+  restart)
+    prepare_ports
+    compose restart
+    ;;
+  ps)
+    prepare_ports
+    compose ps
+    ;;
+  logs)
+    prepare_ports
+    compose logs -f --tail=100
+    ;;
+  *)
+    echo "Usage: $0 [up|rebuild|down|restart|ps|logs]" >&2
+    exit 1
+    ;;
+esac

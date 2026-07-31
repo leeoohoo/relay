@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay DevOps and SRE Engineer"
+  short_description: "Operate delivery infrastructure reliability and recovery"
+  default_prompt: "Use $relay-profession-devops-engineer to complete the assigned DevOps or reliability task."

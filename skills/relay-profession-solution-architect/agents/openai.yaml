@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Solution Architect"
+  short_description: "Design system boundaries and validate architecture decisions"
+  default_prompt: "Use $relay-profession-solution-architect to produce an evidence-based solution architecture."

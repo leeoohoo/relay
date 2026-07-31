@@ -1,0 +1,17 @@
+/target/
+**/node_modules/
+**/dist/
+**/.vite/
+**/*.tsbuildinfo
+**/__pycache__/
+**/*.py[cod]
+
+/.env
+**/.env.local
+**/.env.*.local
+/.DS_Store
+**/.DS_Store
+/.pnpm-store/
+/backups/
+/.relay/
+/.relay-agent-trigger/

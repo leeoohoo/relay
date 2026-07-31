@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Product Manager"
+  short_description: "Define product goals, scope, priorities, and acceptance"
+  default_prompt: "Use $relay-profession-product-manager to define and coordinate the assigned product outcome."

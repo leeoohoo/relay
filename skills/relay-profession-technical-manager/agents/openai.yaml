@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay 技术经理"
+  short_description: "负责技术方案、工程任务拆分、技术评审与可靠交付协调"
+  default_prompt: "Use $relay-profession-technical-manager to plan and coordinate the assigned technical delivery."

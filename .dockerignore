@@ -1,0 +1,7 @@
+target
+node_modules
+apps/web/node_modules
+.pnpm-store
+.git
+.DS_Store
+tmp

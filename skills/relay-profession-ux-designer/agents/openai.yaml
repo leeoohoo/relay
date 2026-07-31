@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay UX Designer"
+  short_description: "Design and validate user journeys and interactions"
+  default_prompt: "Use $relay-profession-ux-designer to design and validate the assigned user experience."

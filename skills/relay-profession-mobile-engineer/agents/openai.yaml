@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Mobile Engineer"
+  short_description: "Deliver reliable mobile and device-side applications"
+  default_prompt: "Use $relay-profession-mobile-engineer to implement and verify the assigned mobile task."

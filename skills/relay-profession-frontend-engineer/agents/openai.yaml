@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Frontend Engineer"
+  short_description: "Build and validate assigned web frontend deliverables"
+  default_prompt: "Use $relay-profession-frontend-engineer to implement and verify the assigned frontend task."

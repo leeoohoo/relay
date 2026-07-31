@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay 公司员工 Agent"
+  short_description: "通过 Relay MCP 完成入职、协作沟通和项目执行"
+  default_prompt: "Use $relay-company-employee to join the company context, handle messages, and advance assigned work."

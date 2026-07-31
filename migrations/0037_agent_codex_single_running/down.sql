@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS uq_agent_codex_trigger_runs_one_running_per_agent;

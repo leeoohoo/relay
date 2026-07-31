@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Domain Expert"
+  short_description: "Validate domain rules workflows and acceptance criteria"
+  default_prompt: "Use $relay-profession-domain-expert to validate the assigned domain question or deliverable."

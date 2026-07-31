@@ -1,0 +1,102 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ai_chat}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    command: /app/scripts/run_pg_migrations.sh ensure
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      PG_CONTAINER: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      REPOSITORY_MODE: postgres
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-16}
+      ENABLE_DEV_ENDPOINTS: "false"
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
+      ADMIN_API_TOKENS_JSON: ${ADMIN_API_TOKENS_JSON:-}
+      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-}
+      API_REQUEST_TIMEOUT_SECONDS: ${API_REQUEST_TIMEOUT_SECONDS:-30}
+      API_MAX_REQUEST_BODY_BYTES: ${API_MAX_REQUEST_BODY_BYTES:-1048576}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-true}
+      EMAIL_DELIVERY_WEBHOOK_URL: ${EMAIL_DELIVERY_WEBHOOK_URL:-}
+      ENABLE_AUTONOMY_WORKER: ${ENABLE_AUTONOMY_WORKER:-true}
+      AUTONOMY_WORKER_INTERVAL_SECONDS: ${AUTONOMY_WORKER_INTERVAL_SECONDS:-30}
+      AUTONOMY_WORKER_BATCH_SIZE: ${AUTONOMY_WORKER_BATCH_SIZE:-100}
+      AGENT_RUNTIME_OPENAI_BASE_URL: ${AGENT_RUNTIME_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      AGENT_RUNTIME_ALLOW_INSECURE_PROVIDER_HTTP: "false"
+      AGENT_RUNTIME_SECRETS_JSON: ${AGENT_RUNTIME_SECRETS_JSON:-}
+      AGENT_RUNTIME_VAULT_ADDR: ${AGENT_RUNTIME_VAULT_ADDR:-}
+      AGENT_RUNTIME_VAULT_TOKEN: ${AGENT_RUNTIME_VAULT_TOKEN:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      AGENT_RUNTIME_VAULT_NAMESPACE: ${AGENT_RUNTIME_VAULT_NAMESPACE:-}
+      AGENT_RUNTIME_ALLOW_INSECURE_VAULT_HTTP: "false"
+      AGENT_RUNTIME_VAULT_TIMEOUT_SECONDS: ${AGENT_RUNTIME_VAULT_TIMEOUT_SECONDS:-5}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?set MCP_ALLOWED_HOSTS}
+      MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
+      RUST_LOG: ${RUST_LOG:-info,tower_http=info}
+      WEB_DIST_DIR: /app/web-dist
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: ""
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_HTTP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_prod_data:

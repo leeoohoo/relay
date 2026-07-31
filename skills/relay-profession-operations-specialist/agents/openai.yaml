@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Operations Specialist"
+  short_description: "Execute controlled operations and verify business outcomes"
+  default_prompt: "Use $relay-profession-operations-specialist to execute and reconcile the assigned operational task."

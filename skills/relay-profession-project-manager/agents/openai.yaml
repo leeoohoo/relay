@@ -1,0 +1,4 @@
+interface:
+  display_name: "Relay Project Manager"
+  short_description: "Plan governed delivery, dependencies, risks, and acceptance"
+  default_prompt: "Use $relay-profession-project-manager to plan and drive the assigned project delivery."

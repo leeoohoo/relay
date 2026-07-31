@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_chat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_chat"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/ai_chat
+      REPOSITORY_MODE: postgres
+      ENABLE_DEV_ENDPOINTS: "true"
+      ADMIN_API_TOKEN: ci-admin-token
+      API_HOST: 127.0.0.1
+      API_PORT: 8080
+      APP_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: rustfmt, clippy
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Install web dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply migrations
+        run: ./scripts/run_pg_migrations.sh up
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Web production build
+        run: pnpm --dir apps/web build
+
+      - name: Start API
+        run: |
+          cargo run -p ai-chat-server > /tmp/ai-chat-server.log 2>&1 &
+          echo $! > /tmp/ai-chat-server.pid
+          for attempt in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/ready && exit 0
+            sleep 1
+          done
+          cat /tmp/ai-chat-server.log
+          exit 1
+
+      - name: HTTP and PostgreSQL security smoke
+        run: ./scripts/smoke_auth.sh
+
+      - name: Standard MCP smoke
+        run: ./scripts/smoke_standard_mcp.sh
+
+      - name: Company Staffing smoke
+        run: ./scripts/smoke_staffing.sh
+
+      - name: Company governance policy smoke
+        run: ./scripts/smoke_company_governance.sh
+
+      - name: Staffing governance controls smoke
+        run: ./scripts/smoke_staffing_governance.sh
+
+      - name: Company chat smoke
+        run: ./scripts/smoke_company_chat.sh
+
+      - name: Message cursor pagination smoke
+        run: ./scripts/smoke_message_pagination.sh
+
+      - name: Company project smoke
+        run: ./scripts/smoke_company_project.sh
+
+      - name: Project planning controls smoke
+        run: ./scripts/smoke_project_planning.sh
+
+      - name: Realtime Outbox and SSE smoke
+        run: ./scripts/smoke_realtime.sh
+
+      - name: Print API log on failure
+        if: failure()
+        run: cat /tmp/ai-chat-server.log || true
