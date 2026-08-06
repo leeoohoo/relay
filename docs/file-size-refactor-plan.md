@@ -19,7 +19,7 @@
 | [x] | 3,870 | `crates/domain/src/company.rs` | entity/governance facade is now 791 lines; profession catalogs/playbooks, project-type catalog/inference/rules and tests are focused modules |
 | [ ] | 3,849 | `crates/mcp/src/lib.rs` | gateway, schemas, tool definitions, dispatch, audit and inputs |
 | [ ] | 3,608 | `crates/application/src/memory.rs` | state, persistence and domain repository implementations |
-| [ ] | 3,365 | `crates/infrastructure/src/codex_trigger.rs` | runner, command, approval, progress, configuration and tests |
+| [x] | 3,365 | `crates/infrastructure/src/codex_trigger.rs` | facade/types are now 222 lines; configuration/discovery, runtime, app-server RPC, JSONL events, model catalog, validation and tests are focused modules |
 | [x] | 2,565 | `apps/agent-trigger/src/main.rs` | bootstrap/poll loop is now 589 lines; Codex control/install/plugins, execution and Relay Skill materialization are focused modules |
 | [ ] | 2,488 | `apps/web/src/styles.css` | tokens, base, layout and feature-specific stylesheets |
 | [x] | 2,239 | `crates/infrastructure/src/lib.rs` | PostgreSQL-only adapter construction; redundant enum delegation removed |
@@ -80,7 +80,7 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 
 - [ ] Split PostgreSQL persistence by repository domain, with shared connection/transaction/mapping modules.
 - [x] Remove duplicated `RepositoryAdapter` delegation by standardizing runtime storage on PostgreSQL.
-- [ ] Split Codex trigger execution into runner, command, approval, progress and configuration modules.
+- [x] Split Codex trigger execution into configuration/discovery, runtime, app-server RPC, progress/JSONL, model catalog and validation modules.
 - [x] Split Codex control into store/profile settings, request/runtime, MCP, persistence, validation and focused test modules.
 - [x] Split Git workspace behavior into manager, validation and command execution modules while retaining focused worktree lifecycle code in the facade.
 
