@@ -8,30 +8,81 @@ Relay does **not** implement another model-calling stack. Its optional local tri
 
 ## Quick Start
 
-A complete installation needs Git, Docker, Node.js 22, and Rust. Server, Web, PostgreSQL, and Harness run in Docker; Rust is only used to build the host Agent Trigger.
+Relay supports Linux x64/ARM64, Intel/Apple Silicon macOS, and Windows 10/11 through WSL2. A complete installation needs Docker, Node.js 22, Git, and Rust; Rust is only used to build the host Agent Trigger.
 
-### 1. Install Rust
+### Linux (Ubuntu / Debian, x64 or ARM64)
 
-Ubuntu, Debian, or WSL2:
+Install and start [Docker Engine](https://docs.docker.com/engine/install/) or Docker Desktop, then run:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl build-essential pkg-config libssl-dev
+sudo apt-get install -y git curl build-essential pkg-config libssl-dev
+
+# Node.js 22
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+nvm install 22
+
+# Rust / Cargo
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
+
+# Relay
+git clone https://github.com/leeoohoo/relay.git relay
+cd relay
+corepack enable
+corepack prepare pnpm@8.15.9 --activate
+pnpm install --frozen-lockfile
+./start.sh
 ```
 
-macOS:
+### macOS (Intel or Apple Silicon)
+
+Install [Homebrew](https://brew.sh/), then run:
 
 ```bash
+brew install git node@22
+brew link --overwrite node@22
+brew install --cask docker
+open -a Docker
+
+# After first launch, wait until Docker Desktop reports that Docker is running
 xcode-select --install 2>/dev/null || true
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
+
+git clone https://github.com/leeoohoo/relay.git relay
+cd relay
+corepack enable
+corepack prepare pnpm@8.15.9 --activate
+pnpm install --frozen-lockfile
+./start.sh
 ```
 
-### 2. Download and start Relay
+### Windows 10 / 11 (WSL2)
+
+The production launcher currently uses Bash, so Windows runs Relay through WSL2; do not run `start.sh` directly from native PowerShell. First run this in an Administrator PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+winget install -e --id Docker.DockerDesktop
+```
+
+Restart Windows, start Docker Desktop, and enable **Use the WSL 2 based engine** plus WSL Integration for Ubuntu. Then open the Ubuntu terminal and run:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y git curl build-essential pkg-config libssl-dev
+
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+nvm install 22
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
 git clone https://github.com/leeoohoo/relay.git relay
 cd relay
 corepack enable
@@ -42,14 +93,7 @@ pnpm install --frozen-lockfile
 
 When startup completes, open the Relay URL printed in the terminal, usually [http://127.0.0.1:45274](http://127.0.0.1:45274). Register an account, create a company and Agents, then open **Codex Console → CLI & Authentication** to inspect or install Codex CLI.
 
-If Linux reports `Permission denied`:
-
-```bash
-chmod +x start.sh scripts/*.sh
-./start.sh
-```
-
-You can also use `bash ./start.sh`. Do not use `sudo ./start.sh`, because it can leave root-owned files in the workspace.
+If `./start.sh` reports `Permission denied`, run `chmod +x start.sh scripts/*.sh` and retry, or use `bash ./start.sh`. Do not use `sudo ./start.sh`, because it can leave root-owned files in the workspace.
 
 ## Why Relay
 

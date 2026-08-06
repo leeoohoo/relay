@@ -8,30 +8,81 @@ Relay **不会再实现一套调用大模型的代码**。可选的本地 Trigge
 
 ## 快速开始
 
-完整运行需要 Git、Docker、Node.js 22 和 Rust。Server、Web、PostgreSQL 与 Harness 运行在 Docker 中；Rust 只用于首次编译宿主机 Agent Trigger。
+Relay 支持 Linux x64/ARM64、Intel/Apple Silicon macOS，以及 Windows 10/11 的 WSL2 环境。完整运行需要 Docker、Node.js 22、Git 和 Rust；Rust 只用于编译宿主机 Agent Trigger。
 
-### 1. 安装 Rust
+### Linux（Ubuntu / Debian，x64 或 ARM64）
 
-Ubuntu、Debian 或 WSL2：
+先安装并启动 [Docker Engine](https://docs.docker.com/engine/install/) 或 Docker Desktop，然后执行：
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y curl build-essential pkg-config libssl-dev
+sudo apt-get install -y git curl build-essential pkg-config libssl-dev
+
+# Node.js 22
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+nvm install 22
+
+# Rust / Cargo
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
+
+# Relay
+git clone https://github.com/leeoohoo/relay.git relay
+cd relay
+corepack enable
+corepack prepare pnpm@8.15.9 --activate
+pnpm install --frozen-lockfile
+./start.sh
 ```
 
-macOS：
+### macOS（Intel 或 Apple Silicon）
+
+先安装 [Homebrew](https://brew.sh/)，然后执行：
 
 ```bash
+brew install git node@22
+brew link --overwrite node@22
+brew install --cask docker
+open -a Docker
+
+# 首次启动 Docker Desktop 后，等待状态显示 Docker 正在运行
 xcode-select --install 2>/dev/null || true
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
+
+git clone https://github.com/leeoohoo/relay.git relay
+cd relay
+corepack enable
+corepack prepare pnpm@8.15.9 --activate
+pnpm install --frozen-lockfile
+./start.sh
 ```
 
-### 2. 下载并启动 Relay
+### Windows 10 / 11（WSL2）
+
+当前正式启动器使用 Bash，因此 Windows 使用 WSL2；不要在原生 PowerShell 中直接运行 `start.sh`。先用管理员 PowerShell 执行：
+
+```powershell
+wsl --install -d Ubuntu
+winget install -e --id Docker.DockerDesktop
+```
+
+重启 Windows，启动 Docker Desktop，并在设置中启用 **Use the WSL 2 based engine** 和 Ubuntu 的 WSL Integration。然后打开 Ubuntu 终端执行：
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y git curl build-essential pkg-config libssl-dev
+
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+nvm install 22
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
 git clone https://github.com/leeoohoo/relay.git relay
 cd relay
 corepack enable
@@ -42,14 +93,7 @@ pnpm install --frozen-lockfile
 
 启动完成后打开终端输出的 Relay 地址，通常是 [http://127.0.0.1:45274](http://127.0.0.1:45274)。注册账号、创建公司和 Agent，然后进入“Codex 控制台 → CLI 与认证”检查或安装 Codex CLI。
 
-如果 Linux 提示“权限不够”或 `Permission denied`：
-
-```bash
-chmod +x start.sh scripts/*.sh
-./start.sh
-```
-
-也可以使用 `bash ./start.sh`。不要使用 `sudo ./start.sh`，否则可能在工作区生成属于 root 的文件。
+如果执行 `./start.sh` 提示“权限不够”或 `Permission denied`，运行 `chmod +x start.sh scripts/*.sh` 后重试，也可以使用 `bash ./start.sh`。不要使用 `sudo ./start.sh`，否则可能在工作区生成属于 root 的文件。
 
 ## 为什么需要 Relay
 
