@@ -1,0 +1,71 @@
+/* Compact workbench pass: prioritize controls and live state over explanatory presentation. */
+.main-content { padding: 22px 28px 36px; }
+.page-header { margin-bottom: 10px; padding-bottom: 10px; }
+.page-header h1 { margin: 2px 0 0; font-size: 24px; }
+.page-header p { display: none; }
+.content-stack { gap: 10px; }
+.section-card { border-radius: 11px; padding: 15px 16px; }
+.section-heading { align-items: center; margin-bottom: 10px; }
+.section-heading .eyebrow { display: none; }
+.section-heading h2, .project-tab-heading h3 { margin: 0; font-size: 15px; }
+.section-heading p { display: none; }
+.mcp-catalog-heading p, .plugin-catalog-heading p { display: block; margin-top: 3px; font-size: 9px; }
+.section-heading-actions { gap: 6px; }
+.count-badge { min-width: 25px; height: 23px; border-radius: 7px; font-size: 9px; }
+.metric-row, .memory-metrics { gap: 6px; }
+.metric { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; border-radius: 10px; }
+.metric > span { font-size: 10px; }
+.metric strong { margin: 0; font-size: 20px; }
+.metric small { display: none; }
+.codex-trigger-heading p { display: none; }
+
+.skill-language-bar { display: flex; min-height: 48px; align-items: center; gap: 12px; border: 1px solid rgba(77, 226, 255, .16); border-radius: 10px; padding: 8px 10px 8px 13px; color: var(--relay-text); background: linear-gradient(110deg, rgba(168, 255, 96, .035), rgba(77, 226, 255, .025)), var(--relay-panel); box-shadow: var(--relay-shadow); }
+.skill-language-bar-title { display: flex; min-width: 0; align-items: baseline; gap: 9px; }
+.skill-language-bar-title strong { color: #eaf2f6; font-size: 12px; white-space: nowrap; }
+.skill-language-bar-title small { overflow: hidden; color: #728594; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.skill-language-bar-options { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-left: auto; border: 1px solid var(--relay-line); border-radius: 8px; padding: 2px; background: #080e14; }
+.skill-language-bar-options button { min-width: 72px; border: 0; border-radius: 6px; padding: 6px 9px; color: #718492; background: transparent; font-size: 9px; font-weight: 750; }
+.skill-language-bar-options button:hover:not(:disabled) { color: #dce8ef; background: rgba(255,255,255,.035); }
+.skill-language-bar-options button.active { color: #07100d; background: var(--relay-lime); }
+.skill-language-bar-options button:disabled { cursor: wait; opacity: .55; }
+.skill-language-saving { color: #7f929f; font-size: 8px; white-space: nowrap; }
+.skill-center-tabs { flex: 0 0 auto; }
+.skill-center-tabs > button:focus { outline: 0; }
+.skill-center-tabs > button:focus-visible { outline: 2px solid rgba(77, 226, 255, .42); outline-offset: 2px; }
+.skill-center-panel { display: grid; min-width: 0; gap: 10px; }
+.skill-center-panel > .project-rule-library-card { margin: 0; }
+.user-menu button { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; padding: 0; }
+.user-menu button:hover { color: #e4eef4; background: rgba(255, 255, 255, .055); }
+.user-menu button svg { width: 14px; height: 14px; }
+.user-preferences-form { gap: 10px; }
+.preference-section { display: grid; gap: 12px; border: 1px solid var(--relay-line); border-radius: 12px; padding: 13px; background: #090f16; }
+.preference-section > div:first-child { display: flex; align-items: center; gap: 9px; }
+.preference-section > div:first-child > svg { width: 17px; height: 17px; color: var(--relay-cyan); }
+.preference-section > div:first-child > span { display: grid; gap: 2px; }
+.preference-section > div:first-child strong { color: #e7f0f5; font-size: 11px; }
+.preference-section > div:first-child small { color: #738694; font-size: 9px; }
+.preference-section > p { margin: -3px 0 0; color: #7d909e; font-size: 9px; line-height: 1.55; }
+.control-center { gap: 10px; }
+.control-center-tabs { gap: 3px; border-radius: 10px; padding: 4px; }
+.control-center-tabs > button { gap: 8px; border-radius: 7px; padding: 7px 9px; }
+.control-center-tab-icon { width: 27px; height: 27px; border-radius: 7px; }
+.control-center-tab-icon svg { width: 14px; height: 14px; }
+.control-center-tabs small { display: none; }
+.control-center-tabs > button.active::after { right: 10px; bottom: -5px; left: 10px; }
+.codex-trigger-heading .eyebrow { display: none; }
+.project-overview-metrics { gap: 6px; margin: 10px 0; }
+.project-overview-metrics > span { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; border-radius: 8px; padding: 8px 10px; }
+.project-overview-metrics strong { font-size: 15px; }
+.project-repository-row { border-radius: 10px; }
+.project-repository-main { grid-template-columns: 36px minmax(0,1fr) 16px; gap: 10px; padding: 10px 12px; }
+.project-repository-icon { width: 34px; height: 34px; border-radius: 8px; }
+.project-repository-copy { gap: 3px; }
+.project-repository-shortcuts { padding: 8px 10px; }
+
+@media (max-width: 760px) {
+  .main-content { padding: 16px 10px 30px; }
+  .skill-language-bar { align-items: stretch; flex-direction: column; }
+  .skill-language-bar-title { justify-content: space-between; }
+  .skill-language-bar-options { width: 100%; margin-left: 0; }
+  .metric { min-height: 54px; }
+}

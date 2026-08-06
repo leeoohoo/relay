@@ -58,7 +58,7 @@ The baseline excludes generated output and dependency/build directories such as 
 - [ ] Reduce `App.tsx` to the application shell and navigation composition.
 - [ ] Move organization, skills, projects, Codex console and chat into independent feature pages/components.
 - [ ] Move API calls to `api/`, remote-state behavior to hooks, and shared types to `types/`.
-- [ ] Split the global stylesheet into tokens/base/layout plus feature styles; remove repeated card/form/list rules.
+- [x] Split the global stylesheet into ordered foundation, feature, theme, communication and responsive workbench stylesheets while preserving cascade behavior.
 - [ ] Preserve pagination, SSE, approval and Codex management behavior during extraction.
 
 ### 5. Domain and MCP
