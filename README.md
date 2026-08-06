@@ -173,9 +173,9 @@ docker compose version
 node --version
 ```
 
-### Recommended: install the complete local stack with one command
+### Recommended: install and start Relay with one command
 
-This command clones Relay, installs the web dependencies, and starts PostgreSQL, the Rust API, web console, and host Agent Trigger:
+This command clones Relay, installs the web dependencies, and starts the complete product: PostgreSQL, self-hosted Harness, Relay Server/Web, and the host Agent Trigger:
 
 ```bash
 git clone https://github.com/leeoohoo/relay.git relay && \
@@ -183,16 +183,16 @@ git clone https://github.com/leeoohoo/relay.git relay && \
   corepack enable && \
   corepack prepare pnpm@8.15.9 --activate && \
   pnpm install --frozen-lockfile && \
-  ./scripts/start_dev.sh up
+  ./scripts/start.sh
 ```
 
 The first Rust and Docker build can take a while. When startup completes, the script prints the exact URLs selected for this installation. The usual defaults are:
 
-- Web console: `http://127.0.0.1:5173`
-- API / MCP: `http://127.0.0.1:38080`
-- PostgreSQL: `postgres://postgres:postgres@127.0.0.1:5432/ai_chat`
+- Relay Web/API/MCP: `http://127.0.0.1:45274`
+- PostgreSQL: `postgres://postgres:postgres@127.0.0.1:15533/ai_chat`
+- Harness: `http://127.0.0.1:13101`
 
-If a preferred port is occupied, Relay automatically selects the next free port. Always use the final URL printed by the startup script instead of assuming port `5173`.
+If a preferred port is occupied, Relay automatically selects the next free port. Always use the final URL printed by the startup script instead of assuming port `45274`.
 
 ### First-time setup
 
@@ -222,15 +222,14 @@ The host Trigger executes the installer; neither the Server nor the browser runs
 Run these commands from the repository directory:
 
 ```bash
-./scripts/start_dev.sh up       # start
-./scripts/start_dev.sh status   # show selected ports and process state
-./scripts/start_dev.sh logs     # follow API, Web, and Trigger logs
-./scripts/start_dev.sh doctor   # diagnose Docker, PostgreSQL, ports, and processes
-./scripts/start_dev.sh restart  # restart
-./scripts/start_dev.sh down     # stop Relay while preserving PostgreSQL volumes
+./scripts/start.sh              # start the complete product
+./scripts/start.sh status       # show containers, Trigger, URLs, and workspace
+./scripts/start.sh logs         # follow Server, Harness, PostgreSQL, and Trigger logs
+./scripts/start.sh restart      # restart the complete product
+./scripts/start.sh down         # stop Relay while preserving Docker volumes
 ```
 
-Local development enables the `self_hosted` Harness mode by default and starts the `ai-chat-harness` Docker container automatically. To use a remote Harness, set `HARNESS_MODE=official` and `HARNESS_BASE_URL` in `.env.local`. Harness is disabled only when `HARNESS_MODE=disabled` is set explicitly.
+Relay enables the `self_hosted` Harness mode by default and starts the `ai-chat-harness` Docker container automatically. To use a remote Harness, set `HARNESS_MODE=official` and `HARNESS_BASE_URL` in `.env.local`. Harness is disabled only when `HARNESS_MODE=disabled` is set explicitly.
 
 Update an existing installation:
 
@@ -238,10 +237,10 @@ Update an existing installation:
 git pull --ff-only && \
   corepack prepare pnpm@8.15.9 --activate && \
   pnpm install --frozen-lockfile && \
-  ./scripts/start_dev.sh restart
+  ./scripts/start.sh restart
 ```
 
-Local runtime state is stored in `.relay-dev/`, `.relay-agent-trigger/`, and Docker volumes. Do not delete them or run `docker compose down -v` when company data must be preserved.
+Runtime state is stored in `.relay/`, `.relay-agent-trigger/`, `.relay-workspace/`, and Docker volumes. Do not delete them or run `docker compose down -v` when company data must be preserved.
 
 ### Docker-only control plane
 
@@ -256,7 +255,11 @@ git clone https://github.com/leeoohoo/relay.git relay && \
   ./scripts/start_docker.sh up --harness disabled
 ```
 
-The usual URL is `http://127.0.0.1:35173`; an occupied port is shifted automatically. This Docker stack includes the Web, API, and PostgreSQL, but it deliberately does **not** run the host Agent Trigger in a container. The Trigger needs access to the host Codex login, project directories, and Git worktrees. Use the complete `start_dev.sh` mode when Agents should execute work, or install `ai-chat-agent-trigger` as a separate host service.
+The usual URL is `http://127.0.0.1:45274`; an occupied port is shifted automatically. This advanced command starts only the Docker control plane and deliberately does **not** run the host Agent Trigger. Use `./scripts/start.sh` for a complete installation where Agents can execute work.
+
+### Development workflow
+
+Contributors who need Vite hot reload and automatic Rust Server rebuilds can use `./scripts/start_dev.sh up`. Its defaults are Web `15274`, API `48181`, PostgreSQL `15533`, Harness HTTP `13101`, and Harness SSH `13123`. This is a contributor workflow; normal installations should use `./scripts/start.sh`.
 
 Select a Harness deployment mode during installation:
 
@@ -286,7 +289,7 @@ Add the server to the local Codex `config.toml`:
 
 ```toml
 [mcp_servers.relay_maya_product]
-url = "http://127.0.0.1:38080/mcp"
+url = "http://127.0.0.1:48181/mcp"
 env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 ```
 
@@ -317,8 +320,8 @@ The trigger does not read messages and build its own model prompt. It gives Code
 For a standalone trigger deployment:
 
 ```bash
-export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/ai_chat'
-export AGENT_TRIGGER_MCP_URL=http://127.0.0.1:38080/mcp
+export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:15533/ai_chat'
+export AGENT_TRIGGER_MCP_URL=http://127.0.0.1:48181/mcp
 export AGENT_TRIGGER_MANAGED_PROJECTS_ROOT=/Users/runner/relay-projects
 export AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS=/Users/runner/relay-projects
 cargo run -p ai-chat-agent-trigger
@@ -369,7 +372,7 @@ pnpm --dir apps/web test
 docker build --no-cache -f Dockerfile.server -t relay-server:check .
 docker build --no-cache -f Dockerfile.web -t relay-web:check .
 ./scripts/test_migration_atomicity.sh
-API_BASE_URL=http://127.0.0.1:38080 ./scripts/smoke_standard_mcp.sh
+API_BASE_URL=http://127.0.0.1:48181 ./scripts/smoke_standard_mcp.sh
 ```
 
 The standard MCP smoke test creates two Agents and verifies company group history and unread state, bidirectional messaging, Inbox delivery, and acknowledgements.

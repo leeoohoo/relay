@@ -60,15 +60,16 @@ prepare_harness_mode() {
     echo "  1) official     Use an existing hosted Harness service"
     echo "  2) self-hosted  Start Harness in this Docker stack"
     echo "  3) disabled     Do not provision Harness accounts"
-    read -r -p "Select [1-3, default 3]: " selection
+    read -r -p "Select [1-3, default 2]: " selection
     case "$selection" in
       1) selection="official" ;;
       2) selection="self-hosted" ;;
-      *) selection="disabled" ;;
+      3) selection="disabled" ;;
+      *) selection="self-hosted" ;;
     esac
   fi
 
-  selection="${selection:-disabled}"
+  selection="${selection:-self_hosted}"
   selection="${selection//-/_}"
   case "$selection" in
     official|hosted|cloud)
@@ -239,33 +240,54 @@ load_existing_port_assignments() {
 
   if [[ -z "${POSTGRES_HOST_PORT:-}" ]]; then
     existing_port="$(existing_host_port_for ai-chat-postgres 5432/tcp)"
-    [[ -n "$existing_port" ]] && POSTGRES_HOST_PORT="$existing_port"
+    [[ -n "$existing_port" && "$existing_port" -ge 15533 ]] && POSTGRES_HOST_PORT="$existing_port"
   fi
 
   if [[ -z "${API_HOST_PORT:-}" ]]; then
     existing_port="$(existing_host_port_for ai-chat-server 8080/tcp)"
-    [[ -n "$existing_port" ]] && API_HOST_PORT="$existing_port"
+    [[ -n "$existing_port" && "$existing_port" -ge 45274 ]] && API_HOST_PORT="$existing_port"
   fi
 
   if [[ -z "${WEB_HOST_PORT:-}" ]]; then
     existing_port="$(existing_host_port_for ai-chat-server 8080/tcp)"
-    [[ -n "$existing_port" ]] && WEB_HOST_PORT="$existing_port"
+    [[ -n "$existing_port" && "$existing_port" -ge 45274 ]] && WEB_HOST_PORT="$existing_port"
   fi
 
   if [[ -z "${HARNESS_HOST_PORT:-}" ]]; then
     existing_port="$(existing_host_port_for ai-chat-harness 3000/tcp)"
-    [[ -n "$existing_port" ]] && HARNESS_HOST_PORT="$existing_port"
+    [[ -n "$existing_port" && "$existing_port" -ge 13101 ]] && HARNESS_HOST_PORT="$existing_port"
   fi
 
   if [[ -z "${HARNESS_SSH_PORT:-}" ]]; then
     existing_port="$(existing_host_port_for ai-chat-harness 3022/tcp)"
-    [[ -n "$existing_port" ]] && HARNESS_SSH_PORT="$existing_port"
+    [[ -n "$existing_port" && "$existing_port" -ge 13123 ]] && HARNESS_SSH_PORT="$existing_port"
   fi
 
   # A missing previous container/port is the normal first-start case. Without
   # an explicit success return, the final conditional above can make this
   # function return 1 and `set -e` aborts startup immediately after web build.
   return 0
+}
+
+choose_service_port() {
+  local container_name="$1"
+  local container_port="$2"
+  local preferred="$3"
+  local existing_port container_running
+
+  existing_port="$(existing_host_port_for "$container_name" "$container_port")"
+  container_running="$(docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || true)"
+  if [[ "$existing_port" == "$preferred" ]]; then
+    printf '%s\n' "$preferred"
+  elif [[ "$container_running" == "true" \
+    && -n "$existing_port" \
+    && "$existing_port" -ge "$preferred" ]] \
+    && ! port_is_reserved "$existing_port" \
+    && port_is_in_use "$preferred"; then
+    printf '%s\n' "$existing_port"
+  else
+    choose_port "$preferred"
+  fi
 }
 
 assign_port() {
@@ -284,20 +306,20 @@ prepare_ports() {
   load_existing_port_assignments
 
   if [[ -n "${POSTGRES_HOST_PORT:-}" ]]; then
-    postgres_host_port="$POSTGRES_HOST_PORT"
+    postgres_host_port="$(choose_service_port ai-chat-postgres 5432/tcp "$POSTGRES_HOST_PORT")"
     reserve_port "$postgres_host_port"
   else
-    assign_port postgres_host_port 5432
+    assign_port postgres_host_port 15533
   fi
 
   if [[ -n "${WEB_HOST_PORT:-}" ]]; then
-    public_host_port="$WEB_HOST_PORT"
+    public_host_port="$(choose_service_port ai-chat-server 8080/tcp "$WEB_HOST_PORT")"
     reserve_port "$public_host_port"
   elif [[ -n "${API_HOST_PORT:-}" ]]; then
-    public_host_port="$API_HOST_PORT"
+    public_host_port="$(choose_service_port ai-chat-server 8080/tcp "$API_HOST_PORT")"
     reserve_port "$public_host_port"
   else
-    assign_port public_host_port 35173
+    assign_port public_host_port 45274
   fi
 
   export POSTGRES_HOST_PORT="$postgres_host_port"
@@ -308,17 +330,17 @@ prepare_ports() {
 
   if [[ "$HARNESS_MODE" == "self_hosted" ]]; then
     if [[ -n "${HARNESS_HOST_PORT:-}" ]]; then
-      harness_host_port="$HARNESS_HOST_PORT"
+      harness_host_port="$(choose_service_port ai-chat-harness 3000/tcp "$HARNESS_HOST_PORT")"
       reserve_port "$harness_host_port"
     else
-      assign_port harness_host_port 3000
+      assign_port harness_host_port 13101
     fi
     export HARNESS_HOST_PORT="$harness_host_port"
     if [[ -n "${HARNESS_SSH_PORT:-}" ]]; then
-      harness_ssh_port="$HARNESS_SSH_PORT"
+      harness_ssh_port="$(choose_service_port ai-chat-harness 3022/tcp "$HARNESS_SSH_PORT")"
       reserve_port "$harness_ssh_port"
     else
-      assign_port harness_ssh_port 3022
+      assign_port harness_ssh_port 13123
     fi
     export HARNESS_SSH_PORT="$harness_ssh_port"
     export HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:${HARNESS_HOST_PORT}}"
@@ -394,7 +416,7 @@ wait_for_tcp_port() {
 }
 
 run_migrations() {
-  local database_url="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/ai_chat}"
+  local database_url="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:15533/ai_chat}"
   local pg_container="${PG_CONTAINER:-ai-chat-postgres}"
 
   FORCE_DOCKER_PSQL=true \

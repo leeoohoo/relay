@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: ai_chat
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "${POSTGRES_HOST_PORT:-15533}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -58,13 +58,13 @@ services:
       GITNESS_HTTP_HOST: 0.0.0.0
       GITNESS_HTTP_PORT: 3000
       GITNESS_HTTP_PROTO: http
-      GITNESS_URL_BASE: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
-      GITNESS_URL_API: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}/api
-      GITNESS_URL_UI: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      GITNESS_URL_BASE: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}
+      GITNESS_URL_API: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}/api
+      GITNESS_URL_UI: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}
       GITNESS_URL_INTERNAL: http://harness:3000
       GITNESS_URL_CONTAINER: http://harness:3000
-      GITNESS_URL_GIT: ${HARNESS_GIT_BASE_URL:-http://127.0.0.1:3000/git}
-      GITNESS_URL_GIT_SSH: ssh://git@${HARNESS_SSH_PUBLIC_HOST:-127.0.0.1}:${HARNESS_SSH_PORT:-3022}
+      GITNESS_URL_GIT: ${HARNESS_GIT_BASE_URL:-http://127.0.0.1:13101/git}
+      GITNESS_URL_GIT_SSH: ssh://git@${HARNESS_SSH_PUBLIC_HOST:-127.0.0.1}:${HARNESS_SSH_PORT:-13123}
       GITNESS_PRINCIPAL_ADMIN_EMAIL: ${HARNESS_ADMIN_EMAIL:-admin@relay.local}
       GITNESS_PRINCIPAL_ADMIN_PASSWORD: ${HARNESS_ADMIN_PASSWORD:-change-me-harness-admin}
       GITNESS_METRIC_ENABLED: "false"
@@ -82,8 +82,8 @@ services:
       GITNESS_REGISTRY_FILESYSTEM_ROOT_DIRECTORY: /data/registry
       XDG_CACHE_HOME: /data
     ports:
-      - "${HARNESS_HOST_PORT:-3000}:3000"
-      - "${HARNESS_SSH_PORT:-3022}:3022"
+      - "${HARNESS_HOST_PORT:-13101}:3000"
+      - "${HARNESS_SSH_PORT:-13123}:3022"
     volumes:
       - harness_data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -106,20 +106,21 @@ services:
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-dev-admin-token}
       ADMIN_API_TOKENS_JSON: ${ADMIN_API_TOKENS_JSON:-}
       APP_ENV: ${APP_ENV:-development}
-      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-http://127.0.0.1:35173}
+      API_ALLOWED_ORIGINS: ${API_ALLOWED_ORIGINS:-http://127.0.0.1:45274}
       API_REQUEST_TIMEOUT_SECONDS: ${API_REQUEST_TIMEOUT_SECONDS:-30}
       API_MAX_REQUEST_BODY_BYTES: ${API_MAX_REQUEST_BODY_BYTES:-1048576}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:35173}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:45274}
       REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-false}
       EMAIL_DELIVERY_WEBHOOK_URL: ${EMAIL_DELIVERY_WEBHOOK_URL:-}
       HARNESS_MODE: ${HARNESS_MODE:-disabled}
       HARNESS_BASE_URL: ${HARNESS_BASE_URL:-http://harness:3000}
-      HARNESS_PUBLIC_BASE_URL: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      HARNESS_PUBLIC_BASE_URL: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}
       HARNESS_SPACE_PREFIX: ${HARNESS_SPACE_PREFIX:-u-}
       HARNESS_REQUEST_TIMEOUT_SECONDS: ${HARNESS_REQUEST_TIMEOUT_SECONDS:-15}
       HARNESS_CREDENTIALS_ROOT: /relay-harness-credentials
       DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-16}
-      AGENT_TRIGGER_MANAGED_PROJECTS_ROOT: ${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-/tmp/relay-agent-trigger/projects}
+      AGENT_TRIGGER_MANAGED_PROJECTS_ROOT: ${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-/relay-workspace}
+      RELAY_DEFAULT_WORKSPACE_ROOT: ${RELAY_DEFAULT_WORKSPACE_ROOT:-/relay-workspace}
       AGENT_TRIGGER_MODEL_CATALOG_PATH: /relay-trigger-state/codex-models.json
       AGENT_TRIGGER_STATE_ROOT: /relay-trigger-state
       AGENT_TRIGGER_CODEX_CONTROL_ROOT: /relay-trigger-state/codex-control
@@ -134,6 +135,7 @@ services:
       WEB_DIST_DIR: /app/web-dist
     volumes:
       - ${AGENT_TRIGGER_STATE_ROOT:-./.relay-agent-trigger}:/relay-trigger-state:rw
+      - ${RELAY_DEFAULT_WORKSPACE_ROOT:-./.relay-workspace}:${RELAY_DEFAULT_WORKSPACE_ROOT:-/relay-workspace}:rw
       - harness_credentials:/relay-harness-credentials
     depends_on:
       migrate:
@@ -144,7 +146,7 @@ services:
       timeout: 5s
       retries: 20
     ports:
-      - "${WEB_HOST_PORT:-35173}:8080"
+      - "${WEB_HOST_PORT:-45274}:8080"
 
 volumes:
   postgres_data:

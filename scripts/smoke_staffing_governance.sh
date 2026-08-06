@@ -2,7 +2,7 @@
 set -euo pipefail
 
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8080}"
-DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/ai_chat}"
+DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:15533/ai_chat}"
 MCP_PROTOCOL_VERSION="${MCP_PROTOCOL_VERSION:-2025-11-25}"
 
 for bin in curl jq; do

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MIGRATIONS_ROOT="${MIGRATIONS_ROOT:-$ROOT_DIR/migrations}"
 
 MODE="${1:-up}"
-DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/ai_chat}"
+DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:15533/ai_chat}"
 FORCE_DOCKER_PSQL="${FORCE_DOCKER_PSQL:-false}"
 
 detect_pg_container() {

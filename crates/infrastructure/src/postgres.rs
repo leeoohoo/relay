@@ -4,7 +4,8 @@ use postgres::{Client, GenericClient, NoTls, Row};
 use r2d2::Pool;
 use r2d2_postgres::PostgresConnectionManager;
 use serde_json::Value;
-use tokio::runtime::{Handle, RuntimeFlavor};
+use std::sync::Arc;
+use tokio::runtime::Handle;
 use uuid::Uuid;
 
 use ai_chat_application::{
@@ -38,9 +39,33 @@ use ai_chat_domain::social::{
 };
 use ai_chat_shared::{hash_secret, AppError, AppResult};
 
-#[derive(Clone)]
 pub struct PostgresPlatformRepository {
-    pool: Pool<PostgresConnectionManager<NoTls>>,
+    pool: Arc<PostgresPool>,
+}
+
+struct PostgresPool {
+    inner: Option<Pool<PostgresConnectionManager<NoTls>>>,
+}
+
+impl Drop for PostgresPool {
+    fn drop(&mut self) {
+        let Some(pool) = self.inner.take() else {
+            return;
+        };
+        if Handle::try_current().is_ok() {
+            let _ = std::thread::spawn(move || drop(pool)).join();
+        } else {
+            drop(pool);
+        }
+    }
+}
+
+impl Clone for PostgresPlatformRepository {
+    fn clone(&self) -> Self {
+        Self {
+            pool: Arc::clone(&self.pool),
+        }
+    }
 }
 
 impl PostgresPlatformRepository {
@@ -69,29 +94,37 @@ impl PostgresPlatformRepository {
             Ok(())
         })
         .map_err(anyhow::Error::msg)?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool: Arc::new(PostgresPool { inner: Some(pool) }),
+        })
     }
 
-    fn with_client<T>(
+    fn with_client<T: Send>(
         &self,
-        f: impl FnOnce(&mut Client) -> Result<T, postgres::Error>,
+        f: impl FnOnce(&mut Client) -> Result<T, postgres::Error> + Send,
     ) -> AppResult<T> {
         run_sync_postgres(|| {
             let mut client = self
                 .pool
+                .inner
+                .as_ref()
+                .expect("postgres pool is available while repository is alive")
                 .get()
                 .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))?;
             f(&mut client).map_err(map_postgres_error)
         })
     }
 
-    fn with_transaction<T>(
+    fn with_transaction<T: Send>(
         &self,
-        f: impl FnOnce(&mut postgres::Transaction<'_>) -> AppResult<T>,
+        f: impl FnOnce(&mut postgres::Transaction<'_>) -> AppResult<T> + Send,
     ) -> AppResult<T> {
         run_sync_postgres(|| {
             let mut client = self
                 .pool
+                .inner
+                .as_ref()
+                .expect("postgres pool is available while repository is alive")
                 .get()
                 .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))?;
             let mut transaction = client.transaction().map_err(map_postgres_error)?;
@@ -102,13 +135,16 @@ impl PostgresPlatformRepository {
     }
 }
 
-fn run_sync_postgres<T>(f: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
-    match Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(f)
-        }
-        _ => f(),
+fn run_sync_postgres<T: Send>(f: impl FnOnce() -> AppResult<T> + Send) -> AppResult<T> {
+    if Handle::try_current().is_err() {
+        return f();
     }
+    std::thread::scope(|scope| {
+        scope
+            .spawn(f)
+            .join()
+            .map_err(|_| AppError::Internal("postgres worker thread panicked".into()))?
+    })
 }
 
 impl PlatformRepository for PostgresPlatformRepository {

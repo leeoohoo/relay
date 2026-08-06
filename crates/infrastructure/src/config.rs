@@ -77,7 +77,7 @@ impl ApiConfig {
             .and_then(|value| value.parse().ok())
             .unwrap_or(8080);
         let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/ai_chat".into());
+            .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:15533/ai_chat".into());
         let ownership_proof_mode = std::env::var("WEIBO_PROOF_PROVIDER_MODE")
             .map(|value| OwnershipProofMode::from_env_value(&value))
             .unwrap_or(OwnershipProofMode::Stub);
@@ -195,7 +195,7 @@ impl McpConfig {
             ),
             allowed_origins: csv_env("MCP_ALLOWED_ORIGINS", &[]),
             database_url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/ai_chat".into()),
+                .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:15533/ai_chat".into()),
             ownership_proof_mode: std::env::var("WEIBO_PROOF_PROVIDER_MODE")
                 .map(|value| OwnershipProofMode::from_env_value(&value))
                 .unwrap_or(OwnershipProofMode::Stub),

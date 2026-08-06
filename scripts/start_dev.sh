@@ -346,9 +346,9 @@ print_failure_help() {
 trap 'print_failure_help $? $LINENO' ERR
 
 prepare_env() {
-  local preferred_postgres_port="${POSTGRES_HOST_PORT:-5432}"
-  local preferred_api_port="${API_HOST_PORT:-38080}"
-  local preferred_web_port="${WEB_HOST_PORT:-5173}"
+  local preferred_postgres_port="${POSTGRES_HOST_PORT:-15533}"
+  local preferred_api_port="${API_HOST_PORT:-48181}"
+  local preferred_web_port="${WEB_HOST_PORT:-15274}"
   local existing_harness_port existing_harness_ssh_port
 
   export POSTGRES_HOST_PORT="$preferred_postgres_port"
@@ -375,8 +375,8 @@ prepare_env() {
     self_hosted)
       existing_harness_port="$(existing_container_port ai-chat-harness 3000/tcp)"
       existing_harness_ssh_port="$(existing_container_port ai-chat-harness 3022/tcp)"
-      export HARNESS_HOST_PORT="${HARNESS_HOST_PORT:-${existing_harness_port:-3000}}"
-      export HARNESS_SSH_PORT="${HARNESS_SSH_PORT:-${existing_harness_ssh_port:-3022}}"
+      export HARNESS_HOST_PORT="${HARNESS_HOST_PORT:-${existing_harness_port:-13101}}"
+      export HARNESS_SSH_PORT="${HARNESS_SSH_PORT:-${existing_harness_ssh_port:-13123}}"
       if [[ -z "$existing_harness_port" ]] && port_is_in_use "$HARNESS_HOST_PORT"; then
         HARNESS_HOST_PORT="$(choose_port "$HARNESS_HOST_PORT")"
         export HARNESS_HOST_PORT
@@ -701,7 +701,7 @@ Commands:
 Notes:
 - ai-chat-server will auto-restart when Rust files under apps/server or crates/ change
 - ai-chat-agent-trigger runs as a separate host process and starts the configured local Codex sessions
-- Open the exact Web URL shown above. If 5173 is occupied by another project, this script will switch to the next free port.
+- Open the exact Web URL shown above. If 15274 is occupied by another project, this script will switch to the next free port.
 EOF
   print_port_notes
 }

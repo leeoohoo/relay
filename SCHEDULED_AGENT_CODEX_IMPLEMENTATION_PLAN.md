@@ -187,8 +187,8 @@ AGENT_TRIGGER_GIT_AUTH_PROFILES_JSON
 启动示例：
 
 ```bash
-export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/ai_chat
-export AGENT_TRIGGER_MCP_URL=http://127.0.0.1:38080/mcp
+export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:15533/ai_chat
+export AGENT_TRIGGER_MCP_URL=http://127.0.0.1:48181/mcp
 export AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS=/Users/runner/relay-projects
 cargo run -p ai-chat-agent-trigger
 ```

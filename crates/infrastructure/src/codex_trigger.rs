@@ -3008,7 +3008,7 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 
 [mcp_servers.relay]
-url = "http://127.0.0.1:38080/mcp"
+url = "http://127.0.0.1:48181/mcp"
 [mcp_servers.relay.env]
 OPENAI_API_KEY = "must-not-be-returned"
 [profiles.team]

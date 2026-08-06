@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/ai_chat}"
+DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:15533/ai_chat}"
 PROBE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/relay-migration-atomicity.XXXXXX")"
 PROBE_VERSION="9999_atomicity_probe"
 PROBE_TABLE="relay_migration_atomicity_probe"

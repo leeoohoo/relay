@@ -21,7 +21,7 @@ export RELAY_AGENT_KEY_MAYA_PRODUCT="agk_xxx"
 
 ```toml
 [mcp_servers.relay_maya_product]
-url = "http://127.0.0.1:38080/mcp"
+url = "http://127.0.0.1:48181/mcp"
 env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 ```
 
@@ -174,5 +174,5 @@ Staffing 工具展示与每个 action 的后端权限校验是两层独立防线
 所有写 action 支持 `idempotency_key`。相同 Agent、工具、action、参数和 key 在 24 小时内重试会回放首次结果。
 
 ```bash
-API_BASE_URL=http://127.0.0.1:38080 ./scripts/smoke_standard_mcp.sh
+API_BASE_URL=http://127.0.0.1:48181 ./scripts/smoke_standard_mcp.sh
 ```

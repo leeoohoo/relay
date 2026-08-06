@@ -38,13 +38,13 @@ services:
       GITNESS_HTTP_HOST: 0.0.0.0
       GITNESS_HTTP_PORT: 3000
       GITNESS_HTTP_PROTO: http
-      GITNESS_URL_BASE: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
-      GITNESS_URL_API: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}/api
-      GITNESS_URL_UI: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      GITNESS_URL_BASE: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}
+      GITNESS_URL_API: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}/api
+      GITNESS_URL_UI: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:13101}
       GITNESS_URL_INTERNAL: http://harness:3000
       GITNESS_URL_CONTAINER: http://harness:3000
-      GITNESS_URL_GIT: ${HARNESS_GIT_BASE_URL:-http://127.0.0.1:3000/git}
-      GITNESS_URL_GIT_SSH: ssh://git@${HARNESS_SSH_PUBLIC_HOST:-127.0.0.1}:${HARNESS_SSH_PORT:-3022}
+      GITNESS_URL_GIT: ${HARNESS_GIT_BASE_URL:-http://127.0.0.1:13101/git}
+      GITNESS_URL_GIT_SSH: ssh://git@${HARNESS_SSH_PUBLIC_HOST:-127.0.0.1}:${HARNESS_SSH_PORT:-13123}
       GITNESS_PRINCIPAL_ADMIN_EMAIL: ${HARNESS_ADMIN_EMAIL:-admin@relay.local}
       GITNESS_PRINCIPAL_ADMIN_PASSWORD: ${HARNESS_ADMIN_PASSWORD:-change-me-harness-admin}
       GITNESS_METRIC_ENABLED: "false"
@@ -62,8 +62,8 @@ services:
       GITNESS_REGISTRY_FILESYSTEM_ROOT_DIRECTORY: /data/registry
       XDG_CACHE_HOME: /data
     ports:
-      - "${HARNESS_HOST_PORT:-3000}:3000"
-      - "${HARNESS_SSH_PORT:-3022}:3022"
+      - "${HARNESS_HOST_PORT:-13101}:3000"
+      - "${HARNESS_SSH_PORT:-13123}:3022"
     volumes:
       - harness_prod_data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -86,7 +86,8 @@ services:
       API_PORT: 8080
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}
       DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-16}
-      AGENT_TRIGGER_MANAGED_PROJECTS_ROOT: ${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-/tmp/relay-agent-trigger/projects}
+      AGENT_TRIGGER_MANAGED_PROJECTS_ROOT: ${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-/relay-workspace}
+      RELAY_DEFAULT_WORKSPACE_ROOT: ${RELAY_DEFAULT_WORKSPACE_ROOT:-/relay-workspace}
       AGENT_TRIGGER_MODEL_CATALOG_PATH: /relay-trigger-state/codex-models.json
       AGENT_TRIGGER_STATE_ROOT: /relay-trigger-state
       AGENT_TRIGGER_CODEX_CONTROL_ROOT: /relay-trigger-state/codex-control
@@ -119,6 +120,7 @@ services:
       WEB_DIST_DIR: /app/web-dist
     volumes:
       - ${AGENT_TRIGGER_STATE_ROOT:?set AGENT_TRIGGER_STATE_ROOT}:/relay-trigger-state:rw
+      - ${RELAY_DEFAULT_WORKSPACE_ROOT:?set RELAY_DEFAULT_WORKSPACE_ROOT}:${RELAY_DEFAULT_WORKSPACE_ROOT:?set RELAY_DEFAULT_WORKSPACE_ROOT}:rw
       - harness_prod_credentials:/relay-harness-credentials
     depends_on:
       migrate:
@@ -142,7 +144,7 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "${PUBLIC_HTTP_PORT:-8080}:80"
+      - "${PUBLIC_HTTP_PORT:-18181}:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ready >/dev/null || exit 1"]
       interval: 10s

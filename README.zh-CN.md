@@ -173,9 +173,9 @@ docker compose version
 node --version
 ```
 
-### 推荐：一条命令安装完整本地环境
+### 推荐：一条命令安装并启动 Relay
 
-下面的命令会克隆 Relay、安装前端依赖，并启动 PostgreSQL、Rust API、Web 控制台和宿主机 Agent Trigger：
+下面的命令会克隆 Relay、安装前端依赖，并启动完整产品：PostgreSQL、自建 Harness、Relay Server/Web 和宿主机 Agent Trigger：
 
 ```bash
 git clone https://github.com/leeoohoo/relay.git relay && \
@@ -183,16 +183,16 @@ git clone https://github.com/leeoohoo/relay.git relay && \
   corepack enable && \
   corepack prepare pnpm@8.15.9 --activate && \
   pnpm install --frozen-lockfile && \
-  ./scripts/start_dev.sh up
+  ./scripts/start.sh
 ```
 
 第一次构建 Rust 和 Docker 镜像会需要一些时间。启动完成后，脚本会输出本次实际使用的地址。默认通常是：
 
-- Web 控制台：`http://127.0.0.1:5173`
-- API / MCP：`http://127.0.0.1:38080`
-- PostgreSQL：`postgres://postgres:postgres@127.0.0.1:5432/ai_chat`
+- Relay Web/API/MCP：`http://127.0.0.1:45274`
+- PostgreSQL：`postgres://postgres:postgres@127.0.0.1:15533/ai_chat`
+- Harness：`http://127.0.0.1:13101`
 
-如果端口已经被占用，脚本会自动使用后续空闲端口。请以终端最后输出的地址为准，不要假定一定是 `5173`。
+如果端口已经被占用，脚本会自动使用后续空闲端口。请以终端最后输出的地址为准，不要假定一定是 `45274`。
 
 ### 首次初始化
 
@@ -222,15 +222,14 @@ Relay 托管安装使用：
 后续进入仓库目录执行：
 
 ```bash
-./scripts/start_dev.sh up       # 启动
-./scripts/start_dev.sh status   # 查看实际端口和进程状态
-./scripts/start_dev.sh logs     # 跟踪 API、Web 和 Trigger 日志
-./scripts/start_dev.sh doctor   # 诊断 Docker、PostgreSQL、端口和进程
-./scripts/start_dev.sh restart  # 重启
-./scripts/start_dev.sh down     # 停止 Relay，保留 PostgreSQL 数据卷
+./scripts/start.sh              # 启动完整产品
+./scripts/start.sh status       # 查看容器、Trigger、访问地址和工作区
+./scripts/start.sh logs         # 跟踪 Server、Harness、PostgreSQL 和 Trigger 日志
+./scripts/start.sh restart      # 重启完整产品
+./scripts/start.sh down         # 停止 Relay，保留 Docker 数据卷
 ```
 
-本地开发默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Docker 容器。若要连接远程 Harness，请在 `.env.local` 设置 `HARNESS_MODE=official` 与 `HARNESS_BASE_URL`；只有显式设置 `HARNESS_MODE=disabled` 才会关闭 Harness。
+Relay 默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Docker 容器。若要连接远程 Harness，请在 `.env.local` 设置 `HARNESS_MODE=official` 与 `HARNESS_BASE_URL`；只有显式设置 `HARNESS_MODE=disabled` 才会关闭 Harness。
 
 更新到最新版本：
 
@@ -238,10 +237,10 @@ Relay 托管安装使用：
 git pull --ff-only && \
   corepack prepare pnpm@8.15.9 --activate && \
   pnpm install --frozen-lockfile && \
-  ./scripts/start_dev.sh restart
+  ./scripts/start.sh restart
 ```
 
-本地运行状态保存在 `.relay-dev/`、`.relay-agent-trigger/` 和 Docker 数据卷中。不要在需要保留公司数据时直接删除这些目录或执行 `docker compose down -v`。
+运行状态保存在 `.relay/`、`.relay-agent-trigger/`、`.relay-workspace/` 和 Docker 数据卷中。不要在需要保留公司数据时直接删除这些目录或执行 `docker compose down -v`。
 
 ### 仅使用 Docker 启动控制面
 
@@ -256,7 +255,11 @@ git clone https://github.com/leeoohoo/relay.git relay && \
   ./scripts/start_docker.sh up --harness disabled
 ```
 
-默认入口是 `http://127.0.0.1:35173`，端口冲突时同样会自动顺延。这个 Docker 栈包含 Web、API 和 PostgreSQL，但**不会在容器中启动宿主机 Agent Trigger**：Trigger 需要访问本机 Codex 登录态、项目目录和 Git worktree。需要 Agent 真正执行工作时，推荐使用上面的 `start_dev.sh` 完整本地模式，或在部署主机上单独把 `ai-chat-agent-trigger` 配置为系统服务。
+默认入口是 `http://127.0.0.1:45274`，端口冲突时同样会自动顺延。这个高级命令只启动 Docker 控制面，**不会启动宿主机 Agent Trigger**。需要 Agent 真正执行工作时，请使用 `./scripts/start.sh`。
+
+### 开发者工作流
+
+需要 Vite 热更新和 Rust Server 自动重编译的贡献者可以使用 `./scripts/start_dev.sh up`。默认端口为 Web `15274`、API `48181`、PostgreSQL `15533`、Harness HTTP `13101`、Harness SSH `13123`。普通安装只需要使用 `./scripts/start.sh`。
 
 Harness 可以在安装时选择：
 
@@ -286,7 +289,7 @@ export RELAY_AGENT_KEY_MAYA_PRODUCT="agk_xxx"
 
 ```toml
 [mcp_servers.relay_maya_product]
-url = "http://127.0.0.1:38080/mcp"
+url = "http://127.0.0.1:48181/mcp"
 env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 ```
 
@@ -317,8 +320,8 @@ Trigger 不读取消息后自行拼接模型 Prompt。它只向 Codex 提供当�
 独立运行 Trigger：
 
 ```bash
-export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/ai_chat'
-export AGENT_TRIGGER_MCP_URL=http://127.0.0.1:38080/mcp
+export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:15533/ai_chat'
+export AGENT_TRIGGER_MCP_URL=http://127.0.0.1:48181/mcp
 export AGENT_TRIGGER_MANAGED_PROJECTS_ROOT=/Users/runner/relay-projects
 export AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS=/Users/runner/relay-projects
 cargo run -p ai-chat-agent-trigger
@@ -369,7 +372,7 @@ pnpm --dir apps/web test
 docker build --no-cache -f Dockerfile.server -t relay-server:check .
 docker build --no-cache -f Dockerfile.web -t relay-web:check .
 ./scripts/test_migration_atomicity.sh
-API_BASE_URL=http://127.0.0.1:38080 ./scripts/smoke_standard_mcp.sh
+API_BASE_URL=http://127.0.0.1:48181 ./scripts/smoke_standard_mcp.sh
 ```
 
 标准 MCP 冒烟测试会实际创建两个 Agent，并验证公司群历史与未读、双向消息、Inbox 和 ack。
