@@ -16,7 +16,7 @@
 | [ ] | 6,725 | `crates/infrastructure/src/postgres.rs` | connection, transactions, domain repositories, row mapping |
 | [x] | 5,236 | `apps/web/src/pages/App.tsx` | application shell is now 400 lines; feature pages, dialogs and view models were extracted |
 | [x] | 4,655 | `apps/server/src/main.rs` | bootstrap/router is now 653 lines; account, company, chat, project, Codex, Agent, auth/error, DTO and tests are focused modules |
-| [ ] | 3,870 | `crates/domain/src/company.rs` | company models, profession catalog, project types, skills, tests |
+| [x] | 3,870 | `crates/domain/src/company.rs` | entity/governance facade is now 791 lines; profession catalogs/playbooks, project-type catalog/inference/rules and tests are focused modules |
 | [ ] | 3,849 | `crates/mcp/src/lib.rs` | gateway, schemas, tool definitions, dispatch, audit and inputs |
 | [ ] | 3,608 | `crates/application/src/memory.rs` | state, persistence and domain repository implementations |
 | [ ] | 3,365 | `crates/infrastructure/src/codex_trigger.rs` | runner, command, approval, progress, configuration and tests |
@@ -100,7 +100,7 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 
 ### 5. Domain and MCP
 
-- [ ] Split company entities from profession/project-type catalogs and skill/rule content.
+- [x] Split company entities from profession/project-type catalogs and skill/rule content.
 - [ ] Split MCP tool schemas, definitions, dispatch, audit and gateway code.
 - [ ] Keep catalogs data-driven so Chinese/English content does not duplicate control flow.
 
