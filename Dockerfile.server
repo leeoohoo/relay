@@ -30,20 +30,24 @@ COPY --from=web-builder /app/apps/web/dist ./apps/web/dist
 
 RUN cargo build --release -p ai-chat-server
 
-FROM debian:bookworm-slim
+FROM postgres:16-bookworm AS migrator
 
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl postgresql-client \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /app/target/release/ai-chat-server /usr/local/bin/ai-chat-server
-COPY --from=builder /app/apps/web/dist /app/web-dist
 COPY migrations /app/migrations
 COPY scripts/run_pg_migrations.sh /app/scripts/run_pg_migrations.sh
 
 RUN chmod +x /app/scripts/run_pg_migrations.sh
+
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/ai-chat-server /usr/local/bin/ai-chat-server
+COPY --from=builder /app/apps/web/dist /app/web-dist
+COPY --from=builder /usr/bin/git /usr/bin/git
+COPY --from=builder /usr/lib/git-core /usr/lib/git-core
+COPY --from=builder /usr/share/git-core /usr/share/git-core
 
 EXPOSE 8080
 

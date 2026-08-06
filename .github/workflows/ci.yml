@@ -103,6 +103,9 @@ jobs:
       - name: Clean server Docker build
         run: docker build --no-cache --pull -f Dockerfile.server -t relay-server:ci .
 
+      - name: Clean migration Docker build
+        run: docker build --no-cache --pull --target migrator -f Dockerfile.server -t relay-migrator:ci .
+
       - name: Clean web Docker build
         run: docker build --no-cache --pull -f Dockerfile.web -t relay-web:ci .
 

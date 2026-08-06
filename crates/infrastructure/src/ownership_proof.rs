@@ -2,9 +2,10 @@ use ai_chat_application::{
     OwnershipProofVerifier, OwnershipVerificationInput, OwnershipVerificationOutcome,
 };
 use ai_chat_shared::{AppError, AppResult};
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::process::Command;
+use std::time::Duration;
 
 use crate::config::{ApiConfig, OwnershipProofMode};
 
@@ -148,45 +149,38 @@ impl OwnershipProofVerifier for RemoteOwnershipProofVerifier {
             source_url: input.source_url.clone(),
         };
 
-        let body = serde_json::to_string(&request_body).map_err(|error| {
-            AppError::Validation(format!(
-                "remote ownership proof request could not be serialized: {error}"
-            ))
-        })?;
-
-        let mut command = Command::new("curl");
-        command
-            .arg("-sS")
-            .arg("-X")
-            .arg("POST")
-            .arg("-H")
-            .arg("content-type: application/json");
-
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "remote ownership proof HTTP client could not be created: {error}"
+                ))
+            })?;
+        let mut request = client.post(&self.endpoint).json(&request_body);
         if let Some(token) = &self.bearer_token {
-            command
-                .arg("-H")
-                .arg(format!("authorization: Bearer {token}"));
+            request = request.bearer_auth(token);
         }
-
-        command.arg("-d").arg(body).arg(&self.endpoint);
-
-        let output = command.output().map_err(|error| {
+        let response = request.send().map_err(|error| {
+            AppError::Validation(format!("remote ownership proof request failed: {error}"))
+        })?;
+        let status = response.status();
+        let response_body = response.bytes().map_err(|error| {
             AppError::Validation(format!(
-                "remote ownership proof request failed to start curl: {error}"
+                "remote ownership proof response could not be read: {error}"
             ))
         })?;
-
-        if !output.status.success() {
-            return Err(AppError::Validation(
-                String::from_utf8_lossy(&output.stderr)
-                    .trim()
-                    .to_string()
-                    .if_empty_then(|| "remote ownership proof request failed".into()),
-            ));
+        if !status.is_success() {
+            let message = String::from_utf8_lossy(&response_body).trim().to_string();
+            return Err(AppError::Validation(if message.is_empty() {
+                format!("remote ownership proof request failed with HTTP {status}")
+            } else {
+                format!("remote ownership proof request failed with HTTP {status}: {message}")
+            }));
         }
-
         let payload: RemoteVerificationResponse =
-            serde_json::from_slice(&output.stdout).map_err(|error| {
+            serde_json::from_slice(&response_body).map_err(|error| {
                 AppError::Validation(format!(
                     "remote ownership proof response could not be parsed: {error}"
                 ))
@@ -214,20 +208,6 @@ trait Pipe: Sized {
 }
 
 impl<T> Pipe for T {}
-
-trait StringFallback {
-    fn if_empty_then(self, f: impl FnOnce() -> String) -> String;
-}
-
-impl StringFallback for String {
-    fn if_empty_then(self, f: impl FnOnce() -> String) -> String {
-        if self.trim().is_empty() {
-            f()
-        } else {
-            self
-        }
-    }
-}
 
 fn extract_provider_post_id(source_url: &str) -> Option<String> {
     let trimmed = source_url.trim().trim_end_matches('/');
