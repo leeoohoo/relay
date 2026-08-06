@@ -15,7 +15,7 @@
 | [x] | 16,634 | `crates/application/src/service.rs` | split into contracts, platform services, validation, pagination and tests; facade is now 991 lines |
 | [ ] | 6,725 | `crates/infrastructure/src/postgres.rs` | connection, transactions, domain repositories, row mapping |
 | [x] | 5,236 | `apps/web/src/pages/App.tsx` | application shell is now 400 lines; feature pages, dialogs and view models were extracted |
-| [ ] | 4,655 | `apps/server/src/main.rs` | bootstrap, router, state, errors, DTOs and domain handlers |
+| [x] | 4,655 | `apps/server/src/main.rs` | bootstrap/router is now 653 lines; account, company, chat, project, Codex, Agent, auth/error, DTO and tests are focused modules |
 | [ ] | 3,870 | `crates/domain/src/company.rs` | company models, profession catalog, project types, skills, tests |
 | [ ] | 3,849 | `crates/mcp/src/lib.rs` | gateway, schemas, tool definitions, dispatch, audit and inputs |
 | [ ] | 3,608 | `crates/application/src/memory.rs` | state, persistence and domain repository implementations |
@@ -86,7 +86,7 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 
 ### 3. Runtime applications
 
-- [ ] Reduce server `main.rs` to bootstrap only; move routes and handlers into domain modules.
+- [x] Reduce server `main.rs` to bootstrap, shared state and route composition; move handlers into domain modules.
 - [ ] Reduce agent-trigger `main.rs` to bootstrap only; move polling, execution, plugin and installer logic into services.
 - [ ] Keep DTO conversion and HTTP error mapping centralized instead of repeating them in handlers.
 

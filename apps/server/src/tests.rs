@@ -1,0 +1,122 @@
+use super::*;
+
+#[test]
+fn bearer_token_requires_authorization_bearer_scheme() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "Bearer hus_test".parse().expect("valid header"),
+    );
+    assert_eq!(bearer_token(&headers).expect("bearer token"), "hus_test");
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "Basic abc".parse().expect("valid header"),
+    );
+    assert!(bearer_token(&headers).is_err());
+}
+
+#[test]
+fn owner_path_cannot_select_another_human_user() {
+    assert!(require_same_human(Uuid::new_v4(), Uuid::new_v4()).is_err());
+    let user_id = Uuid::new_v4();
+    assert!(require_same_human(user_id, user_id).is_ok());
+}
+
+#[test]
+fn admin_credentials_support_legacy_root_and_scoped_tokens() {
+    let scoped_token = "ops-token-with-at-least-24-chars";
+    let configured = serde_json::json!([{
+        "name": "observer",
+        "token": scoped_token,
+        "scopes": [ADMIN_SCOPE_READ]
+    }])
+    .to_string();
+    let credentials = build_admin_credentials(Some("legacy-root-token"), Some(&configured))
+        .expect("admin credentials should parse");
+
+    let legacy = credentials
+        .iter()
+        .find(|credential| credential.name == "legacy-root")
+        .expect("legacy root should exist");
+    assert!(legacy.allows(ADMIN_SCOPE_AGENTS));
+
+    let observer = credentials
+        .iter()
+        .find(|credential| credential.name == "observer")
+        .expect("observer should exist");
+    assert!(observer.allows(ADMIN_SCOPE_READ));
+    assert!(!observer.allows(ADMIN_SCOPE_AGENTS));
+    assert_eq!(observer.token_hash, hash_secret(scoped_token));
+}
+
+#[test]
+fn admin_credentials_reject_weak_or_unknown_scope_entries() {
+    let weak = r#"[{"name":"ops","token":"short","scopes":["admin:read"]}]"#;
+    assert!(build_admin_credentials(None, Some(weak)).is_err());
+
+    let unknown = r#"[{"name":"ops","token":"a-strong-token-with-24-characters","scopes":["admin:unknown"]}]"#;
+    assert!(build_admin_credentials(None, Some(unknown)).is_err());
+}
+
+#[test]
+fn sliding_window_rate_limiter_rejects_requests_over_budget() {
+    let limiter = SlidingWindowRateLimiter::new(2, StdDuration::from_secs(60), "test");
+    assert!(limiter.check("same-client").is_ok());
+    assert!(limiter.check("same-client").is_ok());
+    assert!(matches!(
+        limiter.check("same-client"),
+        Err(ApiError(AppError::RateLimited(_)))
+    ));
+    assert!(limiter.check("different-client").is_ok());
+}
+
+#[test]
+fn local_project_import_copies_source_into_a_fresh_git_repository() {
+    let root = std::env::temp_dir().join(format!("relay-project-import-{}", Uuid::new_v4()));
+    let source = root.join("source");
+    let destination = root.join("managed");
+    fs::create_dir_all(source.join("src")).expect("source directories");
+    fs::create_dir_all(source.join(".git")).expect("source git metadata");
+    fs::create_dir_all(source.join("node_modules/pkg")).expect("source dependency cache");
+    fs::write(
+        source.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("manifest");
+    fs::write(source.join("src/main.rs"), "fn main() {}\n").expect("source file");
+    fs::write(source.join(".git/config"), "source metadata").expect("git metadata");
+    fs::write(source.join("node_modules/pkg/index.js"), "cache").expect("cache file");
+
+    import_project_folder(&source, &destination).expect("folder import should succeed");
+    assert!(destination.join("Cargo.toml").is_file());
+    assert!(destination.join("src/main.rs").is_file());
+    assert!(destination.join(".git").is_dir());
+    assert!(!destination.join("node_modules").exists());
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&destination)
+        .output()
+        .expect("git status");
+    assert!(status.status.success());
+    assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+    fs::remove_dir_all(root).expect("test import should be removable");
+}
+
+#[test]
+fn uploaded_project_paths_are_normalized_and_exclude_generated_directories() {
+    assert_eq!(
+        normalize_uploaded_project_path("src\\main.rs").expect("valid path"),
+        Some("src/main.rs".into())
+    );
+    assert_eq!(
+        normalize_uploaded_project_path("node_modules/pkg/index.js").expect("excluded path"),
+        None
+    );
+    assert_eq!(
+        normalize_uploaded_project_path("client/target/debug/app").expect("excluded path"),
+        None
+    );
+    assert!(normalize_uploaded_project_path("../secret.txt").is_err());
+    assert!(normalize_uploaded_project_path("/absolute/path").is_err());
+}
