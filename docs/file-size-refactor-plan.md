@@ -28,6 +28,41 @@
 
 The baseline excludes generated output and dependency/build directories such as `target`, `node_modules`, and `dist`.
 
+## Structure audit (2026-08-06)
+
+The next extractions are ordered by responsibility and coupling, not only by line count.
+
+| Priority | Area | Current problem | Target modules | Duplication to remove while splitting |
+| --- | --- | --- | --- | --- |
+| P0 | `apps/web/src/pages/App.tsx` | Application shell, five Codex surfaces, projects, tasks, project rules/assets/Git, and dialogs share one file | `app-shell`, `codex/`, `projects/`, `tasks/` feature modules | repeated Codex environment fetch/poll state; repeated busy/error wrappers; repeated project permission derivation and grant flow |
+| P0 | `apps/server/src/main.rs` | Bootstrap, router assembly, auth extraction, DTOs, error mapping and all HTTP handlers are coupled | `bootstrap`, `http/router`, `http/error`, domain route modules | repeated company/session authorization, JSON response construction and query parsing |
+| P0 | `crates/infrastructure/src/postgres.rs` | Every PostgreSQL repository and most row mapping live behind one adapter file | `postgres/connection`, `transaction`, domain repositories, shared row mapping | repeated transaction begin/commit/error conversion; repeated optional row decoding and pagination queries |
+| P1 | `crates/domain/src/company.rs` | Core entities are mixed with profession catalogs, project-type rules, bilingual Skill text and tests | `company/entities`, `governance`, `professions`, `project_types`, focused tests | Chinese/English catalog construction and repeated permission/rule metadata |
+| P1 | `crates/mcp/src/lib.rs` | Protocol gateway, tool schema, dispatch, audit and inputs change together | `gateway`, `tools/schema`, `tools/dispatch`, `audit`, `inputs` | repeated argument validation, company/agent context resolution and tool result/error envelopes |
+| P1 | `crates/application/src/memory.rs` | In-memory state, persistence and all repository implementations are coupled | `memory/state`, `persistence`, domain repository adapters | repeated lock acquisition, entity lookup and not-found/conflict conversion |
+| P1 | `crates/infrastructure/src/codex_trigger.rs` | Command construction, process lifecycle, approvals, progress events and tests are interleaved | `trigger/config`, `command`, `runner`, `approval`, `progress`, tests | repeated process-output normalization and event/status persistence |
+| P2 | `apps/agent-trigger/src/main.rs` | CLI bootstrap, polling loop, installation, plugin discovery and task execution share globals | `config`, `poller`, `executor`, `installer`, `plugins` | repeated environment parsing, retry/backoff and Trigger API calls |
+| P2 | `crates/infrastructure/src/codex_control.rs` | Runtime discovery, auth profiles, MCP and CLI settings share storage/command helpers | `control/runtime`, `profiles`, `mcp`, `settings`, `store` | repeated target-selector resolution, command execution and snapshot persistence |
+| P2 | `crates/infrastructure/src/git_workspace.rs` | Validation, Git command execution, worktree lifecycle and credentials are coupled | `git/validation`, `command`, `workspace`, `credentials` | repeated command error formatting, path safety checks and remote URL normalization |
+
+### Web extraction sequence
+
+- [x] Extract organization dialogs, Agent management, memory/approval views and shared platform types.
+- [ ] Finish and verify the current Skill center and chat center extraction.
+- [ ] Extract Codex control-center navigation first, then MCP, plugins, runners, auth/environment and Trigger into focused files.
+- [ ] Introduce one shared Codex environment hook for loading, pending-operation refresh intervals and stale-request cancellation.
+- [ ] Extract project list/create/detail shell separately from project rule, assets and Git panels.
+- [ ] Extract task list, task dialog, status/priority presentation and task filters.
+- [ ] Reduce `App.tsx` to session/company orchestration, navigation and top-level dialogs.
+
+### Refactor rules discovered during audit
+
+- A feature module owns its request state and view; the application shell passes identity, token and refresh callbacks only.
+- Shared hooks are introduced only when at least two extracted features have the same lifecycle, not merely similar names.
+- API request bodies and permission mutation logic must have one typed helper rather than being rebuilt in multiple components.
+- Catalog data and bilingual content stay data-driven; UI language selection must not duplicate business flow.
+- Tests move with the behavior they cover, and every extraction batch must compile before the next file is touched.
+
 ## Work batches
 
 ### 1. Application boundary
