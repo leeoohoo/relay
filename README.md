@@ -6,6 +6,51 @@ Relay is a collaboration and governance layer for local coding agents. It gives 
 
 Relay does **not** implement another model-calling stack. Its optional local trigger only decides when an agent should wake up, then starts or resumes the local Codex session that performs the actual work.
 
+## Quick Start
+
+A complete installation needs Git, Docker, Node.js 22, and Rust. Server, Web, PostgreSQL, and Harness run in Docker; Rust is only used to build the host Agent Trigger.
+
+### 1. Install Rust
+
+Ubuntu, Debian, or WSL2:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl build-essential pkg-config libssl-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+macOS:
+
+```bash
+xcode-select --install 2>/dev/null || true
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+### 2. Download and start Relay
+
+```bash
+git clone https://github.com/leeoohoo/relay.git relay
+cd relay
+corepack enable
+corepack prepare pnpm@8.15.9 --activate
+pnpm install --frozen-lockfile
+./start.sh
+```
+
+When startup completes, open the Relay URL printed in the terminal, usually [http://127.0.0.1:45274](http://127.0.0.1:45274). Register an account, create a company and Agents, then open **Codex Console → CLI & Authentication** to inspect or install Codex CLI.
+
+If Linux reports `Permission denied`:
+
+```bash
+chmod +x start.sh scripts/*.sh
+./start.sh
+```
+
+You can also use `bash ./start.sh`. Do not use `sudo ./start.sh`, because it can leave root-owned files in the workspace.
+
 ## Why Relay
 
 Running several coding agents on one project requires more than a prompt loop. They need durable identities, shared project state, clear task ownership, dependency-aware scheduling, secure Git access, and a way for humans to see and control what is happening.
@@ -109,16 +154,7 @@ Each Agent also owns an isolated two-tier memory:
 - Relay provisions a separate Harness user, private root space, and project access token after Human registration
 - Harness outages do not roll back Relay registration; failed or incomplete provisioning is retried on the next login
 - Harness passwords and access tokens stay in a private credential volume and are never stored in PostgreSQL or returned by the API
-- Docker deployment can use a hosted Harness-compatible service or start Harness in the Relay stack:
-
-```bash
-# Existing hosted/official service
-HARNESS_BASE_URL=https://harness.example.com \
-  ./scripts/start_docker.sh up --harness official
-
-# Self-hosted Harness container
-./scripts/start_docker.sh up --harness self-hosted
-```
+- Relay starts a self-hosted Harness in its Docker stack by default; `.env.local` can instead point to an official or hosted Harness service
 
 ## Architecture
 
@@ -173,18 +209,7 @@ docker compose version
 node --version
 ```
 
-### Recommended: install and start Relay with one command
-
-This command clones Relay, installs the web dependencies, and starts the complete product: PostgreSQL, self-hosted Harness, Relay Server/Web, and the host Agent Trigger:
-
-```bash
-git clone https://github.com/leeoohoo/relay.git relay && \
-  cd relay && \
-  corepack enable && \
-  corepack prepare pnpm@8.15.9 --activate && \
-  pnpm install --frozen-lockfile && \
-  ./scripts/start.sh
-```
+For a first installation, follow the Quick Start at the top of this document. The repository's `rust-toolchain.toml` selects Rust 1.94 automatically; run `cargo --version` to confirm that the Trigger build environment is available.
 
 The first Rust and Docker build can take a while. When startup completes, the script prints the exact URLs selected for this installation. The usual defaults are:
 
@@ -222,11 +247,11 @@ The host Trigger executes the installer; neither the Server nor the browser runs
 Run these commands from the repository directory:
 
 ```bash
-./scripts/start.sh              # start the complete product
-./scripts/start.sh status       # show containers, Trigger, URLs, and workspace
-./scripts/start.sh logs         # follow Server, Harness, PostgreSQL, and Trigger logs
-./scripts/start.sh restart      # restart the complete product
-./scripts/start.sh down         # stop Relay while preserving Docker volumes
+./start.sh              # start the complete product
+./start.sh status       # show containers, Trigger, URLs, and workspace
+./start.sh logs         # follow Server, Harness, PostgreSQL, and Trigger logs
+./start.sh restart      # restart the complete product
+./start.sh down         # stop Relay while preserving Docker volumes
 ```
 
 Relay enables the `self_hosted` Harness mode by default and starts the `ai-chat-harness` Docker container automatically. To use a remote Harness, set `HARNESS_MODE=official` and `HARNESS_BASE_URL` in `.env.local`. Harness is disabled only when `HARNESS_MODE=disabled` is set explicitly.
@@ -237,43 +262,14 @@ Update an existing installation:
 git pull --ff-only && \
   corepack prepare pnpm@8.15.9 --activate && \
   pnpm install --frozen-lockfile && \
-  ./scripts/start.sh restart
+  ./start.sh restart
 ```
 
 Runtime state is stored in `.relay/`, `.relay-agent-trigger/`, `.relay-workspace/`, and Docker volumes. Do not delete them or run `docker compose down -v` when company data must be preserved.
 
-### Docker-only control plane
-
-To run only the Web, API, and PostgreSQL control plane first:
-
-```bash
-git clone https://github.com/leeoohoo/relay.git relay && \
-  cd relay && \
-  corepack enable && \
-  corepack prepare pnpm@8.15.9 --activate && \
-  pnpm install --frozen-lockfile && \
-  ./scripts/start_docker.sh up --harness disabled
-```
-
-The usual URL is `http://127.0.0.1:45274`; an occupied port is shifted automatically. This advanced command starts only the Docker control plane and deliberately does **not** run the host Agent Trigger. Use `./scripts/start.sh` for a complete installation where Agents can execute work.
-
 ### Development workflow
 
-Contributors who need Vite hot reload and automatic Rust Server rebuilds can use `./scripts/start_dev.sh up`. Its defaults are Web `15274`, API `48181`, PostgreSQL `15533`, Harness HTTP `13101`, and Harness SSH `13123`. This is a contributor workflow; normal installations should use `./scripts/start.sh`.
-
-Select a Harness deployment mode during installation:
-
-```bash
-# Disable Harness
-./scripts/start_docker.sh up --harness disabled
-
-# Run a self-hosted Harness in the same Docker stack
-./scripts/start_docker.sh up --harness self-hosted
-
-# Connect an existing Harness service
-HARNESS_BASE_URL=https://harness.example.com \
-  ./scripts/start_docker.sh up --harness official
-```
+Contributors who need Vite hot reload and automatic Rust Server rebuilds can use `./scripts/start_dev.sh up`. Its defaults are Web `15274`, API `48181`, PostgreSQL `15533`, Harness HTTP `13101`, and Harness SSH `13123`. This is a contributor workflow; normal installations should use `./start.sh`.
 
 See [.env.example](.env.example) for configuration and [deploy/README.md](deploy/README.md) for production Docker, TLS, and secret-management guidance.
 

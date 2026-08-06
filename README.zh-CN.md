@@ -6,6 +6,51 @@ Relay 是一个面向本地编程 Agent 的协作与治理层。它通过 MCP �
 
 Relay **不会再实现一套调用大模型的代码**。可选的本地 Trigger 只负责判断何时唤醒 Agent，真正的工作由本地 Codex 启动或恢复固定会话后完成。
 
+## 快速开始
+
+完整运行需要 Git、Docker、Node.js 22 和 Rust。Server、Web、PostgreSQL 与 Harness 运行在 Docker 中；Rust 只用于首次编译宿主机 Agent Trigger。
+
+### 1. 安装 Rust
+
+Ubuntu、Debian 或 WSL2：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl build-essential pkg-config libssl-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+macOS：
+
+```bash
+xcode-select --install 2>/dev/null || true
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+### 2. 下载并启动 Relay
+
+```bash
+git clone https://github.com/leeoohoo/relay.git relay
+cd relay
+corepack enable
+corepack prepare pnpm@8.15.9 --activate
+pnpm install --frozen-lockfile
+./start.sh
+```
+
+启动完成后打开终端输出的 Relay 地址，通常是 [http://127.0.0.1:45274](http://127.0.0.1:45274)。注册账号、创建公司和 Agent，然后进入“Codex 控制台 → CLI 与认证”检查或安装 Codex CLI。
+
+如果 Linux 提示“权限不够”或 `Permission denied`：
+
+```bash
+chmod +x start.sh scripts/*.sh
+./start.sh
+```
+
+也可以使用 `bash ./start.sh`。不要使用 `sudo ./start.sh`，否则可能在工作区生成属于 root 的文件。
+
 ## 为什么需要 Relay
 
 让多个编程 Agent 在同一个项目中长期协作，不只是反复拼接 Prompt。它们需要稳定身份、共享项目状态、明确的任务负责人、前置依赖、受控的 Git 权限，以及 Human 能够查看和干预的运行过程。
@@ -109,16 +154,7 @@ Human 创建公司、项目和 Agent 账号
 - Human 在 Relay 注册后，系统会自动创建独立的 Harness 用户、私有根空间和项目访问 Token
 - Harness 暂时不可用不会回滚 Relay 注册；未完成或失败的开通会在下次登录时自动重试
 - Harness 密码和访问 Token 只保存在私有凭证卷中，不进入 PostgreSQL，也不会通过 API 返回
-- Docker 部署既可以连接官方/托管 Harness，也可以在 Relay Docker 栈中启动自建 Harness：
-
-```bash
-# 使用已有的官方或托管服务
-HARNESS_BASE_URL=https://harness.example.com \
-  ./scripts/start_docker.sh up --harness official
-
-# 在 Docker 中启动自建 Harness
-./scripts/start_docker.sh up --harness self-hosted
-```
+- 默认在 Relay Docker 栈中启动自建 Harness；也可以通过 `.env.local` 连接官方或托管 Harness
 
 ## 系统架构
 
@@ -173,18 +209,7 @@ docker compose version
 node --version
 ```
 
-### 推荐：一条命令安装并启动 Relay
-
-下面的命令会克隆 Relay、安装前端依赖，并启动完整产品：PostgreSQL、自建 Harness、Relay Server/Web 和宿主机 Agent Trigger：
-
-```bash
-git clone https://github.com/leeoohoo/relay.git relay && \
-  cd relay && \
-  corepack enable && \
-  corepack prepare pnpm@8.15.9 --activate && \
-  pnpm install --frozen-lockfile && \
-  ./scripts/start.sh
-```
+首次安装请直接按照文档顶部的“快速开始”执行。仓库中的 `rust-toolchain.toml` 会自动选择 Rust 1.94；可以使用 `cargo --version` 确认 Trigger 构建环境已经可用。
 
 第一次构建 Rust 和 Docker 镜像会需要一些时间。启动完成后，脚本会输出本次实际使用的地址。默认通常是：
 
@@ -222,11 +247,11 @@ Relay 托管安装使用：
 后续进入仓库目录执行：
 
 ```bash
-./scripts/start.sh              # 启动完整产品
-./scripts/start.sh status       # 查看容器、Trigger、访问地址和工作区
-./scripts/start.sh logs         # 跟踪 Server、Harness、PostgreSQL 和 Trigger 日志
-./scripts/start.sh restart      # 重启完整产品
-./scripts/start.sh down         # 停止 Relay，保留 Docker 数据卷
+./start.sh              # 启动完整产品
+./start.sh status       # 查看容器、Trigger、访问地址和工作区
+./start.sh logs         # 跟踪 Server、Harness、PostgreSQL 和 Trigger 日志
+./start.sh restart      # 重启完整产品
+./start.sh down         # 停止 Relay，保留 Docker 数据卷
 ```
 
 Relay 默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Docker 容器。若要连接远程 Harness，请在 `.env.local` 设置 `HARNESS_MODE=official` 与 `HARNESS_BASE_URL`；只有显式设置 `HARNESS_MODE=disabled` 才会关闭 Harness。
@@ -237,43 +262,14 @@ Relay 默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Doc
 git pull --ff-only && \
   corepack prepare pnpm@8.15.9 --activate && \
   pnpm install --frozen-lockfile && \
-  ./scripts/start.sh restart
+  ./start.sh restart
 ```
 
 运行状态保存在 `.relay/`、`.relay-agent-trigger/`、`.relay-workspace/` 和 Docker 数据卷中。不要在需要保留公司数据时直接删除这些目录或执行 `docker compose down -v`。
 
-### 仅使用 Docker 启动控制面
-
-如果只想先运行 Web、API 和 PostgreSQL，可以执行：
-
-```bash
-git clone https://github.com/leeoohoo/relay.git relay && \
-  cd relay && \
-  corepack enable && \
-  corepack prepare pnpm@8.15.9 --activate && \
-  pnpm install --frozen-lockfile && \
-  ./scripts/start_docker.sh up --harness disabled
-```
-
-默认入口是 `http://127.0.0.1:45274`，端口冲突时同样会自动顺延。这个高级命令只启动 Docker 控制面，**不会启动宿主机 Agent Trigger**。需要 Agent 真正执行工作时，请使用 `./scripts/start.sh`。
-
 ### 开发者工作流
 
-需要 Vite 热更新和 Rust Server 自动重编译的贡献者可以使用 `./scripts/start_dev.sh up`。默认端口为 Web `15274`、API `48181`、PostgreSQL `15533`、Harness HTTP `13101`、Harness SSH `13123`。普通安装只需要使用 `./scripts/start.sh`。
-
-Harness 可以在安装时选择：
-
-```bash
-# 不启用 Harness
-./scripts/start_docker.sh up --harness disabled
-
-# 在同一个 Docker 栈中启动自建 Harness
-./scripts/start_docker.sh up --harness self-hosted
-
-# 连接已有 Harness
-HARNESS_BASE_URL=https://harness.example.com \
-  ./scripts/start_docker.sh up --harness official
-```
+需要 Vite 热更新和 Rust Server 自动重编译的贡献者可以使用 `./scripts/start_dev.sh up`。默认端口为 Web `15274`、API `48181`、PostgreSQL `15533`、Harness HTTP `13101`、Harness SSH `13123`。普通安装只需要使用 `./start.sh`。
 
 环境变量见 [.env.example](.env.example)，生产 Docker、TLS 和密钥配置见 [deploy/README.md](deploy/README.md)。
 

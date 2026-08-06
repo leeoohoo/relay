@@ -112,6 +112,7 @@ start_trigger() {
   export AGENT_TRIGGER_MCP_URL="http://127.0.0.1:${server_port}/mcp"
 
   trigger_command=(
+    bash
     "$ROOT_DIR/scripts/run_dev_service.sh"
     "$TRIGGER_PID_FILE"
     "$ROOT_DIR"
@@ -158,7 +159,7 @@ print_status() {
   local server_port harness_port
   server_port="$(container_host_port ai-chat-server 8080/tcp)"
   harness_port="$(container_host_port ai-chat-harness 3000/tcp)"
-  "$ROOT_DIR/scripts/start_docker.sh" ps --harness "$HARNESS_MODE"
+  bash "$ROOT_DIR/scripts/start_docker.sh" ps --harness "$HARNESS_MODE"
   if trigger_is_running; then
     echo "Trigger: running (pid $(read_trigger_pid))"
   else
@@ -170,8 +171,8 @@ print_status() {
 }
 
 start_all() {
-  "$ROOT_DIR/scripts/start_dev.sh" down >/dev/null 2>&1 || true
-  "$ROOT_DIR/scripts/start_docker.sh" up --harness "$HARNESS_MODE"
+  bash "$ROOT_DIR/scripts/start_dev.sh" down >/dev/null 2>&1 || true
+  bash "$ROOT_DIR/scripts/start_docker.sh" up --harness "$HARNESS_MODE"
   start_trigger
   local server_port
   server_port="$(container_host_port ai-chat-server 8080/tcp)"
@@ -189,7 +190,7 @@ case "$MODE" in
     ;;
   down)
     stop_trigger
-    "$ROOT_DIR/scripts/start_docker.sh" down --harness "$HARNESS_MODE"
+    bash "$ROOT_DIR/scripts/start_docker.sh" down --harness "$HARNESS_MODE"
     ;;
   status|ps)
     print_status
@@ -197,7 +198,7 @@ case "$MODE" in
   logs)
     echo "Trigger log: $TRIGGER_LOG"
     tail -n 80 "$TRIGGER_LOG"
-    "$ROOT_DIR/scripts/start_docker.sh" logs --harness "$HARNESS_MODE"
+    bash "$ROOT_DIR/scripts/start_docker.sh" logs --harness "$HARNESS_MODE"
     ;;
   *)
     echo "Usage: $0 [up|restart|down|status|logs]" >&2

@@ -2,35 +2,34 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRODUCT_SCRIPT="$ROOT_DIR/scripts/start.sh"
 DEV_SCRIPT="$ROOT_DIR/scripts/start_dev.sh"
 DOCKER_SCRIPT="$ROOT_DIR/scripts/start_docker.sh"
 
 usage() {
   cat <<'EOF'
-AI Chat root startup helper
+Relay startup helper
 
 Usage:
-  bash ./start.sh
-      Start the recommended local development stack.
-      Equivalent to: ./scripts/start_dev.sh up
+  ./start.sh [up|restart|down|status|logs]
+      Start or manage the complete Relay product.
+      Equivalent to: ./scripts/start.sh
 
-  bash ./start.sh up|restart|down|logs|status|doctor
-      Forward directly to ./scripts/start_dev.sh
+  ./start.sh dev [up|restart|down|logs|status|doctor]
+      Start the contributor development environment.
 
-  bash ./start.sh local [up|restart|down|logs|status|doctor]
-      Explicit local-dev wrapper for ./scripts/start_dev.sh
-
-  bash ./start.sh docker [up|rebuild|down|restart|ps|logs]
-      Forward to ./scripts/start_docker.sh
+  ./start.sh docker [up|rebuild|down|restart|ps|logs]
+      Manage only the Docker control plane. This does not start the host Trigger.
 
 Notes:
-  - README recommends ./scripts/start_dev.sh up for day-to-day local development.
-  - Use the docker mode when you want the all-in-one containerized startup path.
+  - Normal users should use the default command so the host Agent Trigger starts.
+  - If execution permission was lost, run: chmod +x start.sh scripts/*.sh
+  - You can always invoke this wrapper explicitly with: bash ./start.sh
 EOF
 }
 
-if [[ ! -f "$DEV_SCRIPT" ]]; then
-  echo "Missing dev startup script: $DEV_SCRIPT" >&2
+if [[ ! -f "$PRODUCT_SCRIPT" ]]; then
+  echo "Missing product startup script: $PRODUCT_SCRIPT" >&2
   exit 1
 fi
 
@@ -47,11 +46,11 @@ case "${1:-up}" in
     shift || true
     exec bash "$DOCKER_SCRIPT" "$@"
     ;;
-  local)
+  dev|local)
     shift || true
     exec bash "$DEV_SCRIPT" "$@"
     ;;
   *)
-    exec bash "$DEV_SCRIPT" "$@"
+    exec bash "$PRODUCT_SCRIPT" "$@"
     ;;
 esac
