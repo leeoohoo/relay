@@ -230,6 +230,8 @@ Run these commands from the repository directory:
 ./scripts/start_dev.sh down     # stop Relay while preserving PostgreSQL volumes
 ```
 
+Local development enables the `self_hosted` Harness mode by default and starts the `ai-chat-harness` Docker container automatically. To use a remote Harness, set `HARNESS_MODE=official` and `HARNESS_BASE_URL` in `.env.local`. Harness is disabled only when `HARNESS_MODE=disabled` is set explicitly.
+
 Update an existing installation:
 
 ```bash

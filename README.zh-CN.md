@@ -230,6 +230,8 @@ Relay 托管安装使用：
 ./scripts/start_dev.sh down     # 停止 Relay，保留 PostgreSQL 数据卷
 ```
 
+本地开发默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Docker 容器。若要连接远程 Harness，请在 `.env.local` 设置 `HARNESS_MODE=official` 与 `HARNESS_BASE_URL`；只有显式设置 `HARNESS_MODE=disabled` 才会关闭 Harness。
+
 更新到最新版本：
 
 ```bash

@@ -44,7 +44,16 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 compose() {
-  docker compose -f "$ROOT_DIR/docker-compose.yml" "$@"
+  docker compose -f "$ROOT_DIR/docker-compose.yml" --profile harness-self-hosted "$@"
+}
+
+existing_container_port() {
+  local container_name="$1"
+  local container_port="$2"
+  docker port "$container_name" "$container_port" 2>/dev/null \
+    | head -n 1 \
+    | awk -F: '{print $NF}' \
+    || true
 }
 
 set_step() {
@@ -204,6 +213,10 @@ WEB_HOST_PORT=${WEB_HOST_PORT}
 DATABASE_URL=${DATABASE_URL}
 ENABLE_DEV_ENDPOINTS=${ENABLE_DEV_ENDPOINTS}
 HARNESS_MODE=${HARNESS_MODE}
+HARNESS_BASE_URL=${HARNESS_BASE_URL:-}
+HARNESS_PUBLIC_BASE_URL=${HARNESS_PUBLIC_BASE_URL:-}
+HARNESS_HOST_PORT=${HARNESS_HOST_PORT:-}
+HARNESS_SSH_PORT=${HARNESS_SSH_PORT:-}
 AGENT_TRIGGER_MCP_URL=${AGENT_TRIGGER_MCP_URL}
 AGENT_TRIGGER_MANAGED_PROJECTS_ROOT=${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT}
 EOF
@@ -336,6 +349,7 @@ prepare_env() {
   local preferred_postgres_port="${POSTGRES_HOST_PORT:-5432}"
   local preferred_api_port="${API_HOST_PORT:-38080}"
   local preferred_web_port="${WEB_HOST_PORT:-5173}"
+  local existing_harness_port existing_harness_ssh_port
 
   export POSTGRES_HOST_PORT="$preferred_postgres_port"
   export API_HOST_PORT="$preferred_api_port"
@@ -354,7 +368,41 @@ prepare_env() {
   export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:${POSTGRES_HOST_PORT}/ai_chat}"
   export PG_CONTAINER="${PG_CONTAINER:-ai-chat-postgres}"
   export ENABLE_DEV_ENDPOINTS="${ENABLE_DEV_ENDPOINTS:-true}"
-  export HARNESS_MODE="${HARNESS_MODE:-disabled}"
+  export HARNESS_MODE="${HARNESS_MODE:-self_hosted}"
+  HARNESS_MODE="${HARNESS_MODE//-/_}"
+  export HARNESS_MODE
+  case "$HARNESS_MODE" in
+    self_hosted)
+      existing_harness_port="$(existing_container_port ai-chat-harness 3000/tcp)"
+      existing_harness_ssh_port="$(existing_container_port ai-chat-harness 3022/tcp)"
+      export HARNESS_HOST_PORT="${HARNESS_HOST_PORT:-${existing_harness_port:-3000}}"
+      export HARNESS_SSH_PORT="${HARNESS_SSH_PORT:-${existing_harness_ssh_port:-3022}}"
+      if [[ -z "$existing_harness_port" ]] && port_is_in_use "$HARNESS_HOST_PORT"; then
+        HARNESS_HOST_PORT="$(choose_port "$HARNESS_HOST_PORT")"
+        export HARNESS_HOST_PORT
+      fi
+      if [[ -z "$existing_harness_ssh_port" ]] && port_is_in_use "$HARNESS_SSH_PORT"; then
+        HARNESS_SSH_PORT="$(choose_port "$HARNESS_SSH_PORT")"
+        export HARNESS_SSH_PORT
+      fi
+      export HARNESS_BASE_URL="${HARNESS_BASE_URL:-http://127.0.0.1:${HARNESS_HOST_PORT}}"
+      export HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-$HARNESS_BASE_URL}"
+      export HARNESS_GIT_BASE_URL="${HARNESS_GIT_BASE_URL:-${HARNESS_PUBLIC_BASE_URL}/git}"
+      ;;
+    official)
+      if [[ -z "${HARNESS_BASE_URL:-}" ]]; then
+        echo "HARNESS_BASE_URL is required when HARNESS_MODE=official" >&2
+        return 1
+      fi
+      export HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-$HARNESS_BASE_URL}"
+      ;;
+    disabled)
+      ;;
+    *)
+      echo "Unsupported HARNESS_MODE: $HARNESS_MODE (use official, self_hosted, or disabled)" >&2
+      return 1
+      ;;
+  esac
   export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-dev-admin-token}"
   export API_ALLOWED_ORIGINS="${API_ALLOWED_ORIGINS:-http://127.0.0.1:${WEB_HOST_PORT},http://localhost:${WEB_HOST_PORT}}"
   export AGENT_TRIGGER_MCP_URL="${AGENT_TRIGGER_MCP_URL:-http://127.0.0.1:${API_HOST_PORT}/mcp}"
@@ -376,9 +424,18 @@ prepare_env() {
 
 start_dependencies() {
   set_step "starting docker dependencies"
-  compose up -d postgres
+  if [[ "$HARNESS_MODE" == "self_hosted" ]]; then
+    compose up -d postgres harness
+  else
+    compose up -d postgres
+    compose stop harness >/dev/null 2>&1 || true
+  fi
   set_step "waiting for postgres readiness"
   wait_for_postgres
+  if [[ "$HARNESS_MODE" != "disabled" ]]; then
+    set_step "waiting for harness readiness"
+    wait_for_http "${HARNESS_BASE_URL}/api/v1/system/health" 90
+  fi
   set_step "running postgres migrations"
   bash "$ROOT_DIR/scripts/run_pg_migrations.sh" ensure
 }
@@ -400,6 +457,12 @@ start_api() {
     ENABLE_DEV_ENDPOINTS="$ENABLE_DEV_ENDPOINTS" \
     ADMIN_API_TOKEN="$ADMIN_API_TOKEN" \
     API_ALLOWED_ORIGINS="$API_ALLOWED_ORIGINS" \
+    HARNESS_MODE="$HARNESS_MODE" \
+    HARNESS_BASE_URL="${HARNESS_BASE_URL:-}" \
+    HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-}" \
+    HARNESS_SPACE_PREFIX="${HARNESS_SPACE_PREFIX:-u-}" \
+    HARNESS_REQUEST_TIMEOUT_SECONDS="${HARNESS_REQUEST_TIMEOUT_SECONDS:-15}" \
+    HARNESS_CREDENTIALS_ROOT="${HARNESS_CREDENTIALS_ROOT:-.relay/harness-credentials}" \
     AGENT_TRIGGER_MANAGED_PROJECTS_ROOT="$AGENT_TRIGGER_MANAGED_PROJECTS_ROOT" \
     RELAY_GIT_PROVIDER_KIND="${RELAY_GIT_PROVIDER_KIND:-}" \
     RELAY_GIT_PROVIDER_BASE_URL="${RELAY_GIT_PROVIDER_BASE_URL:-}" \
@@ -450,6 +513,12 @@ start_api_watcher() {
     ENABLE_DEV_ENDPOINTS="$ENABLE_DEV_ENDPOINTS" \
     ADMIN_API_TOKEN="$ADMIN_API_TOKEN" \
     API_ALLOWED_ORIGINS="$API_ALLOWED_ORIGINS" \
+    HARNESS_MODE="$HARNESS_MODE" \
+    HARNESS_BASE_URL="${HARNESS_BASE_URL:-}" \
+    HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-}" \
+    HARNESS_SPACE_PREFIX="${HARNESS_SPACE_PREFIX:-u-}" \
+    HARNESS_REQUEST_TIMEOUT_SECONDS="${HARNESS_REQUEST_TIMEOUT_SECONDS:-15}" \
+    HARNESS_CREDENTIALS_ROOT="${HARNESS_CREDENTIALS_ROOT:-.relay/harness-credentials}" \
     AGENT_TRIGGER_MCP_URL="$AGENT_TRIGGER_MCP_URL" \
     AGENT_TRIGGER_MANAGED_PROJECTS_ROOT="$AGENT_TRIGGER_MANAGED_PROJECTS_ROOT" \
     RELAY_GIT_PROVIDER_KIND="${RELAY_GIT_PROVIDER_KIND:-}" \
@@ -563,7 +632,10 @@ EOF
   print_http_status "Web" "http://127.0.0.1:${WEB_HOST_PORT}"
   print_http_status "API readiness" "http://127.0.0.1:${API_HOST_PORT}/ready"
 
-  echo "- Harness mode: ${HARNESS_MODE:-disabled}"
+  echo "- Harness mode: ${HARNESS_MODE:-self_hosted}"
+  if [[ "${HARNESS_MODE:-self_hosted}" != "disabled" ]]; then
+    echo "- Harness URL: ${HARNESS_PUBLIC_BASE_URL:-${HARNESS_BASE_URL:-not configured}}"
+  fi
 
   cat <<EOF
 
@@ -609,7 +681,8 @@ Services:
 - API: http://127.0.0.1:${API_HOST_PORT}
 - Trigger: local ai-chat-agent-trigger process
 - PostgreSQL: 127.0.0.1:${POSTGRES_HOST_PORT} (ai_chat)
-- Harness mode: ${HARNESS_MODE:-disabled}
+- Harness mode: ${HARNESS_MODE:-self_hosted}
+- Harness URL: ${HARNESS_PUBLIC_BASE_URL:-${HARNESS_BASE_URL:-not configured}}
 
 Logs:
 - API: $API_LOG
