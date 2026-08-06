@@ -14,6 +14,14 @@ Relay supports Linux x64/ARM64, Intel/Apple Silicon macOS, and Windows 10/11 thr
 
 Install and start [Docker Engine](https://docs.docker.com/engine/install/) or Docker Desktop, then run:
 
+If `sudo docker ps` works but ordinary `docker ps` reports a permission error, fix Docker access for the current user first. Relay should not be started with `sudo`:
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker info
+```
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl build-essential pkg-config libssl-dev
@@ -90,6 +98,8 @@ corepack prepare pnpm@8.15.9 --activate
 pnpm install --frozen-lockfile
 ./start.sh
 ```
+
+If only `sudo docker ps` works inside WSL2, run `sudo usermod -aG docker "$USER"`, followed by `newgrp docker` and `docker info`, before starting Relay as the normal user.
 
 When startup completes, open the Relay URL printed in the terminal, usually [http://127.0.0.1:45274](http://127.0.0.1:45274). Register an account, create a company and Agents, then open **Codex Console → CLI & Authentication** to inspect or install Codex CLI.
 

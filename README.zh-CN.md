@@ -14,6 +14,14 @@ Relay 支持 Linux x64/ARM64、Intel/Apple Silicon macOS，以及 Windows 10/11 
 
 先安装并启动 [Docker Engine](https://docs.docker.com/engine/install/) 或 Docker Desktop，然后执行：
 
+如果 `sudo docker ps` 可以执行、但普通的 `docker ps` 提示权限不足，请先修复当前用户的 Docker 权限。Relay 不应该使用 `sudo` 启动：
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker info
+```
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl build-essential pkg-config libssl-dev
@@ -90,6 +98,8 @@ corepack prepare pnpm@8.15.9 --activate
 pnpm install --frozen-lockfile
 ./start.sh
 ```
+
+如果 WSL2 中只有 `sudo docker ps` 能执行，同样运行 `sudo usermod -aG docker "$USER"`，再执行 `newgrp docker` 和 `docker info`，确认普通用户能够访问 Docker 后再启动 Relay。
 
 启动完成后打开终端输出的 Relay 地址，通常是 [http://127.0.0.1:45274](http://127.0.0.1:45274)。注册账号、创建公司和 Agent，然后进入“Codex 控制台 → CLI 与认证”检查或安装 Codex CLI。
 

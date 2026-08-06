@@ -111,10 +111,40 @@ existing_host_port_for() {
 }
 
 ensure_docker_daemon() {
-  if ! docker info >/dev/null 2>&1; then
-    echo "Docker daemon is not running. Please start Docker Desktop first." >&2
+  local docker_error
+
+  if docker_error="$(docker info 2>&1)"; then
+    return 0
+  fi
+
+  if [[ "$docker_error" == *"permission denied"* ]]; then
+    cat >&2 <<EOF
+Docker is running, but the current user (${USER:-unknown}) cannot access the Docker socket.
+
+Fix the Linux/WSL2 Docker group once:
+  sudo usermod -aG docker "\$USER"
+  newgrp docker
+  docker info
+
+Then re-run:
+  ./start.sh
+
+Do not run Relay with sudo; that can create root-owned workspace and credential files.
+EOF
     exit 1
   fi
+
+  cat >&2 <<EOF
+Docker is installed, but the Docker daemon is not reachable.
+
+- Docker Desktop: start Docker Desktop and wait until it reports that Docker is running.
+- Linux Docker Engine: start it with 'sudo systemctl start docker'.
+- WSL2: enable Docker Desktop's WSL integration for this distribution.
+
+Diagnostic command:
+  docker info
+EOF
+  exit 1
 }
 
 list_known_bad_mirrors_in_daemon() {
