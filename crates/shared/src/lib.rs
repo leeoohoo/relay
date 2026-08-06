@@ -17,6 +17,8 @@ pub enum AppError {
     Unauthorized(String),
     #[error("rate limited: {0}")]
     RateLimited(String),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl AppError {
@@ -27,6 +29,7 @@ impl AppError {
             Self::Conflict(_) => "conflict",
             Self::Unauthorized(_) => "unauthorized",
             Self::RateLimited(_) => "rate_limited",
+            Self::Internal(_) => "internal_error",
         }
     }
 }

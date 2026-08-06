@@ -15,6 +15,8 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 4. 只使用返回的 UUID。不要根据名称猜测 ID，也不要跨公司复用 ID。
 5. 检查自己的工作画像。职责、技能、当前重点或协作状态发生变化时，调用 `agent.profile.update`；只提交需要更新的字段。
 6. 调用 `company.task` 的 `my` 查看当前分配给自己的任务；优先处理 `readiness=ready` 的任务。`readiness=waiting_for_dependencies` 表示前置尚未完成，本轮不要启动它。
+7. 进入项目任务时，读取项目 Skill 中的“强制阶段流程”或对应执行顺序，确认当前阶段、前置门禁、必需交付物和验收证据。门禁按实际交付形态判断：任何页面、屏幕、HUD、后台、看板、报表布局、设备界面或其他视觉/交互交付都必须先有可编辑设计源文件和 SVG/PDF 等可审阅导出，不限于 Web 项目。任务显示 `ready` 只表示数据库依赖完成，不代表项目阶段门禁已经满足；如果开工会跳过需求、设计、技术方案、基础建设、测试或部署前置，保持任务未启动并通知有任务编排权限的 PM/技术经理修正依赖。
+8. 当前 Agent 的长期记忆已由 Relay 自动追加到本 Skill 的“Agent 固化长期记忆”章节，必须直接遵循，不需要重复查询。只有当前任务需要历史线索时，才使用项目名、任务标题和关键领域词调用 `agent.memory` 的 `search` 查询短期记忆；涉及当前代码和状态时仍要核对真实项目。
 
 首次入职或画像为空时，可调用：
 
@@ -44,6 +46,7 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 | 场景 | 操作 |
 |---|---|
 | 想知道自己是谁、在哪家公司、同事做什么 | `agent.bootstrap` |
+| 搜索或维护当前 Agent 私有的精华结论 | `agent.memory` 的 `search`、`remember`、`update`、`archive` |
 | 向明确的一位同事询问或交付 | `company.chat` 的 `direct_open`，然后 `send` |
 | 回复 Inbox 中的消息 | `company.chat` 的 `reply` |
 | 发布全公司都应看到的信息 | 向 bootstrap 返回的公司全员群 `send` |
@@ -62,7 +65,8 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 | 完整更新项目资产清单 | `company.project` 的 `assets_replace` |
 <!-- relay-permission:project.assets.manage:end -->
 <!-- relay-permission:project.create:start -->
-| 创建新项目并指定初始成员 | `company.project` 的 `create` |
+| 创建新项目并指定初始成员 | `company.project` 的 `create`；默认同时创建托管 Git 仓库和项目专用 Token |
+| 为已有项目创建或补建仓库 | `company.project` 的 `git_provision`；Token 由 Relay 保存，不要索取或在消息中传递 |
 <!-- relay-permission:project.create:end -->
 <!-- relay-permission:project.manage:start -->
 | 修改项目资料或增减项目成员 | `company.project` 的 `update`、`member_add`、`member_remove` |
@@ -76,6 +80,55 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 优先使用系统自动创建的公司全员群和项目群。只有固定的小范围讨论不属于任何现有项目时，才创建自定义群。
 
 Agent 在群里发送不带 `@` 的消息时，消息会进入其他成员未读，但不会立即唤醒所有人的 Codex。需要对方立即处理时使用 `mentioned_agent_ids` 明确 `@` 目标；确实需要全员立即行动时才使用 `mention_all=true`。Human 群消息仍会立即通知群成员。
+
+## 两层私有记忆
+
+Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话中理解工作事实、提炼可复用结论，再通过 `agent.memory` 保存。
+
+每一条记忆都只属于当前 Agent。你不能读取其他 Agent 的记忆，其他 Agent 也不能读取你的记忆。需要形成团队共识时，使用项目 Rule、项目资产、任务或消息，不要把私有记忆当成共享知识库。
+
+### 长期记忆
+
+- `memory_tier=long_term` 的内容会固化到当前 Agent 的动态 Skill，每次 Codex 唤醒都会自动进入上下文并指导工作。
+- 只保存跨任务、跨会话仍然稳定有效的规则，例如 Human 长期偏好、明确职责边界、反复验证的工程原则、稳定操作规程和关键失败教训。
+- 长期记忆写入门槛必须明显高于短期记忆。临时结论、阶段进度、一次性交接和未经充分验证的判断不能写成长记忆。
+- 当前事实与长期记忆冲突时，以 Human 最新指令、项目 Rule、当前代码和 MCP 实时状态为准，并更新、归档或 supersede 旧记忆。
+
+### 短期记忆
+
+- `memory_tier=short_term` 的内容不会自动进入上下文，只在当前任务需要历史线索时通过 `agent.memory search` 查询。
+- 适合保存阶段性但经过提炼的结论、近期项目上下文、待后续复核的经验和一段时期内有用的交接要点。
+- 搜索时默认只请求 `memory_tiers=["short_term"]`，并使用项目、任务、模块和业务关键词缩小结果；不要在每次唤醒时无条件加载全部短期记忆。
+
+维护规则：
+
+- 写入前按拟定的 `topic_key` 和关键词 `search`；相同主题已存在时调用 `update`，结论被替代时调用 `supersede`，不要制造近义重复。
+- `summary` 必须是短而完整、可直接复用的结论，补充 `when_to_use` 说明适用条件。
+- `project_id` 只表示这条私有记忆与哪个项目相关，用于筛选；它不会让项目成员看到这条记忆。
+- `source_refs` 只保存消息、任务、运行或项目的 ID 和简短标签，用来回溯来源；不复制来源正文。
+- 不保存原始聊天、任务正文、运行日志、命令输出、阶段进度、临时待办、代码大段摘录、推理过程、访问令牌、密码、私钥或其他秘密。
+- 没有产生新知识时不要写记忆。不要为了证明本轮执行过而创建记忆。
+
+示例：
+
+```json
+{
+  "action": "remember",
+  "company_id": "<company_id>",
+  "project_id": "<project_id>",
+  "memory_tier": "long_term",
+  "memory_type": "decision",
+  "topic_key": "order-concurrency-control",
+  "title": "订单更新统一使用乐观锁",
+  "summary": "更新 orders 时必须校验 version；冲突返回 409，禁止静默覆盖。",
+  "when_to_use": "修改订单写接口、批量同步和状态流转时",
+  "tags": ["订单", "并发"],
+  "importance": 5,
+  "confidence": 95,
+  "source_refs": [{"source_type": "task", "source_id": "<task_id>", "label": "并发更新修复"}],
+  "idempotency_key": "memory-order-concurrency-v1"
+}
+```
 
 ## 场景一：寻找合适的同事
 
@@ -161,13 +214,14 @@ Agent 在群里发送不带 `@` 的消息时，消息会进入其他成员未读
 
 1. 定时启动后先调用 `company.task` 的 `my`；也可以从 Inbox 或 bootstrap 找到 `project_id` 和 `task_id`。
 2. 调用 `company.task` 的 `get` 读取目标任务及直接依赖；需要项目成员、项目群和最新项目进度时，再调用 `company.project` 的 `get`。
-3. 确认任务分配给自己且依赖已完成，再把状态改为 `in_progress`。
-4. `company.task my` 返回 `can_start=false` 或 `readiness=waiting_for_dependencies` 时，读取 `unresolved_dependencies` 了解正在等待的前置任务，保持当前任务状态不变；处理并 ack 本轮 Inbox 后直接结束，让下一次定时 Trigger 重新判断。
-5. 等待前置不是任务自身发生了阻塞，不要仅因依赖未完成把任务改成 `blocked`；没有具体建议或解阻信息时也不要发送占位消息。
-6. 执行真实工作。不要仅凭收到任务就报告进度。
-7. 遇到任务自身的真实阻塞时把任务改为 `blocked`，并在项目群说明阻塞、影响和需要谁协助。
-8. 已执行但验收失败、测试失败或确认无法交付时，把任务改为 `failed`，保留证据和下一步建议；不要用 `done` 掩盖失败。
-9. 交付物完成并经过必要验证后，把任务改为 `done`。
+3. 从项目固定 Rule 中识别任务所属阶段，并根据实际产物判断门禁。凡涉及页面、屏幕、HUD、后台、看板、报表布局、设备界面或其他视觉/交互内容，检查可编辑设计源文件、SVG/PDF 审阅件、关键状态、目标尺寸和评审记录；同时检查前一阶段要求的需求、技术方案、骨架、基础模块、核心逻辑、测试或部署证据。没有阶段归属或缺少前置证据时不要把任务改为 `in_progress`；向 PM/技术经理提交具体缺失项和建议依赖。
+4. 确认任务分配给自己、数据库依赖已完成且项目阶段门禁已通过，再把状态改为 `in_progress`。
+5. `company.task my` 返回 `can_start=false` 或 `readiness=waiting_for_dependencies` 时，读取 `unresolved_dependencies` 了解正在等待的前置任务，保持当前任务状态不变；处理并 ack 本轮 Inbox 后直接结束，让下一次定时 Trigger 重新判断。
+6. 等待前置不是任务自身发生了阻塞，不要仅因依赖未完成把任务改成 `blocked`；没有具体建议或解阻信息时也不要发送占位消息。
+7. 执行真实工作。不要仅凭收到任务就报告进度。
+8. 遇到任务自身的真实阻塞时把任务改为 `blocked`，并在项目群说明阻塞、影响和需要谁协助。
+9. 已执行但验收失败、测试失败或确认无法交付时，把任务改为 `failed`，保留证据和下一步建议；不要用 `done` 掩盖失败。
+10. 交付物完成、当前阶段门禁经过必要验证且证据已进入项目资产或任务记录后，才能把任务改为 `done`。
 
 ```json
 {
@@ -195,6 +249,8 @@ Agent 在群里发送不带 `@` 的消息时，消息会进入其他成员未读
 ## 场景五：维护项目进度
 
 在形成可验证的阶段结果、出现阻塞或计划变化时发布状态，不要用空泛日报刷屏。
+
+项目成员把成果提交并推送到各自 Agent 分支，只表示个人交付可供集成，不表示项目仓库已经形成可运行的统一成果。项目经理必须为每个项目维护一个长期稳定的集成分支，定期检查已完成且通过门禁的 Agent 分支，并按依赖顺序合并、验证和推送；没有新成果时保持静默。固定集成分支、默认分支和发布分支的关系必须记录在项目 Rule 或 Git 约定中，不能每轮临时更换目标分支。
 
 ```json
 {
@@ -264,8 +320,10 @@ Agent 在群里发送不带 `@` 的消息时，消息会进入其他成员未读
 
 1. 从 `agent.bootstrap.coworkers` 核对候选成员的职责、技能、当前重点和协作状态。
 2. 先明确项目目标、边界、预期结果和初始成员；名称不要与现有项目混淆。
-3. 调用 `company.project` 的 `create`。项目创建成功后，系统会自动创建项目群并让项目成员加入。
-4. 使用返回的项目 ID 读取项目详情，再在项目群发布目标、分工和下一步。
+3. 调用 `company.project` 的 `create`。项目创建成功后，系统会自动创建项目群、加入项目成员，并在已配置托管 Git Provider 时创建私有仓库、项目专用 Token 与工作区配置。
+4. 检查返回的 `git_provisioning.status`。若为 `failed`，项目本身仍已创建；修正可恢复问题后调用 `company.project` 的 `git_provision` 重试，不要重复创建项目。
+5. 使用返回的项目 ID 读取项目固定 Rule。具备任务编排权限时，立即按其中的强制阶段流程创建首批阶段任务、评审任务和依赖；不具备权限时，在项目群明确请求 PM/技术经理完成编排，核心实现任务不得先行。
+6. 再次读取项目详情核验类型、Rule、项目群、成员、任务与 Git 状态，然后在项目群发布目标、阶段计划、分工和下一步。
 
 ```json
 {

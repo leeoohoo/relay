@@ -1,27 +1,31 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     convert::Infallible,
+    fs,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Component, Path as FsPath, PathBuf},
+    process::Command,
     sync::{Arc, Mutex},
     time::{Duration as StdDuration, Instant},
 };
 
 use axum::{
-    extract::{DefaultBodyLimit, Path, Query, State},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{
-        header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+        header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE},
         HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
     },
     response::{
         sse::{Event, KeepAlive, Sse},
-        IntoResponse,
+        IntoResponse, Response,
     },
-    routing::{any, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, mpsc};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
@@ -38,34 +42,49 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use ai_chat_application::{
-    ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
-    CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput,
+    ChangeHumanPasswordInput, ConfigureManagedLocalProjectGitForHumanInput,
+    CreateCompanyAgentInput, CreateCompanyInput, CreateCompanyProjectForHumanInput,
+    CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput, DeleteAgentMemoryForHumanInput,
     DeleteCompanyCodexRunnerProfileForHumanInput, DeleteCompanyProjectGitForHumanInput,
     DevLoginInput, GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
-    ListCompanyCodexRunnerProfilesForHumanInput, LoginHumanInput,
-    OpenHumanCompanyDirectConversationInput, PlatformApp, PublishCompanyGovernancePolicyInput,
-    RegisterHumanInput, RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
-    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithMentionsInput,
-    SetCompanyAgentCodexTriggerStatusForHumanInput, UpdateCompanyAgentPermissionsInput,
-    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
-    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
-    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
-    UpsertCompanyProjectAssetRefreshForHumanInput, UpsertCompanyProjectGitForHumanInput,
+    ListCompanyCodexPluginsForHumanInput, ListCompanyCodexRunnerProfilesForHumanInput,
+    ListCompanyMemoriesForHumanInput, LoginHumanInput, OpenHumanCompanyDirectConversationInput,
+    PlatformApp, PublishCompanyGovernancePolicyInput, RegisterHumanInput,
+    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
+    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
+    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
+    SetCompanyProjectPauseForHumanInput, UpdateAgentMemoryForHumanInput,
+    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
+    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
+    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
+    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
+    UpsertCompanyProjectGitForHumanInput,
 };
-use ai_chat_domain::agent_identity::HumanUser;
+use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
-    company_profession_by_key, CompanyGovernancePolicySettings, CompanyRealtimeEvent,
-    CompanyRealtimeSignal,
+    company_profession_by_key, company_project_type_catalog, infer_company_project_type,
+    CompanyGovernancePolicySettings, CompanyProjectTypeDefinition, CompanyRealtimeEvent,
+    CompanyRealtimeSignal, PROJECT_TYPE_SOURCE_DESCRIPTION, PROJECT_TYPE_SOURCE_FOLDER,
+    PROJECT_TYPE_SOURCE_HUMAN,
 };
-use ai_chat_infrastructure::config::{ApiConfig, McpConfig, RepositoryMode};
+use ai_chat_domain::social::MessageAttachmentView;
+use ai_chat_infrastructure::codex_control::{
+    agent_trigger_batch_size_from_env, CodexControlStore, CodexMcpServerInput,
+    CompanyCodexCliSettings,
+};
+use ai_chat_infrastructure::codex_trigger::CodexModelCatalogFile;
+use ai_chat_infrastructure::config::{ApiConfig, HarnessMode, McpConfig};
 use ai_chat_infrastructure::git_credentials::{
-    github_token_profile_name, validate_github_token, GitCredentialStore,
+    github_token_profile_name, managed_token_profile_name, validate_github_token,
+    GitCredentialStore,
 };
+use ai_chat_infrastructure::gitness::GitnessProjectGitProvisioner;
+use ai_chat_infrastructure::harness::HarnessProvisioner;
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
 use ai_chat_infrastructure::realtime::spawn_postgres_realtime_listener;
-use ai_chat_infrastructure::{build_ownership_proof_verifier, RepositoryAdapter};
-use ai_chat_shared::{hash_secret, AppError};
+use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
+use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
 #[derive(Clone)]
 struct AppState {
@@ -82,6 +101,11 @@ struct AppState {
     http_client: reqwest::Client,
     realtime_sender: broadcast::Sender<CompanyRealtimeSignal>,
     git_credential_store: GitCredentialStore,
+    message_attachments_root: PathBuf,
+    folder_reference_allowed_roots: Arc<Vec<PathBuf>>,
+    codex_model_catalog_path: PathBuf,
+    codex_control_store: CodexControlStore,
+    harness_provisioner: HarnessProvisioner<RepositoryAdapter>,
 }
 
 const ADMIN_SCOPE_READ: &str = "admin:read";
@@ -164,6 +188,8 @@ struct RuntimeConfigResponse {
     dev_endpoints_enabled: bool,
     admin_token_configured: bool,
     email_verification_required: bool,
+    harness_mode: &'static str,
+    project_types: Vec<CompanyProjectTypeDefinition>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +254,13 @@ struct SendHumanCompanyMessageRequest {
     mentioned_agent_ids: Vec<Uuid>,
     #[serde(default)]
     mention_all: bool,
+    #[serde(default)]
+    folder_references: Vec<HumanFolderReferenceRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HumanFolderReferenceRequest {
+    local_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,13 +323,14 @@ struct PublishCompanyGovernancePolicyRequest {
     daily_delegated_hire_limit: Option<i32>,
     daily_delegated_suspension_limit: Option<i32>,
     daily_delegated_termination_limit: Option<i32>,
+    skill_language: Option<String>,
     notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct UpsertCompanyProjectGitRequest {
     remote_url: String,
-    host_local_path: String,
+    host_local_path: Option<String>,
     default_branch: Option<String>,
     auth_profile: Option<String>,
     github_token: Option<String>,
@@ -304,6 +338,48 @@ struct UpsertCompanyProjectGitRequest {
     clear_github_token: bool,
     allow_agent_push: Option<bool>,
     branch_prefix: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCompanyProjectRequest {
+    name: String,
+    description: Option<String>,
+    owner_agent_id: Uuid,
+    #[serde(default)]
+    member_agent_ids: Vec<Uuid>,
+    project_type: Option<String>,
+    source_kind: String,
+    source_local_path: Option<String>,
+    git_remote_url: Option<String>,
+    default_branch: Option<String>,
+    auth_profile: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportCompanyProjectFolderRequest {
+    name: String,
+    description: Option<String>,
+    owner_agent_id: Uuid,
+    #[serde(default)]
+    member_agent_ids: Vec<Uuid>,
+    project_type: Option<String>,
+    #[serde(default)]
+    file_paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateCompanyWorkspaceRequest {
+    managed_workspace_root: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateCompanySkillLanguageRequest {
+    skill_language: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAgentTriggerPreferencesRequest {
+    batch_size: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,8 +414,19 @@ struct UpsertCompanyAgentCodexTriggerRequest {
     codex_profile: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    verbosity: Option<String>,
+    personality: Option<String>,
+    service_tier: Option<String>,
     sandbox_mode: Option<String>,
     approval_policy: Option<String>,
+    network_access: Option<bool>,
+    web_search: Option<String>,
+    feature_multi_agent: Option<bool>,
+    feature_remote_plugin: Option<bool>,
+    feature_hooks: Option<bool>,
+    feature_goals: Option<bool>,
+    feature_shell_tool: Option<bool>,
     max_run_seconds: Option<i32>,
     runner_profile_id: Option<Uuid>,
 }
@@ -351,10 +438,40 @@ struct UpsertCompanyCodexRunnerProfileRequest {
     codex_profile: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    verbosity: Option<String>,
+    personality: Option<String>,
+    service_tier: Option<String>,
     sandbox_mode: String,
     approval_policy: String,
+    network_access: Option<bool>,
+    web_search: Option<String>,
+    feature_multi_agent: Option<bool>,
+    feature_remote_plugin: Option<bool>,
+    feature_hooks: Option<bool>,
+    feature_goals: Option<bool>,
+    feature_shell_tool: Option<bool>,
     max_run_seconds: i32,
     is_default: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateCompanyCodexCliSettingsRequest {
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    reasoning_summary: String,
+    verbosity: Option<String>,
+    personality: Option<String>,
+    service_tier: Option<String>,
+    approval_policy: String,
+    sandbox_mode: String,
+    network_access: bool,
+    web_search: String,
+    feature_multi_agent: bool,
+    feature_remote_plugin: bool,
+    feature_hooks: bool,
+    feature_goals: bool,
+    feature_shell_tool: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -363,28 +480,69 @@ struct LocalCodexModelsQuery {
     bundled: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct LocalCodexReasoningEffort {
-    effort: String,
-    description: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct LocalCodexModelInfo {
-    display_name: String,
-    default_reasoning_effort: Option<String>,
-    reasoning_efforts: Vec<LocalCodexReasoningEffort>,
-}
-
 #[derive(Debug, Deserialize)]
 struct CodexRunsQuery {
     limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
+struct CodexPluginsQuery {
+    operation_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexPluginOperationRequest {
+    target_runner_id: String,
+    operation: String,
+    plugin_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCodexAuthProfileRequest {
+    name: String,
+    api_key: String,
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateCodexAuthProfileRequest {
+    name: String,
+    api_key: Option<String>,
+    base_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexMcpRefreshRequest {
+    target_selector: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ApprovalRequestsQuery {
     status: Option<String>,
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompanyMemoriesQuery {
+    owner_agent_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+    memory_tier: Option<String>,
+    status: Option<String>,
+    query: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAgentMemoryRequest {
+    memory_tier: Option<String>,
+    title: Option<String>,
+    summary: Option<String>,
+    when_to_use: Option<String>,
+    tags: Option<Vec<String>>,
+    importance: Option<i32>,
+    confidence: Option<i32>,
+    status: Option<String>,
+    pinned: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,12 +627,6 @@ async fn main() -> anyhow::Result<()> {
         {
             anyhow::bail!("API_ALLOWED_ORIGINS must use https origins in production");
         }
-        if matches!(
-            config.repository_mode,
-            ai_chat_infrastructure::config::RepositoryMode::Memory
-        ) {
-            anyhow::bail!("REPOSITORY_MODE=postgres is required in production");
-        }
     }
     drop(legacy_admin_token);
     if config.require_email_verification
@@ -485,17 +637,40 @@ async fn main() -> anyhow::Result<()> {
             "REQUIRE_EMAIL_VERIFICATION=true requires EMAIL_DELIVERY_WEBHOOK_URL outside development mode"
         );
     }
-    let repository = RepositoryAdapter::build(&config)?;
+    if config.harness_mode != HarnessMode::Disabled && config.harness_base_url.is_none() {
+        anyhow::bail!("HARNESS_BASE_URL is required when HARNESS_MODE is official or self_hosted");
+    }
+    if config.app_env.eq_ignore_ascii_case("production")
+        && config.harness_mode == HarnessMode::Official
+        && config
+            .harness_base_url
+            .as_deref()
+            .is_some_and(|url| !url.starts_with("https://"))
+    {
+        anyhow::bail!("HARNESS_BASE_URL must use https for official Harness in production");
+    }
+    let repository = build_repository(&config)?;
+    let harness_provisioner = HarnessProvisioner::from_config(repository.clone(), &config)?;
     let verifier = build_ownership_proof_verifier(&config);
     let mcp_config = McpConfig::from_env();
     let platform = PlatformApp::with_verifier(repository, verifier);
     let git_credential_store = GitCredentialStore::from_env()?;
+    let project_git_provisioner =
+        GitnessProjectGitProvisioner::from_env(git_credential_store.clone())?;
+    let message_attachments_root = std::env::var("MESSAGE_ATTACHMENTS_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".relay/attachments"));
+    tokio::fs::create_dir_all(&message_attachments_root).await?;
+    let folder_reference_allowed_roots = Arc::new(load_folder_reference_allowed_roots()?);
+    let codex_model_catalog_path = std::env::var("AGENT_TRIGGER_MODEL_CATALOG_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".relay-agent-trigger/codex-models.json"));
+    let codex_control_store = CodexControlStore::from_env()?;
     let (realtime_sender, _) = broadcast::channel(2_048);
     let _realtime_listener =
-        matches!(&config.repository_mode, RepositoryMode::Postgres).then(|| {
-            spawn_postgres_realtime_listener(config.database_url.clone(), realtime_sender.clone())
-        });
-    let mcp_gateway = McpGateway::new(platform.clone(), mcp_config.agent_key.clone());
+        spawn_postgres_realtime_listener(config.database_url.clone(), realtime_sender.clone());
+    let mcp_gateway = McpGateway::new(platform.clone(), mcp_config.agent_key.clone())
+        .with_project_git_provisioner(project_git_provisioner);
     let standard_mcp_config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)
@@ -537,6 +712,11 @@ async fn main() -> anyhow::Result<()> {
         http_client: reqwest::Client::new(),
         realtime_sender,
         git_credential_store,
+        message_attachments_root,
+        folder_reference_allowed_roots,
+        codex_model_catalog_path,
+        codex_control_store,
+        harness_provisioner,
     };
 
     let app = Router::new()
@@ -587,12 +767,50 @@ async fn main() -> anyhow::Result<()> {
             get(get_company_console),
         )
         .route(
+            "/api/v1/companies/{company_id}/workspace-settings",
+            post(update_company_workspace_settings),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/skill-language",
+            post(update_company_skill_language),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/agent-trigger-preferences",
+            get(get_agent_trigger_preferences).put(update_agent_trigger_preferences),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects",
+            post(create_company_project_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/import-folder",
+            post(import_company_project_folder_for_human)
+                .layer(DefaultBodyLimit::max(5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/memories",
+            get(list_company_memories),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/memories/{memory_id}",
+            axum::routing::put(update_agent_memory_for_human).delete(delete_agent_memory_for_human),
+        )
+        .route(
             "/api/v1/companies/{company_id}/conversations/direct",
             post(open_human_company_direct_conversation),
         )
         .route(
             "/api/v1/companies/{company_id}/conversations/{conversation_id}/messages",
             post(send_human_company_message),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/conversations/{conversation_id}/messages/with-attachments",
+            post(send_human_company_message_with_attachments)
+                .layer(DefaultBodyLimit::max(101 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}",
+            get(download_message_attachment),
         )
         .route(
             "/api/v1/companies/{company_id}/agents",
@@ -617,6 +835,51 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/codex-runner-profiles",
             get(list_company_codex_runner_profiles).post(create_company_codex_runner_profile),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-environments",
+            get(get_company_codex_environments),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-cli-settings",
+            get(get_company_codex_cli_settings).put(update_company_codex_cli_settings),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-cli/install",
+            post(request_codex_cli_install),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-cli/update",
+            post(request_codex_cli_update),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-auth-profiles",
+            post(create_company_codex_auth_profile),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-auth-profiles/{profile_id}",
+            axum::routing::put(update_company_codex_auth_profile)
+                .delete(delete_company_codex_auth_profile),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-mcp-servers",
+            post(add_company_codex_mcp_server),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-mcp-servers/refresh",
+            post(refresh_company_codex_mcp_servers),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-mcp-servers/{target_selector}/{server_name}",
+            axum::routing::delete(remove_company_codex_mcp_server),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-plugins",
+            get(list_company_codex_plugins),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-plugins/operations",
+            post(request_codex_plugin_operation),
         )
         .route(
             "/api/v1/companies/{company_id}/codex-runner-profiles/{profile_id}",
@@ -660,6 +923,14 @@ async fn main() -> anyhow::Result<()> {
             get(get_company_project_git)
                 .put(upsert_company_project_git)
                 .delete(delete_company_project_git),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/pause",
+            post(pause_company_project),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/resume",
+            post(resume_company_project),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/rule",
@@ -717,20 +988,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/agents/{agent_id}/conversations",
             get(list_agent_conversations),
         )
-        .route("/api/v1/agent-context", get(removed_legacy_feature))
         .route(
             "/api/v1/conversations/{conversation_id}/messages",
             get(get_conversation_messages),
         )
-        .route(
-            "/api/v1/friend-profiles/{owner_agent_id}/{friend_agent_id}",
-            get(removed_legacy_feature),
-        )
-        .route(
-            "/api/v1/humans/{human_user_id}/console",
-            get(removed_legacy_feature),
-        )
-        .route("/api/v1/admin/console", get(removed_legacy_feature))
         .route(
             "/api/v1/humans/{human_user_id}/agents/{agent_id}/status",
             post(update_owned_agent_status),
@@ -749,7 +1010,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/v1/dev/bootstrap", post(dev_bootstrap_agent))
         .route_service(STANDARD_MCP_PATH, standard_mcp)
-        .route("/mcp/{*rest}", any(removed_legacy_feature))
         .fallback_service(
             ServeDir::new(resolve_web_dist_dir())
                 .not_found_service(ServeFile::new(resolve_web_dist_dir().join("index.html"))),
@@ -812,6 +1072,7 @@ fn build_cors_layer(origins: &[String]) -> anyhow::Result<CorsLayer> {
         .allow_headers([
             ACCEPT,
             AUTHORIZATION,
+            CACHE_CONTROL,
             CONTENT_TYPE,
             HeaderName::from_static("x-agent-key"),
             HeaderName::from_static("x-agent-run-token"),
@@ -826,6 +1087,8 @@ async fn runtime_config(State(state): State<AppState>) -> Json<RuntimeConfigResp
         dev_endpoints_enabled: state.enable_dev_endpoints,
         admin_token_configured: !state.admin_credentials.is_empty(),
         email_verification_required: state.require_email_verification,
+        harness_mode: state.harness_provisioner.mode_key(),
+        project_types: company_project_type_catalog(),
     })
 }
 
@@ -835,195 +1098,41 @@ async fn get_local_codex_models(
     Query(query): Query<LocalCodexModelsQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     authenticate_human_request(&state, &headers)?;
-    let executable = std::env::var("AGENT_TRIGGER_CODEX_BIN").unwrap_or_else(|_| "codex".into());
-    let prefix_args = std::env::var("AGENT_TRIGGER_CODEX_PREFIX_ARGS_JSON")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            serde_json::from_str::<Vec<String>>(&value).map_err(|error| {
-                AppError::Validation(format!(
-                    "invalid AGENT_TRIGGER_CODEX_PREFIX_ARGS_JSON: {error}"
-                ))
-            })
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let mut command = tokio::process::Command::new(&executable);
-    command.args(prefix_args);
-    if let Some(profile) = query
+    let profile = query
         .codex_profile
         .as_deref()
         .map(str::trim)
-        .filter(|profile| !profile.is_empty() && *profile != "default")
-    {
-        if profile.len() > 64 || profile.chars().any(char::is_control) {
-            return Err(AppError::Validation("invalid local Codex profile".into()).into());
-        }
-        command.arg("--profile").arg(profile);
+        .filter(|profile| !profile.is_empty())
+        .unwrap_or("default");
+    if profile.len() > 64 || profile.chars().any(char::is_control) {
+        return Err(AppError::Validation("invalid local Codex profile".into()).into());
     }
-    command.arg("debug").arg("models");
-    if query.bundled.unwrap_or(false) {
-        command.arg("--bundled");
-    }
-    command.kill_on_drop(true);
-    let output = tokio::time::timeout(StdDuration::from_secs(15), command.output())
+    let bundled = query.bundled.unwrap_or(false);
+    let bytes = tokio::fs::read(&state.codex_model_catalog_path)
         .await
-        .map_err(|_| AppError::Validation("local Codex model discovery timed out".into()))?
         .map_err(|error| {
-            AppError::Validation(format!(
-                "failed to start local Codex model discovery: {error}"
+            AppError::Internal(format!(
+                "cannot read Trigger model catalog {}: {error}",
+                state.codex_model_catalog_path.display()
             ))
         })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = if stderr.contains("ENOENT") {
-            "Codex executable or platform binary was not found"
-        } else if stderr.to_lowercase().contains("login")
-            || stderr.to_lowercase().contains("authentication")
-        {
-            "local Codex is not authenticated"
-        } else {
-            "codex debug models exited unsuccessfully"
-        };
-        return Err(AppError::Validation(format!(
-            "local Codex model discovery failed: {reason}; run `codex --version` on the host to diagnose it"
-        ))
-        .into());
-    }
-    let catalog: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-        AppError::Validation(format!(
-            "local Codex returned an invalid model catalog: {error}"
-        ))
+    let catalog: CodexModelCatalogFile = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::Internal(format!("Trigger model catalog is invalid: {error}"))
     })?;
-    let mut models = BTreeMap::new();
-    collect_local_codex_models(&catalog, &mut models);
-    if models.is_empty() {
-        return Err(AppError::Validation(
-            "local Codex model catalog did not contain any selectable models".into(),
-        )
-        .into());
-    }
+    let snapshot = catalog
+        .catalogs
+        .into_iter()
+        .find(|snapshot| snapshot.codex_profile == profile && snapshot.bundled == bundled)
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "Trigger has not discovered models for Codex profile `{profile}` (bundled={bundled})"
+            ))
+        })?;
     Ok(Json(serde_json::json!({
-        "models": models
-            .into_iter()
-            .map(|(id, info)| serde_json::json!({
-                "id": id,
-                "display_name": info.display_name,
-                "default_reasoning_effort": info.default_reasoning_effort,
-                "reasoning_efforts": info.reasoning_efforts
-            }))
-            .collect::<Vec<_>>(),
-        "source": if query.bundled.unwrap_or(false) { "local_codex_bundled" } else { "local_codex" }
+        "models": snapshot.models,
+        "source": snapshot.source,
+        "discovered_at": snapshot.discovered_at,
     })))
-}
-
-fn collect_local_codex_models(
-    value: &serde_json::Value,
-    models: &mut BTreeMap<String, LocalCodexModelInfo>,
-) {
-    match value {
-        serde_json::Value::Array(items) => {
-            for item in items {
-                collect_local_codex_models(item, models);
-            }
-        }
-        serde_json::Value::Object(object) => {
-            let is_selectable = object
-                .get("visibility")
-                .and_then(serde_json::Value::as_str)
-                .map(|visibility| visibility.eq_ignore_ascii_case("list"))
-                .unwrap_or(true);
-            let id = object
-                .get("slug")
-                .or_else(|| object.get("model"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty() && id.len() <= 128);
-            if let Some(id) = id.filter(|_| is_selectable) {
-                let display_name = object
-                    .get("display_name")
-                    .or_else(|| object.get("name"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(id);
-                let default_reasoning_effort = object
-                    .get("default_reasoning_level")
-                    .or_else(|| object.get("defaultReasoningEffort"))
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|effort| is_codex_reasoning_effort(effort))
-                    .map(str::to_string);
-                let reasoning_values = object
-                    .get("supported_reasoning_levels")
-                    .or_else(|| object.get("supportedReasoningEfforts"))
-                    .and_then(serde_json::Value::as_array);
-                let mut reasoning_efforts = Vec::new();
-                if let Some(reasoning_values) = reasoning_values {
-                    for reasoning in reasoning_values {
-                        let effort = reasoning
-                            .get("effort")
-                            .or_else(|| reasoning.get("reasoningEffort"))
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|effort| is_codex_reasoning_effort(effort));
-                        let Some(effort) = effort else { continue };
-                        if reasoning_efforts
-                            .iter()
-                            .any(|item: &LocalCodexReasoningEffort| item.effort == effort)
-                        {
-                            continue;
-                        }
-                        let description = reasoning
-                            .get("description")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::trim)
-                            .filter(|description| !description.is_empty())
-                            .unwrap_or(effort);
-                        reasoning_efforts.push(LocalCodexReasoningEffort {
-                            effort: effort.to_string(),
-                            description: description.to_string(),
-                        });
-                    }
-                }
-                models.insert(
-                    id.to_string(),
-                    LocalCodexModelInfo {
-                        display_name: display_name.to_string(),
-                        default_reasoning_effort,
-                        reasoning_efforts,
-                    },
-                );
-            }
-            for nested in object.values() {
-                if nested.is_array() || nested.is_object() {
-                    collect_local_codex_models(nested, models);
-                }
-            }
-        }
-        serde_json::Value::String(id) if !id.trim().is_empty() && id.len() <= 128 => {
-            if (id.contains("gpt-") || id.contains("codex"))
-                && id.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-                })
-            {
-                models.insert(
-                    id.clone(),
-                    LocalCodexModelInfo {
-                        display_name: id.clone(),
-                        default_reasoning_effort: None,
-                        reasoning_efforts: Vec::new(),
-                    },
-                );
-            }
-        }
-        _ => {}
-    }
-}
-
-fn is_codex_reasoning_effort(value: &str) -> bool {
-    matches!(
-        value,
-        "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-    )
 }
 
 async fn register_human(
@@ -1034,6 +1143,7 @@ async fn register_human(
         .login_limiter
         .check(format!("register:{}", input.email.trim().to_lowercase()))?;
     let auth = state.platform.register_human(input)?;
+    let harness = ensure_harness_account(&state, &auth.user).await;
     let verification = state
         .platform
         .issue_human_email_verification(auth.user.id)?;
@@ -1050,7 +1160,8 @@ async fn register_human(
         "session_token": auth.session_token,
         "expires_at": auth.expires_at,
         "email_verified": false,
-        "email_verification_sent": email_verification_sent
+        "email_verification_sent": email_verification_sent,
+        "harness": harness
     })))
 }
 
@@ -1062,12 +1173,14 @@ async fn login_human(
         .login_limiter
         .check(format!("login:{}", input.email.trim().to_lowercase()))?;
     let auth = state.platform.login_human(input)?;
+    let harness = ensure_harness_account(&state, &auth.user).await;
     let email_verified = state.platform.is_human_email_verified(auth.user.id)?;
     Ok(Json(serde_json::json!({
         "user": auth.user,
         "session_token": auth.session_token,
         "expires_at": auth.expires_at,
-        "email_verified": email_verified
+        "email_verified": email_verified,
+        "harness": harness
     })))
 }
 
@@ -1077,10 +1190,29 @@ async fn get_authenticated_human(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = authenticate_human_session_request(&state, &headers)?;
     let email_verified = state.platform.is_human_email_verified(user.id)?;
+    let harness = state.harness_provisioner.account(user.id)?;
     Ok(Json(serde_json::json!({
         "user": user,
-        "email_verified": email_verified
+        "email_verified": email_verified,
+        "harness": harness
     })))
+}
+
+async fn ensure_harness_account(state: &AppState, user: &HumanUser) -> Option<HumanHarnessAccount> {
+    if !state.harness_provisioner.is_enabled() {
+        return None;
+    }
+    match state.harness_provisioner.ensure_account(user).await {
+        Ok(account) => account,
+        Err(error) => {
+            tracing::warn!(
+                human_user_id = %user.id,
+                error = %error,
+                "Harness provisioning failed; Human authentication remains available and login will retry"
+            );
+            state.harness_provisioner.account(user.id).ok().flatten()
+        }
+    }
 }
 
 async fn logout_human(
@@ -1341,6 +1473,71 @@ async fn get_company_console(
     Ok(Json(serde_json::json!({ "company_console": company })))
 }
 
+async fn list_company_memories(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<CompanyMemoriesQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let memories =
+        state
+            .platform
+            .list_company_memories_for_human(ListCompanyMemoriesForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                owner_agent_id: query.owner_agent_id,
+                project_id: query.project_id,
+                memory_tier: query.memory_tier,
+                status: query.status,
+                query: query.query,
+                limit: query.limit.unwrap_or(200),
+            })?;
+    Ok(Json(serde_json::json!({ "memories": memories })))
+}
+
+async fn update_agent_memory_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, memory_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<UpdateAgentMemoryRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let memory = state
+        .platform
+        .update_agent_memory_for_human(UpdateAgentMemoryForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            memory_id,
+            memory_tier: input.memory_tier,
+            title: input.title,
+            summary: input.summary,
+            when_to_use: input.when_to_use,
+            tags: input.tags,
+            importance: input.importance,
+            confidence: input.confidence,
+            status: input.status,
+            pinned: input.pinned,
+        })?;
+    Ok(Json(serde_json::json!({ "memory": memory })))
+}
+
+async fn delete_agent_memory_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, memory_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .delete_agent_memory_for_human(DeleteAgentMemoryForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            memory_id,
+        })?;
+    Ok(Json(serde_json::json!({ "deleted": true })))
+}
+
 async fn open_human_company_direct_conversation(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1365,17 +1562,725 @@ async fn send_human_company_message(
     Json(input): Json<SendHumanCompanyMessageRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let human = authenticate_human_request(&state, &headers)?;
-    let message = state.platform.send_human_company_message_with_mentions(
-        SendHumanCompanyMessageWithMentionsInput {
+    state
+        .platform
+        .ensure_human_can_send_company_messages(human.id, company_id)?;
+    let attachments = build_local_folder_attachments(
+        &input.folder_references,
+        &state.folder_reference_allowed_roots,
+    )?;
+    let message = state.platform.send_human_company_message_with_attachments(
+        SendHumanCompanyMessageWithAttachmentsInput {
             human_user_id: human.id,
             company_id,
             conversation_id,
             content: input.content,
             mentioned_agent_ids: input.mentioned_agent_ids,
             mention_all: input.mention_all,
+            attachments,
         },
     )?;
     Ok(Json(serde_json::json!({ "message": message })))
+}
+
+struct PendingUploadedFile {
+    file_name: String,
+    content_type: String,
+    bytes: Bytes,
+}
+
+async fn send_human_company_message_with_attachments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, conversation_id)): Path<(Uuid, Uuid)>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_send_company_messages(human.id, company_id)?;
+    let mut content = String::new();
+    let mut mentioned_agent_ids = Vec::new();
+    let mut mention_all = false;
+    let mut relative_paths = Vec::<String>::new();
+    let mut folder_references = Vec::<HumanFolderReferenceRequest>::new();
+    let mut pending_files = Vec::<PendingUploadedFile>::new();
+    let mut total_bytes = 0usize;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| AppError::Validation(format!("invalid attachment form: {error}")))?
+    {
+        let field_name = field.name().unwrap_or_default().to_string();
+        match field_name.as_str() {
+            "content" => {
+                content = field.text().await.map_err(|error| {
+                    AppError::Validation(format!("invalid message content: {error}"))
+                })?;
+            }
+            "mentioned_agent_ids" => {
+                let value = field.text().await.map_err(|error| {
+                    AppError::Validation(format!("invalid mentioned Agent list: {error}"))
+                })?;
+                mentioned_agent_ids = serde_json::from_str(&value).map_err(|_| {
+                    AppError::Validation("mentioned_agent_ids must be a UUID array".into())
+                })?;
+            }
+            "mention_all" => {
+                mention_all = field
+                    .text()
+                    .await
+                    .map_err(|error| {
+                        AppError::Validation(format!("invalid mention_all value: {error}"))
+                    })?
+                    .parse::<bool>()
+                    .map_err(|_| AppError::Validation("mention_all must be boolean".into()))?;
+            }
+            "relative_paths" => {
+                let value = field.text().await.map_err(|error| {
+                    AppError::Validation(format!("invalid relative path list: {error}"))
+                })?;
+                relative_paths = serde_json::from_str(&value).map_err(|_| {
+                    AppError::Validation("relative_paths must be a string array".into())
+                })?;
+            }
+            "folder_references" => {
+                let value = field.text().await.map_err(|error| {
+                    AppError::Validation(format!("invalid folder reference list: {error}"))
+                })?;
+                folder_references = serde_json::from_str(&value).map_err(|_| {
+                    AppError::Validation("folder_references must be an array".into())
+                })?;
+            }
+            "file" => {
+                if pending_files.len() >= 20 {
+                    return Err(AppError::Validation(
+                        "a message can contain at most 20 files".into(),
+                    )
+                    .into());
+                }
+                let file_name =
+                    sanitize_attachment_file_name(field.file_name().unwrap_or("attachment.bin"))?;
+                let content_type = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                let bytes = field.bytes().await.map_err(|error| {
+                    AppError::Validation(format!("cannot read uploaded file: {error}"))
+                })?;
+                if bytes.len() > 20 * 1024 * 1024 {
+                    return Err(AppError::Validation(format!(
+                        "file {file_name} exceeds the 20 MiB limit"
+                    ))
+                    .into());
+                }
+                total_bytes = total_bytes.saturating_add(bytes.len());
+                if total_bytes > 100 * 1024 * 1024 {
+                    return Err(AppError::Validation(
+                        "message attachments exceed the 100 MiB total limit".into(),
+                    )
+                    .into());
+                }
+                pending_files.push(PendingUploadedFile {
+                    file_name,
+                    content_type,
+                    bytes,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if !relative_paths.is_empty() && relative_paths.len() != pending_files.len() {
+        return Err(AppError::Validation(
+            "relative_paths must match the uploaded file count".into(),
+        )
+        .into());
+    }
+    let mut attachments =
+        build_local_folder_attachments(&folder_references, &state.folder_reference_allowed_roots)?;
+    if attachments.len() + pending_files.len() > 20 {
+        return Err(AppError::Validation(
+            "a message can contain at most 20 attachments and folder references".into(),
+        )
+        .into());
+    }
+
+    let mut stored_paths = Vec::<PathBuf>::new();
+    for (index, pending) in pending_files.into_iter().enumerate() {
+        let attachment_id = Uuid::new_v4();
+        let storage_key = format!("{}/{}", &attachment_id.to_string()[..2], attachment_id);
+        let storage_path = state.message_attachments_root.join(&storage_key);
+        if let Some(parent) = storage_path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                AppError::Validation(format!("cannot create attachment directory: {error}"))
+            })?;
+        }
+        tokio::fs::write(&storage_path, &pending.bytes)
+            .await
+            .map_err(|error| AppError::Validation(format!("cannot store attachment: {error}")))?;
+        stored_paths.push(storage_path);
+        let relative_path = relative_paths
+            .get(index)
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(validate_attachment_relative_path)
+            .transpose()?;
+        attachments.push(MessageAttachmentView {
+            id: attachment_id,
+            kind: if pending.content_type.starts_with("image/") {
+                "image".into()
+            } else {
+                "file".into()
+            },
+            file_name: pending.file_name,
+            relative_path,
+            content_type: pending.content_type,
+            byte_size: i64::try_from(pending.bytes.len()).unwrap_or(i64::MAX),
+            local_path: None,
+            directory_entries: Vec::new(),
+            purpose: None,
+            storage_key,
+        });
+    }
+
+    let send_result = state.platform.send_human_company_message_with_attachments(
+        SendHumanCompanyMessageWithAttachmentsInput {
+            human_user_id: human.id,
+            company_id,
+            conversation_id,
+            content,
+            mentioned_agent_ids,
+            mention_all,
+            attachments,
+        },
+    );
+    let message = match send_result {
+        Ok(message) => message,
+        Err(error) => {
+            for path in stored_paths {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            return Err(error.into());
+        }
+    };
+    Ok(Json(serde_json::json!({ "message": message })))
+}
+
+async fn download_message_attachment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((conversation_id, message_id, attachment_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    let messages = if bearer_token(&headers).is_ok() {
+        let human = authenticate_human_request(&state, &headers)?;
+        state
+            .platform
+            .get_owned_conversation_messages(human.id, conversation_id)?
+    } else {
+        let agent_key = agent_key_from_headers(&headers)
+            .ok_or_else(|| AppError::Unauthorized("missing authentication token".into()))?;
+        let agent = state.platform.authenticate_agent_key(&agent_key)?;
+        state
+            .platform
+            .get_agent_conversation_messages(agent.id, conversation_id)?
+    };
+    let attachment = messages
+        .into_iter()
+        .find(|message| message.id == message_id)
+        .and_then(|message| {
+            message
+                .attachments
+                .into_iter()
+                .find(|attachment| attachment.id == attachment_id)
+        })
+        .filter(|attachment| matches!(attachment.kind.as_str(), "file" | "image"))
+        .ok_or_else(|| AppError::NotFound("message attachment not found".into()))?;
+    if attachment.storage_key.is_empty()
+        || attachment.storage_key.contains("..")
+        || PathBuf::from(&attachment.storage_key).is_absolute()
+    {
+        return Err(AppError::NotFound("message attachment file is unavailable".into()).into());
+    }
+    let bytes = tokio::fs::read(state.message_attachments_root.join(&attachment.storage_key))
+        .await
+        .map_err(|_| AppError::NotFound("message attachment file is unavailable".into()))?;
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(&attachment.content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    response.headers_mut().insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_str(if attachment.kind == "image" {
+            "inline"
+        } else {
+            "attachment"
+        })
+        .expect("static content disposition is valid"),
+    );
+    Ok(response)
+}
+
+fn sanitize_attachment_file_name(value: &str) -> Result<String, ApiError> {
+    let file_name = std::path::Path::new(value)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Validation("attachment file name is invalid".into()))?;
+    if file_name.chars().any(char::is_control) || file_name.chars().count() > 255 {
+        return Err(AppError::Validation("attachment file name is invalid".into()).into());
+    }
+    Ok(file_name.to_string())
+}
+
+fn validate_attachment_relative_path(value: &str) -> Result<String, ApiError> {
+    let normalized = value.replace('\\', "/");
+    if normalized.chars().any(char::is_control)
+        || normalized.len() > 2_000
+        || normalized.starts_with('/')
+        || normalized
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(AppError::Validation("attachment relative path is invalid".into()).into());
+    }
+    Ok(normalized)
+}
+
+fn build_local_folder_attachments(
+    requests: &[HumanFolderReferenceRequest],
+    allowed_roots: &[PathBuf],
+) -> Result<Vec<MessageAttachmentView>, ApiError> {
+    requests
+        .iter()
+        .map(|request| {
+            let requested_path = PathBuf::from(request.local_path.trim());
+            if !requested_path.is_absolute() {
+                return Err(AppError::Validation(
+                    "folder reference must use a host absolute path".into(),
+                )
+                .into());
+            }
+            let local_path = std::fs::canonicalize(&requested_path).map_err(|_| {
+                AppError::Validation(format!(
+                    "folder does not exist on the server host: {}",
+                    requested_path.display()
+                ))
+            })?;
+            if !local_path.is_dir() {
+                return Err(AppError::Validation(format!(
+                    "folder reference is not a directory: {}",
+                    local_path.display()
+                ))
+                .into());
+            }
+            if allowed_roots.is_empty() {
+                return Err(AppError::Validation(
+                    "local folder references are disabled; configure HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS"
+                        .into(),
+                )
+                .into());
+            }
+            if !allowed_roots.iter().any(|root| local_path.starts_with(root)) {
+                return Err(AppError::Unauthorized(
+                    "folder reference is outside HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS".into(),
+                )
+                .into());
+            }
+            let directory_entries = collect_directory_structure(&local_path)?;
+            let file_name = local_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("project")
+                .to_string();
+            Ok(MessageAttachmentView {
+                id: Uuid::new_v4(),
+                kind: "local_folder".into(),
+                file_name,
+                relative_path: None,
+                content_type: "application/x-relay-local-folder".into(),
+                byte_size: 0,
+                local_path: Some(local_path.to_string_lossy().to_string()),
+                directory_entries,
+                purpose: Some("create_project_and_push_to_git".into()),
+                storage_key: String::new(),
+            })
+        })
+        .collect()
+}
+
+fn collect_directory_structure(root: &std::path::Path) -> Result<Vec<String>, ApiError> {
+    const MAX_ENTRIES: usize = 5_000;
+    const MAX_DEPTH: usize = 16;
+    const MAX_PATH_BYTES: usize = 512_000;
+    const EXCLUDED_DIRECTORY_NAMES: &[&str] = &[
+        ".git",
+        ".relay",
+        ".relay-agent-trigger",
+        "node_modules",
+        "target",
+    ];
+    fn visit(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        depth: usize,
+        entries: &mut Vec<String>,
+        path_bytes: &mut usize,
+    ) -> Result<(), ApiError> {
+        if depth > MAX_DEPTH {
+            return Ok(());
+        }
+        let mut children = std::fs::read_dir(directory)
+            .map_err(|error| {
+                AppError::Validation(format!(
+                    "cannot read folder {}: {error}",
+                    directory.display()
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                AppError::Validation(format!(
+                    "cannot enumerate folder {}: {error}",
+                    directory.display()
+                ))
+            })?;
+        children.sort_by_key(|entry| entry.file_name());
+        for child in children {
+            if entries.len() >= MAX_ENTRIES {
+                return Err(AppError::Validation(format!(
+                    "folder contains more than {MAX_ENTRIES} entries"
+                ))
+                .into());
+            }
+            let file_type = child.file_type().map_err(|error| {
+                AppError::Validation(format!("cannot inspect folder entry: {error}"))
+            })?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let file_name = child.file_name();
+            if file_type.is_dir()
+                && file_name
+                    .to_str()
+                    .is_some_and(|name| EXCLUDED_DIRECTORY_NAMES.contains(&name))
+            {
+                continue;
+            }
+            let path = child.path();
+            let relative = path.strip_prefix(root).map_err(|_| {
+                AppError::Validation("folder entry escaped the selected directory".into())
+            })?;
+            let mut display = relative.to_string_lossy().replace('\\', "/");
+            if file_type.is_dir() {
+                display.push('/');
+            }
+            *path_bytes = path_bytes.saturating_add(display.len());
+            if *path_bytes > MAX_PATH_BYTES {
+                return Err(AppError::Validation(format!(
+                    "folder structure exceeds the {MAX_PATH_BYTES} byte metadata limit"
+                ))
+                .into());
+            }
+            entries.push(display);
+            if file_type.is_dir() {
+                visit(root, &path, depth + 1, entries, path_bytes)?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut entries = Vec::new();
+    let mut path_bytes = 0usize;
+    visit(root, root, 0, &mut entries, &mut path_bytes)?;
+    Ok(entries)
+}
+
+fn validate_company_workspace_root(raw: String) -> AppResult<String> {
+    let value = raw.trim();
+    let path = FsPath::new(value);
+    if value.is_empty()
+        || value != raw
+        || value.chars().count() > 4_096
+        || value.chars().any(char::is_control)
+        || !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        || path.parent().is_none()
+    {
+        return Err(AppError::Validation(
+            "managed_workspace_root must be an absolute normalized non-root path".into(),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn resolve_company_workspace_root(
+    configured: Option<&str>,
+    company_id: Uuid,
+) -> AppResult<PathBuf> {
+    if let Some(configured) = configured.filter(|value| !value.trim().is_empty()) {
+        return validate_company_workspace_root(configured.to_string()).map(PathBuf::from);
+    }
+    let base = std::env::var("RELAY_DEFAULT_WORKSPACE_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(|home| PathBuf::from(home).join(".relay"))
+        })
+        .unwrap_or_else(|| PathBuf::from("/tmp/.relay"));
+    validate_company_workspace_root(
+        base.join("companies")
+            .join(company_id.to_string())
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .map(PathBuf::from)
+}
+
+fn managed_project_directory_name(name: &str, project_id: Uuid) -> String {
+    let slug = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let slug = if slug.is_empty() { "project" } else { &slug };
+    format!(
+        "{}-{}",
+        slug.chars().take(48).collect::<String>(),
+        &project_id.to_string()[..8]
+    )
+}
+
+fn validate_project_source_folder(raw: &str, allowed_roots: &[PathBuf]) -> AppResult<PathBuf> {
+    let requested = PathBuf::from(raw.trim());
+    if !requested.is_absolute() {
+        return Err(AppError::Validation(
+            "selected project folder must resolve to a host absolute path".into(),
+        ));
+    }
+    let source = fs::canonicalize(&requested).map_err(|error| {
+        AppError::Validation(format!(
+            "selected project folder is not accessible on this Relay host: {error}"
+        ))
+    })?;
+    if !source.is_dir() {
+        return Err(AppError::Validation(
+            "selected project source is not a directory".into(),
+        ));
+    }
+    let effective_roots = if allowed_roots.is_empty() {
+        std::env::var("HOME")
+            .ok()
+            .and_then(|home| fs::canonicalize(home).ok())
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        allowed_roots.to_vec()
+    };
+    if effective_roots.is_empty()
+        || !effective_roots
+            .iter()
+            .any(|root| source.starts_with(root) && &source != root)
+    {
+        return Err(AppError::Unauthorized(
+            "selected folder is outside the local directories allowed for Relay imports".into(),
+        ));
+    }
+    Ok(source)
+}
+
+fn import_project_folder(source: &FsPath, destination: &FsPath) -> AppResult<()> {
+    const MAX_FILES: usize = 100_000;
+    const MAX_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+    const EXCLUDED: &[&str] = &[
+        ".git",
+        ".relay",
+        ".relay-agent-trigger",
+        "node_modules",
+        "target",
+    ];
+    if destination.exists() {
+        return Err(AppError::Conflict(
+            "managed project destination already exists".into(),
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AppError::Validation("managed project destination has no parent".into()))?;
+    fs::create_dir_all(parent).map_err(|error| {
+        AppError::Internal(format!("failed to create managed workspace: {error}"))
+    })?;
+    let staging = parent.join(format!(".relay-import-{}", Uuid::new_v4()));
+    fs::create_dir(&staging).map_err(|error| {
+        AppError::Internal(format!(
+            "failed to create project import staging directory: {error}"
+        ))
+    })?;
+
+    fn copy_tree(
+        source_root: &FsPath,
+        source: &FsPath,
+        destination_root: &FsPath,
+        excluded: &[&str],
+        files: &mut usize,
+        bytes: &mut u64,
+    ) -> AppResult<()> {
+        for entry in fs::read_dir(source).map_err(|error| {
+            AppError::Validation(format!("cannot read imported folder: {error}"))
+        })? {
+            let entry = entry.map_err(|error| {
+                AppError::Validation(format!("cannot inspect imported folder entry: {error}"))
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                AppError::Validation(format!("cannot inspect imported file type: {error}"))
+            })?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let file_name = entry.file_name();
+            if file_type.is_dir()
+                && file_name
+                    .to_str()
+                    .is_some_and(|name| excluded.contains(&name))
+            {
+                continue;
+            }
+            let source_path = entry.path();
+            let relative = source_path.strip_prefix(source_root).map_err(|_| {
+                AppError::Validation("imported folder entry escaped its source root".into())
+            })?;
+            let destination_path = destination_root.join(relative);
+            if file_type.is_dir() {
+                fs::create_dir_all(&destination_path).map_err(|error| {
+                    AppError::Internal(format!("failed to create imported directory: {error}"))
+                })?;
+                copy_tree(
+                    source_root,
+                    &source_path,
+                    destination_root,
+                    excluded,
+                    files,
+                    bytes,
+                )?;
+            } else if file_type.is_file() {
+                *files += 1;
+                *bytes = bytes.saturating_add(
+                    entry
+                        .metadata()
+                        .map_err(|error| {
+                            AppError::Validation(format!("cannot inspect imported file: {error}"))
+                        })?
+                        .len(),
+                );
+                if *files > MAX_FILES || *bytes > MAX_BYTES {
+                    return Err(AppError::Validation(
+                        "selected folder exceeds the Relay import limit (100000 files / 5 GiB)"
+                            .into(),
+                    ));
+                }
+                fs::copy(&source_path, &destination_path).map_err(|error| {
+                    AppError::Internal(format!("failed to copy imported file: {error}"))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    let result = (|| {
+        let mut files = 0usize;
+        let mut bytes = 0u64;
+        copy_tree(source, source, &staging, EXCLUDED, &mut files, &mut bytes)?;
+        initialize_managed_project_git(&staging)?;
+        fs::rename(&staging, destination).map_err(|error| {
+            AppError::Internal(format!("failed to finalize imported project: {error}"))
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+fn initialize_managed_project_git(path: &FsPath) -> AppResult<()> {
+    fn run(path: &FsPath, args: &[&str]) -> AppResult<()> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|error| AppError::Internal(format!("failed to start git: {error}")))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(AppError::Validation(format!(
+            "failed to initialize imported project Git repository: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+    run(path, &["init", "-b", "main"])?;
+    run(path, &["config", "user.name", "Relay Import"])?;
+    run(
+        path,
+        &["config", "user.email", "relay-import@local.invalid"],
+    )?;
+    run(path, &["add", "-A"])?;
+    run(
+        path,
+        &["commit", "--allow-empty", "-m", "Import project into Relay"],
+    )
+}
+
+fn load_folder_reference_allowed_roots() -> anyhow::Result<Vec<PathBuf>> {
+    let configured = std::env::var("HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS").ok())
+        .unwrap_or_default();
+    configured
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| {
+            if !path.is_absolute() {
+                anyhow::bail!("HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS entries must be absolute");
+            }
+            let canonical = std::fs::canonicalize(&path).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot access HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS entry {}: {error}",
+                    path.display()
+                )
+            })?;
+            if !canonical.is_dir() {
+                anyhow::bail!(
+                    "HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS entry is not a directory: {}",
+                    canonical.display()
+                );
+            }
+            Ok(canonical)
+        })
+        .collect()
 }
 
 async fn stream_company_events_for_human(
@@ -1384,6 +2289,7 @@ async fn stream_company_events_for_human(
     Path(company_id): Path<Uuid>,
     Query(query): Query<RealtimeEventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let session_token = bearer_token(&headers)?.to_string();
     let human = authenticate_human_request(&state, &headers)?;
     state
         .platform
@@ -1396,6 +2302,7 @@ async fn stream_company_events_for_human(
         company_id,
         after_sequence_id,
         query.limit.unwrap_or(200).clamp(1, 500),
+        Some(session_token),
     ))
 }
 
@@ -1420,6 +2327,7 @@ async fn stream_company_events_for_agent(
         company_id,
         after_sequence_id,
         query.limit.unwrap_or(200).clamp(1, 500),
+        None,
     ))
 }
 
@@ -1439,16 +2347,43 @@ fn build_company_event_sse(
     company_id: Uuid,
     after_sequence_id: i64,
     batch_limit: usize,
+    presence_session_token: Option<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (sender, receiver) = mpsc::channel::<CompanyRealtimeEvent>(256);
     let mut signal_receiver = state.realtime_sender.subscribe();
     tokio::spawn(async move {
         let mut cursor = after_sequence_id;
+        let mut next_presence_refresh = tokio::time::Instant::now();
         loop {
-            let events = state
-                .platform
-                .read_company_realtime_events(company_id, cursor, batch_limit)
-                .unwrap_or_default();
+            if tokio::time::Instant::now() >= next_presence_refresh {
+                if let Some(session_token) = presence_session_token.as_deref() {
+                    if let Err(error) = state.platform.authenticate_human_session(session_token) {
+                        tracing::info!(
+                            company_id = %company_id,
+                            error = %error,
+                            "company SSE stream stopped because the Human session is no longer active"
+                        );
+                        return;
+                    }
+                }
+                next_presence_refresh = tokio::time::Instant::now() + StdDuration::from_secs(30);
+            }
+            let events =
+                match state
+                    .platform
+                    .read_company_realtime_events(company_id, cursor, batch_limit)
+                {
+                    Ok(events) => events,
+                    Err(error) => {
+                        tracing::error!(
+                            company_id = %company_id,
+                            cursor,
+                            error = %error,
+                            "company SSE stream stopped after repository failure"
+                        );
+                        return;
+                    }
+                };
             let had_events = !events.is_empty();
             for event in events {
                 cursor = cursor.max(event.sequence_id);
@@ -1612,6 +2547,257 @@ async fn list_company_codex_runner_profiles(
     Ok(Json(serde_json::json!({ "profiles": profiles })))
 }
 
+async fn get_company_codex_environments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let environment = state
+        .codex_control_store
+        .environment_for_company(company_id)?;
+    Ok(Json(serde_json::json!(environment)))
+}
+
+async fn get_company_codex_cli_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let settings = state.codex_control_store.company_cli_settings(company_id)?;
+    Ok(Json(serde_json::json!({ "settings": settings })))
+}
+
+async fn update_company_codex_cli_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<UpdateCompanyCodexCliSettingsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let settings =
+        state
+            .codex_control_store
+            .save_company_cli_settings(CompanyCodexCliSettings {
+                company_id,
+                model: input.model,
+                reasoning_effort: input.reasoning_effort,
+                reasoning_summary: input.reasoning_summary,
+                verbosity: input.verbosity,
+                personality: input.personality,
+                service_tier: input.service_tier,
+                approval_policy: input.approval_policy,
+                sandbox_mode: input.sandbox_mode,
+                network_access: input.network_access,
+                web_search: input.web_search,
+                feature_multi_agent: input.feature_multi_agent,
+                feature_remote_plugin: input.feature_remote_plugin,
+                feature_hooks: input.feature_hooks,
+                feature_goals: input.feature_goals,
+                feature_shell_tool: input.feature_shell_tool,
+                updated_at: now_utc(),
+            })?;
+    Ok(Json(serde_json::json!({ "settings": settings })))
+}
+
+async fn request_codex_cli_install(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let runtime = state.codex_control_store.enqueue_cli_install()?;
+    Ok(Json(serde_json::json!({ "runtime": runtime })))
+}
+
+async fn request_codex_cli_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let runtime = state.codex_control_store.enqueue_cli_update()?;
+    Ok(Json(serde_json::json!({ "runtime": runtime })))
+}
+
+async fn refresh_company_codex_mcp_servers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<CodexMcpRefreshRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    state
+        .codex_control_store
+        .enqueue_mcp_refresh(company_id, input.target_selector)?;
+    Ok(Json(serde_json::json!({ "accepted": true })))
+}
+
+async fn add_company_codex_mcp_server(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<CodexMcpServerInput>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    state
+        .codex_control_store
+        .enqueue_mcp_add(company_id, input)?;
+    Ok(Json(serde_json::json!({ "accepted": true })))
+}
+
+async fn remove_company_codex_mcp_server(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, target_selector, server_name)): Path<(Uuid, String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    state
+        .codex_control_store
+        .enqueue_mcp_remove(company_id, target_selector, server_name)?;
+    Ok(Json(serde_json::json!({ "accepted": true })))
+}
+
+async fn create_company_codex_auth_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<CreateCodexAuthProfileRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let profile = state.codex_control_store.create_auth_profile(
+        company_id,
+        input.name,
+        input.api_key,
+        input.base_url,
+    )?;
+    Ok(Json(serde_json::json!({ "profile": profile })))
+}
+
+async fn update_company_codex_auth_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, profile_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<UpdateCodexAuthProfileRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let profile = state.codex_control_store.update_auth_profile(
+        company_id,
+        profile_id,
+        input.name,
+        input.api_key,
+        input.base_url,
+    )?;
+    Ok(Json(serde_json::json!({ "profile": profile })))
+}
+
+async fn delete_company_codex_auth_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, profile_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let environment = state
+        .codex_control_store
+        .environment_for_company(company_id)?;
+    let profile = environment
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| AppError::NotFound("Codex authentication profile not found".into()))?;
+    let runner_profiles = state
+        .platform
+        .list_company_codex_runner_profiles_for_human(
+            ListCompanyCodexRunnerProfilesForHumanInput {
+                human_user_id: human.id,
+                company_id,
+            },
+        )?;
+    if runner_profiles
+        .iter()
+        .any(|runner| runner.profile.codex_profile == profile.selector)
+    {
+        return Err(AppError::Conflict(
+            "Codex authentication profile is still used by a runner profile".into(),
+        )
+        .into());
+    }
+    let profile = state
+        .codex_control_store
+        .request_delete_auth_profile(company_id, profile_id)?;
+    Ok(Json(serde_json::json!({ "profile": profile })))
+}
+
+async fn list_company_codex_plugins(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<CodexPluginsQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let view = state.platform.list_company_codex_plugins_for_human(
+        ListCompanyCodexPluginsForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            operation_limit: query.operation_limit.unwrap_or(50),
+        },
+    )?;
+    Ok(Json(serde_json::json!(view)))
+}
+
+async fn request_codex_plugin_operation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<CodexPluginOperationRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let operation = state.platform.request_codex_plugin_operation_for_human(
+        RequestCodexPluginOperationForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            target_runner_id: input.target_runner_id,
+            operation: input.operation,
+            plugin_id: input.plugin_id,
+        },
+    )?;
+    Ok(Json(serde_json::json!({ "operation": operation })))
+}
+
 async fn create_company_codex_runner_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1619,6 +2805,10 @@ async fn create_company_codex_runner_profile(
     Json(input): Json<UpsertCompanyCodexRunnerProfileRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    ensure_company_managed_codex_profile(&state, company_id, &input.codex_profile)?;
     let profile = state
         .platform
         .upsert_company_codex_runner_profile_for_human(
@@ -1631,8 +2821,19 @@ async fn create_company_codex_runner_profile(
                 codex_profile: input.codex_profile,
                 model: input.model,
                 reasoning_effort: input.reasoning_effort,
+                reasoning_summary: input.reasoning_summary,
+                verbosity: input.verbosity,
+                personality: input.personality,
+                service_tier: input.service_tier,
                 sandbox_mode: input.sandbox_mode,
                 approval_policy: input.approval_policy,
+                network_access: input.network_access,
+                web_search: input.web_search,
+                feature_multi_agent: input.feature_multi_agent,
+                feature_remote_plugin: input.feature_remote_plugin,
+                feature_hooks: input.feature_hooks,
+                feature_goals: input.feature_goals,
+                feature_shell_tool: input.feature_shell_tool,
                 max_run_seconds: input.max_run_seconds,
                 is_default: input.is_default,
             },
@@ -1647,6 +2848,10 @@ async fn update_company_codex_runner_profile(
     Json(input): Json<UpsertCompanyCodexRunnerProfileRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    ensure_company_managed_codex_profile(&state, company_id, &input.codex_profile)?;
     let profile = state
         .platform
         .upsert_company_codex_runner_profile_for_human(
@@ -1659,8 +2864,19 @@ async fn update_company_codex_runner_profile(
                 codex_profile: input.codex_profile,
                 model: input.model,
                 reasoning_effort: input.reasoning_effort,
+                reasoning_summary: input.reasoning_summary,
+                verbosity: input.verbosity,
+                personality: input.personality,
+                service_tier: input.service_tier,
                 sandbox_mode: input.sandbox_mode,
                 approval_policy: input.approval_policy,
+                network_access: input.network_access,
+                web_search: input.web_search,
+                feature_multi_agent: input.feature_multi_agent,
+                feature_remote_plugin: input.feature_remote_plugin,
+                feature_hooks: input.feature_hooks,
+                feature_goals: input.feature_goals,
+                feature_shell_tool: input.feature_shell_tool,
                 max_run_seconds: input.max_run_seconds,
                 is_default: input.is_default,
             },
@@ -1684,6 +2900,24 @@ async fn delete_company_codex_runner_profile(
             },
         )?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn ensure_company_managed_codex_profile(
+    state: &AppState,
+    company_id: Uuid,
+    selector: &str,
+) -> AppResult<()> {
+    if selector.starts_with("relay_")
+        && state
+            .codex_control_store
+            .find_active_company_profile(company_id, selector)?
+            .is_none()
+    {
+        return Err(AppError::Validation(
+            "managed Codex authentication profile is unavailable or not active".into(),
+        ));
+    }
+    Ok(())
 }
 
 async fn list_company_approvals(
@@ -1761,6 +2995,27 @@ async fn upsert_company_agent_codex_trigger(
     Json(input): Json<UpsertCompanyAgentCodexTriggerRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    if let Some(runner_profile_id) = input.runner_profile_id {
+        let runner_profiles = state
+            .platform
+            .list_company_codex_runner_profiles_for_human(
+                ListCompanyCodexRunnerProfilesForHumanInput {
+                    human_user_id: human.id,
+                    company_id,
+                },
+            )?;
+        let selector = runner_profiles
+            .iter()
+            .find(|view| view.profile.id == runner_profile_id)
+            .map(|view| view.profile.codex_profile.as_str())
+            .ok_or_else(|| AppError::NotFound("Codex runner profile not found".into()))?;
+        ensure_company_managed_codex_profile(&state, company_id, selector)?;
+    } else if let Some(selector) = input.codex_profile.as_deref() {
+        ensure_company_managed_codex_profile(&state, company_id, selector)?;
+    }
     let trigger = state
         .platform
         .upsert_company_agent_codex_trigger_for_human(
@@ -1772,8 +3027,19 @@ async fn upsert_company_agent_codex_trigger(
                 codex_profile: input.codex_profile,
                 model: input.model,
                 reasoning_effort: input.reasoning_effort,
+                reasoning_summary: input.reasoning_summary,
+                verbosity: input.verbosity,
+                personality: input.personality,
+                service_tier: input.service_tier,
                 sandbox_mode: input.sandbox_mode,
                 approval_policy: input.approval_policy,
+                network_access: input.network_access,
+                web_search: input.web_search,
+                feature_multi_agent: input.feature_multi_agent,
+                feature_remote_plugin: input.feature_remote_plugin,
+                feature_hooks: input.feature_hooks,
+                feature_goals: input.feature_goals,
+                feature_shell_tool: input.feature_shell_tool,
                 max_run_seconds: input.max_run_seconds,
                 runner_profile_id: input.runner_profile_id,
             },
@@ -1895,10 +3161,549 @@ async fn publish_company_governance_policy(
                     daily_delegated_termination_limit: input
                         .daily_delegated_termination_limit
                         .unwrap_or(current.effective_settings.daily_delegated_termination_limit),
+                    managed_workspace_root: current.effective_settings.managed_workspace_root,
+                    skill_language: input
+                        .skill_language
+                        .unwrap_or(current.effective_settings.skill_language),
                 },
                 notes: input.notes,
             })?;
     Ok(Json(serde_json::json!({ "governance_policy": policy })))
+}
+
+async fn update_company_skill_language(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<UpdateCompanySkillLanguageRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let current = state
+        .platform
+        .get_company_governance_policy_for_human(human.id, company_id)?;
+    let skill_language = input.skill_language.trim();
+    if !matches!(skill_language, "zh-CN" | "en") {
+        return Err(ApiError(AppError::Validation(
+            "skill_language must be zh-CN or en".into(),
+        )));
+    }
+    if current.effective_settings.skill_language == skill_language {
+        return Ok(Json(serde_json::json!({ "governance_policy": current })));
+    }
+    let mut settings = current.effective_settings;
+    settings.skill_language = skill_language.into();
+    let policy =
+        state
+            .platform
+            .publish_company_governance_policy(PublishCompanyGovernancePolicyInput {
+                human_user_id: human.id,
+                company_id,
+                settings,
+                notes: Some(format!(
+                    "Human changed Relay Skill language to {skill_language}"
+                )),
+            })?;
+    Ok(Json(serde_json::json!({ "governance_policy": policy })))
+}
+
+async fn get_agent_trigger_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .get_company_governance_policy_for_human(human.id, company_id)?;
+    let preferences = state
+        .codex_control_store
+        .agent_trigger_preferences(agent_trigger_batch_size_from_env())?;
+    Ok(Json(serde_json::json!({ "preferences": preferences })))
+}
+
+async fn update_agent_trigger_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<UpdateAgentTriggerPreferencesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    state
+        .platform
+        .ensure_human_can_manage_company_codex(human.id, company_id)?;
+    let preferences = state.codex_control_store.save_agent_trigger_preferences(
+        input.batch_size,
+        human.id,
+        agent_trigger_batch_size_from_env(),
+    )?;
+    Ok(Json(serde_json::json!({ "preferences": preferences })))
+}
+
+async fn update_company_workspace_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<UpdateCompanyWorkspaceRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let current = state
+        .platform
+        .get_company_governance_policy_for_human(human.id, company_id)?;
+    let managed_workspace_root = input
+        .managed_workspace_root
+        .filter(|value| !value.trim().is_empty())
+        .map(validate_company_workspace_root)
+        .transpose()?;
+    if current.effective_settings.managed_workspace_root == managed_workspace_root {
+        return Ok(Json(serde_json::json!({
+            "governance_policy": current,
+            "resolved_workspace_root": resolve_company_workspace_root(
+                managed_workspace_root.as_deref(),
+                company_id,
+            )?
+        })));
+    }
+    let mut settings = current.effective_settings;
+    settings.managed_workspace_root = managed_workspace_root;
+    let policy =
+        state
+            .platform
+            .publish_company_governance_policy(PublishCompanyGovernancePolicyInput {
+                human_user_id: human.id,
+                company_id,
+                settings,
+                notes: Some("Human updated the Relay managed project workspace".into()),
+            })?;
+    Ok(Json(serde_json::json!({
+        "governance_policy": policy,
+        "resolved_workspace_root": resolve_company_workspace_root(
+            policy.effective_settings.managed_workspace_root.as_deref(),
+            company_id,
+        )?
+    })))
+}
+
+async fn create_company_project_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Json(input): Json<CreateCompanyProjectRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let policy = state
+        .platform
+        .get_company_governance_policy_for_human(human.id, company_id)?;
+    let workspace_root = resolve_company_workspace_root(
+        policy.effective_settings.managed_workspace_root.as_deref(),
+        company_id,
+    )?;
+    fs::create_dir_all(&workspace_root).map_err(|error| {
+        AppError::Internal(format!(
+            "failed to create managed workspace {}: {error}",
+            workspace_root.display()
+        ))
+    })?;
+
+    let project_id = Uuid::new_v4();
+    let destination = workspace_root.join(managed_project_directory_name(&input.name, project_id));
+    let description = input.description.clone().unwrap_or_default();
+    let mut type_evidence = Vec::new();
+    let mut imported_local_folder = false;
+
+    match input.source_kind.as_str() {
+        "local_folder" => {
+            let requested = input.source_local_path.as_deref().ok_or_else(|| {
+                AppError::Validation("source_local_path is required for local_folder".into())
+            })?;
+            let source =
+                validate_project_source_folder(requested, &state.folder_reference_allowed_roots)?;
+            if destination.starts_with(&source) || source == workspace_root {
+                return Err(AppError::Validation(
+                    "managed destination cannot be inside the imported source folder".into(),
+                )
+                .into());
+            }
+            type_evidence = collect_directory_structure(&source)?;
+            let source_for_copy = source.clone();
+            let destination_for_copy = destination.clone();
+            tokio::task::spawn_blocking(move || {
+                import_project_folder(&source_for_copy, &destination_for_copy)
+            })
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("project import task failed: {error}"))
+            })??;
+            imported_local_folder = true;
+        }
+        "git" => {
+            if input
+                .git_remote_url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(AppError::Validation(
+                    "git_remote_url is required for git source".into(),
+                )
+                .into());
+            }
+        }
+        _ => {
+            return Err(
+                AppError::Validation("source_kind must be local_folder or git".into()).into(),
+            )
+        }
+    }
+
+    let (inferred_type, inferred_confidence, inferred_evidence) =
+        infer_company_project_type(&input.name, &description, &type_evidence);
+    let human_selected_type = input
+        .project_type
+        .as_ref()
+        .is_some_and(|value| !value.is_empty());
+    let project_type = input.project_type.clone().unwrap_or(inferred_type);
+    let project_result =
+        state
+            .platform
+            .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                owner_agent_id: input.owner_agent_id,
+                name: input.name,
+                description: input.description,
+                member_agent_ids: input.member_agent_ids,
+                project_type: Some(project_type),
+                project_type_source: Some(if human_selected_type {
+                    PROJECT_TYPE_SOURCE_HUMAN.into()
+                } else if input.source_kind == "local_folder" {
+                    PROJECT_TYPE_SOURCE_FOLDER.into()
+                } else {
+                    PROJECT_TYPE_SOURCE_DESCRIPTION.into()
+                }),
+                project_type_confidence: Some(if human_selected_type {
+                    100
+                } else {
+                    inferred_confidence
+                }),
+                project_type_evidence: if type_evidence.is_empty() {
+                    inferred_evidence
+                } else {
+                    type_evidence.into_iter().take(24).collect()
+                },
+                project_id: Some(project_id),
+            });
+    let project = match project_result {
+        Ok(project) => project,
+        Err(error) => {
+            if imported_local_folder {
+                let _ = fs::remove_dir_all(&destination);
+            }
+            return Err(error.into());
+        }
+    };
+
+    let git = if imported_local_folder {
+        Some(
+            state
+                .platform
+                .configure_managed_local_project_git_for_human(
+                    ConfigureManagedLocalProjectGitForHumanInput {
+                        human_user_id: human.id,
+                        company_id,
+                        project_id,
+                        managed_local_path: destination.to_string_lossy().into_owned(),
+                    },
+                )?,
+        )
+    } else {
+        Some(state.platform.upsert_company_project_git_for_human(
+            UpsertCompanyProjectGitForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                project_id,
+                remote_url: input.git_remote_url.unwrap_or_default(),
+                host_local_path: Some(destination.to_string_lossy().into_owned()),
+                default_branch: input.default_branch,
+                auth_profile: input.auth_profile,
+                allow_agent_push: Some(true),
+                branch_prefix: Some("relay/".into()),
+            },
+        )?)
+    };
+    Ok(Json(serde_json::json!({
+        "project": project,
+        "git": git,
+        "managed_local_path": destination,
+    })))
+}
+
+fn normalize_uploaded_project_path(raw: &str) -> AppResult<Option<String>> {
+    const EXCLUDED: &[&str] = &[
+        ".git",
+        ".relay",
+        ".relay-agent-trigger",
+        "node_modules",
+        "target",
+    ];
+    let normalized = raw.replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.len() > 4_096
+        || normalized.starts_with('/')
+        || normalized.ends_with('/')
+        || normalized.chars().any(char::is_control)
+    {
+        return Err(AppError::Validation(
+            "uploaded project contains an invalid relative path".into(),
+        ));
+    }
+    let components = normalized.split('/').collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| component.is_empty() || matches!(*component, "." | ".."))
+    {
+        return Err(AppError::Validation(
+            "uploaded project path may not contain empty, current, or parent components".into(),
+        ));
+    }
+    if components
+        .iter()
+        .any(|component| EXCLUDED.contains(component))
+    {
+        return Ok(None);
+    }
+    Ok(Some(normalized))
+}
+
+async fn import_company_project_folder_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    const MAX_FILES: usize = 100_000;
+    const MAX_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+    let human = authenticate_human_request(&state, &headers)?;
+    let metadata_field = multipart
+        .next_field()
+        .await
+        .map_err(|error| AppError::Validation(format!("invalid project import form: {error}")))?
+        .ok_or_else(|| AppError::Validation("project import metadata is required".into()))?;
+    if metadata_field.name() != Some("metadata") {
+        return Err(AppError::Validation(
+            "project import metadata must be the first multipart field".into(),
+        )
+        .into());
+    }
+    let metadata: ImportCompanyProjectFolderRequest = serde_json::from_str(
+        &metadata_field
+            .text()
+            .await
+            .map_err(|error| AppError::Validation(format!("invalid project metadata: {error}")))?,
+    )
+    .map_err(|error| AppError::Validation(format!("invalid project metadata: {error}")))?;
+    if metadata.file_paths.len() > MAX_FILES {
+        return Err(AppError::Validation(
+            "selected folder exceeds the Relay import limit (100000 files / 5 GiB)".into(),
+        )
+        .into());
+    }
+
+    let mut normalized_paths = Vec::with_capacity(metadata.file_paths.len());
+    let mut unique_paths = HashSet::new();
+    for raw in &metadata.file_paths {
+        let normalized = normalize_uploaded_project_path(raw)?;
+        if let Some(path) = normalized.as_ref() {
+            if !unique_paths.insert(path.clone()) {
+                return Err(AppError::Validation(format!(
+                    "uploaded project contains a duplicate path: {path}"
+                ))
+                .into());
+            }
+        }
+        normalized_paths.push(normalized);
+    }
+
+    let policy = state
+        .platform
+        .get_company_governance_policy_for_human(human.id, company_id)?;
+    let workspace_root = resolve_company_workspace_root(
+        policy.effective_settings.managed_workspace_root.as_deref(),
+        company_id,
+    )?;
+    fs::create_dir_all(&workspace_root).map_err(|error| {
+        AppError::Internal(format!(
+            "failed to create managed workspace {}: {error}",
+            workspace_root.display()
+        ))
+    })?;
+    let project_id = Uuid::new_v4();
+    let destination =
+        workspace_root.join(managed_project_directory_name(&metadata.name, project_id));
+    let staging = workspace_root.join(format!(".relay-upload-{project_id}"));
+    fs::create_dir(&staging).map_err(|error| {
+        AppError::Internal(format!(
+            "failed to create project upload staging directory: {error}"
+        ))
+    })?;
+
+    let upload_result: Result<(usize, u64), ApiError> = async {
+        let mut received_indices = HashSet::new();
+        let mut total_bytes = 0u64;
+        while let Some(mut field) = multipart.next_field().await.map_err(|error| {
+            AppError::Validation(format!("invalid project upload stream: {error}"))
+        })? {
+            let field_name = field.name().unwrap_or_default();
+            let Some(index) = field_name
+                .strip_prefix("file_")
+                .and_then(|value| value.parse::<usize>().ok())
+            else {
+                return Err(AppError::Validation(
+                    "project upload contains an unexpected multipart field".into(),
+                )
+                .into());
+            };
+            let relative_path = normalized_paths.get(index).ok_or_else(|| {
+                AppError::Validation("project upload file index is invalid".into())
+            })?;
+            if !received_indices.insert(index) {
+                return Err(AppError::Validation(
+                    "project upload contains a duplicate file index".into(),
+                )
+                .into());
+            }
+            let Some(relative_path) = relative_path else {
+                while field
+                    .chunk()
+                    .await
+                    .map_err(|error| {
+                        AppError::Validation(format!("invalid upload chunk: {error}"))
+                    })?
+                    .is_some()
+                {}
+                continue;
+            };
+            let output_path = staging.join(relative_path);
+            if let Some(parent) = output_path.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                    AppError::Internal(format!("failed to create imported directory: {error}"))
+                })?;
+            }
+            let mut output = tokio::fs::File::create(&output_path)
+                .await
+                .map_err(|error| {
+                    AppError::Internal(format!("failed to create imported file: {error}"))
+                })?;
+            while let Some(chunk) = field.chunk().await.map_err(|error| {
+                AppError::Validation(format!("invalid project upload chunk: {error}"))
+            })? {
+                total_bytes = total_bytes.saturating_add(chunk.len() as u64);
+                if total_bytes > MAX_BYTES {
+                    return Err(AppError::Validation(
+                        "selected folder exceeds the Relay import limit (100000 files / 5 GiB)"
+                            .into(),
+                    )
+                    .into());
+                }
+                output.write_all(&chunk).await.map_err(|error| {
+                    AppError::Internal(format!("failed to write imported file: {error}"))
+                })?;
+            }
+            output.flush().await.map_err(|error| {
+                AppError::Internal(format!("failed to flush imported file: {error}"))
+            })?;
+        }
+        if received_indices.len() != normalized_paths.len() {
+            return Err(AppError::Validation(
+                "project upload did not include every selected file".into(),
+            )
+            .into());
+        }
+        Ok((received_indices.len(), total_bytes))
+    }
+    .await;
+    if let Err(error) = upload_result {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(error);
+    }
+
+    let staging_for_finalize = staging.clone();
+    let destination_for_finalize = destination.clone();
+    let finalize_result = tokio::task::spawn_blocking(move || -> AppResult<()> {
+        initialize_managed_project_git(&staging_for_finalize)?;
+        fs::rename(&staging_for_finalize, &destination_for_finalize).map_err(|error| {
+            AppError::Internal(format!("failed to finalize uploaded project: {error}"))
+        })
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("project finalization task failed: {error}")))?;
+    if let Err(error) = finalize_result {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(error.into());
+    }
+
+    let description = metadata.description.clone().unwrap_or_default();
+    let type_evidence = normalized_paths
+        .iter()
+        .filter_map(Clone::clone)
+        .take(5_000)
+        .collect::<Vec<_>>();
+    let (inferred_type, inferred_confidence, inferred_evidence) =
+        infer_company_project_type(&metadata.name, &description, &type_evidence);
+    let human_selected_type = metadata
+        .project_type
+        .as_ref()
+        .is_some_and(|value| !value.is_empty());
+    let project_type = metadata.project_type.clone().unwrap_or(inferred_type);
+    let project_result =
+        state
+            .platform
+            .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                owner_agent_id: metadata.owner_agent_id,
+                name: metadata.name,
+                description: metadata.description,
+                member_agent_ids: metadata.member_agent_ids,
+                project_type: Some(project_type),
+                project_type_source: Some(if human_selected_type {
+                    PROJECT_TYPE_SOURCE_HUMAN.into()
+                } else {
+                    PROJECT_TYPE_SOURCE_FOLDER.into()
+                }),
+                project_type_confidence: Some(if human_selected_type {
+                    100
+                } else {
+                    inferred_confidence
+                }),
+                project_type_evidence: if type_evidence.is_empty() {
+                    inferred_evidence
+                } else {
+                    type_evidence.into_iter().take(24).collect()
+                },
+                project_id: Some(project_id),
+            });
+    let project = match project_result {
+        Ok(project) => project,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&destination);
+            return Err(error.into());
+        }
+    };
+    let git = state
+        .platform
+        .configure_managed_local_project_git_for_human(
+            ConfigureManagedLocalProjectGitForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                project_id,
+                managed_local_path: destination.to_string_lossy().into_owned(),
+            },
+        )?;
+    Ok(Json(serde_json::json!({
+        "project": project,
+        "git": git,
+        "managed_local_path": destination,
+    })))
 }
 
 async fn get_company_project_git(
@@ -1920,9 +3725,15 @@ async fn get_company_project_git(
         git.auth_profile.as_deref() == Some(automatic_profile.as_str())
             && state.git_credential_store.has_github_token(project_id)
     });
+    let managed_profile = managed_token_profile_name(project_id);
+    let managed_token_configured = git.as_ref().is_some_and(|git| {
+        git.auth_profile.as_deref() == Some(managed_profile.as_str())
+            && state.git_credential_store.has_managed_git_token(project_id)
+    });
     Ok(Json(serde_json::json!({
         "git": git,
         "github_token_configured": github_token_configured,
+        "managed_token_configured": managed_token_configured,
     })))
 }
 
@@ -2014,9 +3825,13 @@ async fn upsert_company_project_git(
     }
     let github_token_configured = git.auth_profile.as_deref() == Some(automatic_profile.as_str())
         && state.git_credential_store.has_github_token(project_id);
+    let managed_profile = managed_token_profile_name(project_id);
+    let managed_token_configured = git.auth_profile.as_deref() == Some(managed_profile.as_str())
+        && state.git_credential_store.has_managed_git_token(project_id);
     Ok(Json(serde_json::json!({
         "git": git,
         "github_token_configured": github_token_configured,
+        "managed_token_configured": managed_token_configured,
     })))
 }
 
@@ -2033,7 +3848,9 @@ async fn delete_company_project_git(
             company_id,
             project_id,
         })?;
-    state.git_credential_store.remove_github_token(project_id)?;
+    state
+        .git_credential_store
+        .remove_project_tokens(project_id)?;
     Ok(Json(serde_json::json!({ "configured": false })))
 }
 
@@ -2113,7 +3930,7 @@ fn rollback_company_project_git(
                 company_id,
                 project_id,
                 remote_url: existing.remote_url,
-                host_local_path: existing.host_local_path,
+                host_local_path: Some(existing.host_local_path),
                 default_branch: Some(existing.default_branch),
                 auth_profile: existing.auth_profile,
                 allow_agent_push: Some(existing.allow_agent_push),
@@ -2289,6 +4106,40 @@ async fn list_company_staffing_actions(
     Ok(Json(serde_json::json!({ "staffing_actions": actions })))
 }
 
+async fn pause_company_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let project =
+        state
+            .platform
+            .pause_company_project_for_human(SetCompanyProjectPauseForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                project_id,
+            })?;
+    Ok(Json(serde_json::json!({ "project": project })))
+}
+
+async fn resume_company_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let project =
+        state
+            .platform
+            .resume_company_project_for_human(SetCompanyProjectPauseForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                project_id,
+            })?;
+    Ok(Json(serde_json::json!({ "project": project })))
+}
+
 async fn list_owner_agents(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2330,12 +4181,6 @@ async fn get_conversation_messages(
         "next_cursor": page.next_cursor,
         "has_more": page.has_more,
     })))
-}
-
-async fn removed_legacy_feature() -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError(AppError::NotFound(
-        "this legacy feature has been removed from Relay".into(),
-    )))
 }
 
 async fn update_owned_agent_status(
@@ -2650,17 +4495,25 @@ impl From<AppError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
-        let status = match self.0 {
+        let status = match &self.0 {
             AppError::Validation(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             AppError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
+            AppError::Internal(message) => {
+                tracing::error!(error = %message, "internal API error");
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
 
         let body = Json(ApiErrorResponse {
             code: self.0.code().to_string(),
-            message: self.0.to_string(),
+            message: if matches!(self.0, AppError::Internal(_)) {
+                "internal server error".into()
+            } else {
+                self.0.to_string()
+            },
         });
 
         (status, body).into_response()
@@ -2743,50 +4596,52 @@ mod tests {
     }
 
     #[test]
-    fn local_codex_model_catalog_excludes_hidden_models_and_nested_ids() {
-        let catalog = serde_json::json!({
-            "models": [
-                {
-                    "slug": "gpt-5.6-sol",
-                    "display_name": "GPT-5.6-Sol",
-                    "visibility": "list",
-                    "default_reasoning_level": "low",
-                    "supported_reasoning_levels": [
-                        { "effort": "low", "description": "Fast" },
-                        { "effort": "high", "description": "Deep" }
-                    ],
-                    "service_tiers": [{ "id": "priority", "name": "Fast" }]
-                },
-                {
-                    "slug": "codex-auto-review",
-                    "display_name": "Codex Auto Review",
-                    "visibility": "hide"
-                }
-            ]
-        });
-        let mut models = BTreeMap::new();
+    fn local_project_import_copies_source_into_a_fresh_git_repository() {
+        let root = std::env::temp_dir().join(format!("relay-project-import-{}", Uuid::new_v4()));
+        let source = root.join("source");
+        let destination = root.join("managed");
+        fs::create_dir_all(source.join("src")).expect("source directories");
+        fs::create_dir_all(source.join(".git")).expect("source git metadata");
+        fs::create_dir_all(source.join("node_modules/pkg")).expect("source dependency cache");
+        fs::write(
+            source.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("manifest");
+        fs::write(source.join("src/main.rs"), "fn main() {}\n").expect("source file");
+        fs::write(source.join(".git/config"), "source metadata").expect("git metadata");
+        fs::write(source.join("node_modules/pkg/index.js"), "cache").expect("cache file");
 
-        collect_local_codex_models(&catalog, &mut models);
+        import_project_folder(&source, &destination).expect("folder import should succeed");
+        assert!(destination.join("Cargo.toml").is_file());
+        assert!(destination.join("src/main.rs").is_file());
+        assert!(destination.join(".git").is_dir());
+        assert!(!destination.join("node_modules").exists());
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&destination)
+            .output()
+            .expect("git status");
+        assert!(status.status.success());
+        assert!(String::from_utf8_lossy(&status.stdout).trim().is_empty());
+        fs::remove_dir_all(root).expect("test import should be removable");
+    }
 
+    #[test]
+    fn uploaded_project_paths_are_normalized_and_exclude_generated_directories() {
         assert_eq!(
-            models,
-            BTreeMap::from([(
-                "gpt-5.6-sol".to_string(),
-                LocalCodexModelInfo {
-                    display_name: "GPT-5.6-Sol".to_string(),
-                    default_reasoning_effort: Some("low".to_string()),
-                    reasoning_efforts: vec![
-                        LocalCodexReasoningEffort {
-                            effort: "low".to_string(),
-                            description: "Fast".to_string(),
-                        },
-                        LocalCodexReasoningEffort {
-                            effort: "high".to_string(),
-                            description: "Deep".to_string(),
-                        },
-                    ],
-                }
-            )])
+            normalize_uploaded_project_path("src\\main.rs").expect("valid path"),
+            Some("src/main.rs".into())
         );
+        assert_eq!(
+            normalize_uploaded_project_path("node_modules/pkg/index.js").expect("excluded path"),
+            None
+        );
+        assert_eq!(
+            normalize_uploaded_project_path("client/target/debug/app").expect("excluded path"),
+            None
+        );
+        assert!(normalize_uploaded_project_path("../secret.txt").is_err());
+        assert!(normalize_uploaded_project_path("/absolute/path").is_err());
     }
 }

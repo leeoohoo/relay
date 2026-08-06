@@ -1,50 +1,54 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::ops::{Deref, DerefMut};
+use std::sync::{
+    atomic::{AtomicI64, Ordering},
+    Arc, LockResult, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
+};
 
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentIdempotencyRecord, AgentInboxEvent, AgentInboxEventStatus,
     AgentKeyIssueLog, AgentKeyRecord, AgentOwnerBinding, AgentProfile, AgentRegistrationRequest,
-    AgentStatus, HumanAccountToken, HumanCredential, HumanSession, HumanUser,
+    AgentStatus, HumanAccountToken, HumanCredential, HumanHarnessAccount, HumanSession, HumanUser,
     OwnershipProofChallenge, SocialProofSubmission,
 };
 use ai_chat_domain::company::{
     AgentCodexRunActivity, AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig,
-    AgentCodexTriggerRun, AgentModelPriceCatalogEntry, AgentRuntimeConfig, AgentRuntimeDailyUsage,
-    AgentRuntimeRun, AgentRuntimeTemplate, AgentStaffingAction, AgentToolApprovalRequest, Company,
-    CompanyAgentMembership, CompanyCodexRunnerProfile, CompanyGovernancePolicyVersion,
-    CompanyHumanMember, CompanyModelBudgetPolicy, CompanyModelDailyUsage, CompanyProject,
+    AgentCodexTriggerRun, AgentMemory, AgentStaffingAction, AgentToolApprovalRequest,
+    CodexPluginCatalogSnapshot, CodexPluginOperation, Company, CompanyAgentMembership,
+    CompanyCodexRunnerProfile, CompanyGovernancePolicyVersion, CompanyHumanMember, CompanyProject,
     CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig,
     CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
-    CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRuntimePolicy, OrgUnit,
-    AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_TIMED_OUT,
+    CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, OrgUnit,
+    AGENT_CODEX_RUN_STATUS_LEASE_LOST, AGENT_CODEX_RUN_STATUS_RUNNING,
     AGENT_CODEX_TRIGGER_STATUS_ACTIVE, AGENT_CODEX_TRIGGER_STATUS_ERROR,
-    AGENT_MODEL_PRICE_CATALOG_STATUS_ACTIVE, AGENT_MODEL_PRICE_CATALOG_STATUS_ARCHIVED,
-    AGENT_RUNTIME_RUN_STATUS_FAILED, AGENT_RUNTIME_RUN_STATUS_SKIPPED_BUDGET,
-    AGENT_RUNTIME_STATUS_ACTIVE, AGENT_TOOL_APPROVAL_STATUS_PENDING,
-    COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE, COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED,
+    AGENT_TOOL_APPROVAL_STATUS_PENDING, CODEX_PLUGIN_OPERATION_STATUS_FAILED,
+    CODEX_PLUGIN_OPERATION_STATUS_QUEUED, CODEX_PLUGIN_OPERATION_STATUS_RUNNING,
+    CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED, COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE,
+    COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED, PROJECT_STATUS_PAUSED,
 };
 use ai_chat_domain::social::{
-    ConversationContext, ConversationPreview, DiaryEntryView, FriendProfileSnapshot,
-    FriendRequestView, FriendSummary, MessageView, PostCommentView, PostView,
-    CONVERSATION_CONTEXT_PROJECT_GROUP, CONVERSATION_CONTEXT_SELF_NOTES,
+    ConversationContext, ConversationPreview, MessageView, CONVERSATION_CONTEXT_PROJECT_GROUP,
+    CONVERSATION_CONTEXT_SELF_NOTES,
 };
-use ai_chat_shared::{hash_secret, now_utc, AppResult};
+use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
 use crate::service::{
     AgentStaffingHireBundle, AgentStaffingStatusChangeBundle, CompanyAgentActivationBundle,
     CompanyAgentCreationBundle, CompanyAgentMembershipUpdateBundle,
     CompanyConversationCreationBundle, CompanyCreationBundle, CompanyProjectCreationBundle,
     CompanyProjectMemberAddBundle, CompleteAgentCodexTriggerLeaseInput,
-    HumanCompanyDirectConversationCreationBundle, PlatformRepository, ProblemWorkspace,
-    ProblemWorkspaceInvitation, ProblemWorkspaceProgressRecord, RegistrationCompletionBundle,
+    HumanCompanyDirectConversationCreationBundle, PlatformRepository, RegistrationCompletionBundle,
 };
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct MemoryState {
     human_users: HashMap<Uuid, HumanUser>,
     human_credentials: HashMap<Uuid, HumanCredential>,
+    human_harness_accounts: HashMap<Uuid, HumanHarnessAccount>,
     human_sessions: HashMap<Uuid, HumanSession>,
     human_account_tokens: HashMap<Uuid, HumanAccountToken>,
     human_email_verifications: HashMap<Uuid, chrono::DateTime<chrono::Utc>>,
@@ -66,12 +70,6 @@ struct MemoryState {
     agent_keys_by_hash: HashMap<String, Uuid>,
     conversations: HashMap<Uuid, Vec<ConversationPreview>>,
     messages: HashMap<Uuid, Vec<MessageView>>,
-    posts: HashMap<Uuid, PostView>,
-    post_comments: HashMap<Uuid, Vec<PostCommentView>>,
-    diary_entries: HashMap<Uuid, DiaryEntryView>,
-    friend_requests: HashMap<Uuid, FriendRequestView>,
-    friendships: Vec<(Uuid, Uuid)>,
-    friend_profiles: HashMap<(Uuid, Uuid), FriendProfileSnapshot>,
     direct_conversations: HashMap<(Uuid, Uuid), Uuid>,
     company_direct_conversations: HashMap<(Uuid, Uuid, Uuid), Uuid>,
     company_human_direct_conversations: HashMap<(Uuid, Uuid, Uuid), Uuid>,
@@ -81,6 +79,7 @@ struct MemoryState {
     company_project_git_configs: HashMap<Uuid, CompanyProjectGitConfig>,
     company_project_rules: HashMap<Uuid, CompanyProjectRule>,
     company_project_assets: HashMap<Uuid, Vec<CompanyProjectAsset>>,
+    agent_memories: HashMap<Uuid, AgentMemory>,
     company_project_asset_refresh_configs: HashMap<Uuid, CompanyProjectAssetRefreshConfig>,
     company_codex_runner_profiles: HashMap<Uuid, CompanyCodexRunnerProfile>,
     agent_codex_runner_profile_assignments: HashMap<Uuid, Uuid>,
@@ -88,30 +87,246 @@ struct MemoryState {
     agent_codex_trigger_runs: HashMap<Uuid, AgentCodexTriggerRun>,
     agent_codex_sessions: HashMap<Uuid, AgentCodexSession>,
     agent_codex_run_tokens: HashMap<String, AgentCodexRunToken>,
+    codex_plugin_catalogs: HashMap<String, CodexPluginCatalogSnapshot>,
+    codex_plugin_operations: HashMap<Uuid, CodexPluginOperation>,
     company_project_members: HashMap<(Uuid, Uuid), CompanyProjectMember>,
     company_project_tasks: HashMap<Uuid, CompanyProjectTask>,
     company_project_task_dependencies: HashMap<Uuid, CompanyProjectTaskDependency>,
     company_project_task_status_history: Vec<CompanyProjectTaskStatusHistory>,
     company_project_status_updates: HashMap<Uuid, Vec<CompanyProjectStatusUpdate>>,
-    agent_runtime_configs: HashMap<Uuid, AgentRuntimeConfig>,
-    agent_runtime_templates: HashMap<Uuid, AgentRuntimeTemplate>,
-    company_runtime_policies: HashMap<Uuid, CompanyRuntimePolicy>,
-    agent_model_price_catalog_entries: HashMap<Uuid, AgentModelPriceCatalogEntry>,
     company_governance_policy_versions: HashMap<Uuid, CompanyGovernancePolicyVersion>,
-    agent_runtime_runs: HashMap<Uuid, AgentRuntimeRun>,
-    company_model_budget_policies: HashMap<Uuid, CompanyModelBudgetPolicy>,
     agent_tool_approval_requests: HashMap<Uuid, AgentToolApprovalRequest>,
-    problem_workspaces: HashMap<Uuid, ProblemWorkspace>,
-    problem_workspace_progress_records: HashMap<Uuid, Vec<ProblemWorkspaceProgressRecord>>,
-    problem_workspace_invitations: HashMap<Uuid, ProblemWorkspaceInvitation>,
 }
 
-#[derive(Clone, Default)]
+pub trait MemorySnapshotWriteLease: Send {
+    fn load(&mut self) -> AppResult<Option<(i64, Vec<u8>)>>;
+    fn save(&mut self, expected_revision: i64, payload: &[u8]) -> AppResult<i64>;
+}
+
+pub trait MemorySnapshotPersistence: Send + Sync {
+    fn health_check(&self) -> AppResult<()>;
+    fn load_if_newer(&self, current_revision: i64) -> AppResult<Option<(i64, Vec<u8>)>>;
+    fn begin_write(&self) -> AppResult<Box<dyn MemorySnapshotWriteLease>>;
+}
+
+struct MemoryStateStore {
+    state: RwLock<MemoryState>,
+    persistence: Option<Arc<dyn MemorySnapshotPersistence>>,
+    revision: AtomicI64,
+    last_persistence_error: Mutex<Option<String>>,
+}
+
+impl Default for MemoryStateStore {
+    fn default() -> Self {
+        Self {
+            state: RwLock::new(MemoryState::default()),
+            persistence: None,
+            revision: AtomicI64::new(0),
+            last_persistence_error: Mutex::new(None),
+        }
+    }
+}
+
+impl MemoryStateStore {
+    fn persistent(persistence: Arc<dyn MemorySnapshotPersistence>) -> AppResult<Self> {
+        persistence.health_check()?;
+        let initial = persistence.load_if_newer(-1)?;
+        let (revision, state) = match initial {
+            Some((revision, payload)) => (revision, decode_state(&payload)?),
+            None => (0, MemoryState::default()),
+        };
+        Ok(Self {
+            state: RwLock::new(state),
+            persistence: Some(persistence),
+            revision: AtomicI64::new(revision),
+            last_persistence_error: Mutex::new(None),
+        })
+    }
+
+    fn health_check(&self) -> AppResult<()> {
+        if let Some(message) = self
+            .last_persistence_error
+            .lock()
+            .expect("memory persistence error lock poisoned")
+            .clone()
+        {
+            return Err(AppError::Internal(message));
+        }
+        if let Some(persistence) = &self.persistence {
+            persistence.health_check()?;
+        }
+        Ok(())
+    }
+
+    fn read(&self) -> LockResult<RwLockReadGuard<'_, MemoryState>> {
+        if let Some(persistence) = &self.persistence {
+            let current_revision = self.revision.load(Ordering::Acquire);
+            match persistence.load_if_newer(current_revision) {
+                Ok(Some((revision, payload))) if revision > current_revision => {
+                    let state = decode_state(&payload).unwrap_or_else(|error| {
+                        panic!("failed to decode persisted repository snapshot: {error}")
+                    });
+                    let mut guard = self
+                        .state
+                        .write()
+                        .expect("memory repository lock poisoned while refreshing persisted state");
+                    if revision > self.revision.load(Ordering::Acquire) {
+                        *guard = state;
+                        self.revision.store(revision, Ordering::Release);
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => self.fail_persistence("failed to refresh persisted state", error),
+            }
+        }
+        self.state.read()
+    }
+
+    fn write(&self) -> LockResult<MemoryStateWriteGuard<'_>> {
+        let mut lease = self.persistence.as_ref().map(|persistence| {
+            persistence.begin_write().unwrap_or_else(|error| {
+                self.fail_persistence("failed to acquire repository write lease", error)
+            })
+        });
+
+        if let Some(active_lease) = lease.as_mut() {
+            match active_lease.load() {
+                Ok(Some((revision, payload))) => {
+                    let state = decode_state(&payload).unwrap_or_else(|error| {
+                        panic!("failed to decode persisted repository snapshot: {error}")
+                    });
+                    let mut guard = self
+                        .state
+                        .write()
+                        .expect("memory repository lock poisoned while preparing persisted write");
+                    if revision >= self.revision.load(Ordering::Acquire) {
+                        *guard = state;
+                        self.revision.store(revision, Ordering::Release);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.fail_persistence("failed to load persisted state for write", error)
+                }
+            }
+        }
+
+        match self.state.write() {
+            Ok(guard) => Ok(MemoryStateWriteGuard {
+                guard,
+                lease,
+                revision: &self.revision,
+                last_persistence_error: &self.last_persistence_error,
+            }),
+            Err(poisoned) => Err(PoisonError::new(MemoryStateWriteGuard {
+                guard: poisoned.into_inner(),
+                lease,
+                revision: &self.revision,
+                last_persistence_error: &self.last_persistence_error,
+            })),
+        }
+    }
+
+    fn fail_persistence(&self, context: &str, error: AppError) -> ! {
+        let message = format!("{context}: {error}");
+        *self
+            .last_persistence_error
+            .lock()
+            .expect("memory persistence error lock poisoned") = Some(message.clone());
+        panic!("{message}");
+    }
+}
+
+struct MemoryStateWriteGuard<'a> {
+    guard: RwLockWriteGuard<'a, MemoryState>,
+    lease: Option<Box<dyn MemorySnapshotWriteLease>>,
+    revision: &'a AtomicI64,
+    last_persistence_error: &'a Mutex<Option<String>>,
+}
+
+impl Deref for MemoryStateWriteGuard<'_> {
+    type Target = MemoryState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl DerefMut for MemoryStateWriteGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl Drop for MemoryStateWriteGuard<'_> {
+    fn drop(&mut self) {
+        let Some(lease) = self.lease.as_mut() else {
+            return;
+        };
+        let expected_revision = self.revision.load(Ordering::Acquire);
+        let result = (|| {
+            let mut payload = Vec::new();
+            ciborium::ser::into_writer(&*self.guard, &mut payload).map_err(|error| {
+                AppError::Internal(format!("failed to encode repository state: {error}"))
+            })?;
+            Ok(payload)
+        })()
+        .and_then(|payload| lease.save(expected_revision, &payload));
+        match result {
+            Ok(revision) => {
+                self.revision.store(revision, Ordering::Release);
+                *self
+                    .last_persistence_error
+                    .lock()
+                    .expect("memory persistence error lock poisoned") = None;
+            }
+            Err(error) => {
+                let message = format!("failed to persist repository snapshot: {error}");
+                *self
+                    .last_persistence_error
+                    .lock()
+                    .expect("memory persistence error lock poisoned") = Some(message.clone());
+                if !std::thread::panicking() {
+                    panic!("{message}");
+                }
+            }
+        }
+    }
+}
+
+fn decode_state(payload: &[u8]) -> AppResult<MemoryState> {
+    ciborium::de::from_reader(payload)
+        .map_err(|error| AppError::Internal(format!("failed to decode repository state: {error}")))
+}
+
+#[derive(Clone)]
 pub struct MemoryPlatformRepository {
-    inner: Arc<RwLock<MemoryState>>,
+    inner: Arc<MemoryStateStore>,
+}
+
+impl Default for MemoryPlatformRepository {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(MemoryStateStore::default()),
+        }
+    }
+}
+
+impl MemoryPlatformRepository {
+    pub fn with_snapshot_persistence(
+        persistence: Arc<dyn MemorySnapshotPersistence>,
+    ) -> AppResult<Self> {
+        Ok(Self {
+            inner: Arc::new(MemoryStateStore::persistent(persistence)?),
+        })
+    }
 }
 
 impl PlatformRepository for MemoryPlatformRepository {
+    fn health_check(&self) -> AppResult<()> {
+        self.inner.health_check()
+    }
+
     fn find_human_user_by_email(&self, email: &str) -> Option<HumanUser> {
         let guard = self.inner.read().expect("memory repo lock poisoned");
         guard
@@ -167,6 +382,19 @@ impl PlatformRepository for MemoryPlatformRepository {
         guard.human_credentials.insert(user.id, credential);
         guard.human_users.insert(user.id, user.clone());
         Ok(user)
+    }
+
+    fn get_human_harness_account(&self, human_user_id: Uuid) -> Option<HumanHarnessAccount> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        guard.human_harness_accounts.get(&human_user_id).cloned()
+    }
+
+    fn upsert_human_harness_account(&self, account: HumanHarnessAccount) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        guard
+            .human_harness_accounts
+            .insert(account.human_user_id, account);
+        Ok(())
     }
 
     fn insert_human_session(&self, session: HumanSession) -> AppResult<()> {
@@ -327,6 +555,73 @@ impl PlatformRepository for MemoryPlatformRepository {
         guard
             .human_email_verifications
             .insert(human_user_id, verified_at);
+        Ok(())
+    }
+
+    fn verify_human_email_atomic(
+        &self,
+        token_id: Uuid,
+        human_user_id: Uuid,
+        verified_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let token = guard
+            .human_account_tokens
+            .get_mut(&token_id)
+            .filter(|token| token.human_user_id == human_user_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound("human account token not found".into())
+            })?;
+        if token.used_at.is_some() {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "human account token was already used".into(),
+            ));
+        }
+        token.used_at = Some(verified_at);
+        guard
+            .human_email_verifications
+            .insert(human_user_id, verified_at);
+        Ok(())
+    }
+
+    fn reset_human_password_atomic(
+        &self,
+        token_id: Uuid,
+        human_user_id: Uuid,
+        password_hash: String,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let token = guard
+            .human_account_tokens
+            .get(&token_id)
+            .filter(|token| token.human_user_id == human_user_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound("human account token not found".into())
+            })?;
+        if token.used_at.is_some() {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "human account token was already used".into(),
+            ));
+        }
+        let credential = guard
+            .human_credentials
+            .get_mut(&human_user_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound("human credential not found".into())
+            })?;
+        credential.password_hash = password_hash;
+        credential.updated_at = updated_at;
+        for session in guard.human_sessions.values_mut().filter(|session| {
+            session.human_user_id == human_user_id && session.revoked_at.is_none()
+        }) {
+            session.revoked_at = Some(updated_at);
+        }
+        guard
+            .human_account_tokens
+            .get_mut(&token_id)
+            .expect("validated account token must still exist")
+            .used_at = Some(updated_at);
         Ok(())
     }
 
@@ -570,11 +865,6 @@ impl PlatformRepository for MemoryPlatformRepository {
         guard
             .agent_profiles
             .insert(bundle.agent_profile.id, bundle.agent_profile);
-        if let Some(runtime_config) = bundle.runtime_config {
-            guard
-                .agent_runtime_configs
-                .insert(runtime_config.id, runtime_config);
-        }
         Ok(())
     }
 
@@ -699,11 +989,6 @@ impl PlatformRepository for MemoryPlatformRepository {
             {
                 conversations.push(default_group);
             }
-        }
-        if let Some(runtime_config) = bundle.runtime_config {
-            guard
-                .agent_runtime_configs
-                .insert(runtime_config.id, runtime_config);
         }
         Ok(())
     }
@@ -1437,7 +1722,20 @@ impl PlatformRepository for MemoryPlatformRepository {
                 "company project not found".into(),
             ));
         }
+        let completed_at = assets
+            .first()
+            .map(|asset| asset.updated_at)
+            .unwrap_or_else(Utc::now);
         guard.company_project_assets.insert(project_id, assets);
+        if let Some(config) = guard
+            .company_project_asset_refresh_configs
+            .get_mut(&project_id)
+        {
+            config.last_completed_at = Some(completed_at);
+            config.next_refresh_at =
+                completed_at + chrono::Duration::minutes(i64::from(config.interval_minutes));
+            config.updated_at = completed_at;
+        }
         Ok(())
     }
 
@@ -1448,6 +1746,68 @@ impl PlatformRepository for MemoryPlatformRepository {
             .get(&project_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn insert_agent_memory(&self, memory: AgentMemory) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if guard.agent_memories.contains_key(&memory.id) {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "Agent memory already exists".into(),
+            ));
+        }
+        let duplicate = guard.agent_memories.values().any(|existing| {
+            existing.company_id == memory.company_id
+                && existing.scope == memory.scope
+                && existing.topic_key == memory.topic_key
+                && matches!(existing.status.as_str(), "draft" | "active")
+                && match memory.scope.as_str() {
+                    "agent" => existing.owner_agent_id == memory.owner_agent_id,
+                    "project" => existing.project_id == memory.project_id,
+                    "company" => true,
+                    _ => false,
+                }
+        });
+        if duplicate {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "an active memory already exists for this topic".into(),
+            ));
+        }
+        guard.agent_memories.insert(memory.id, memory);
+        Ok(())
+    }
+
+    fn update_agent_memory(&self, memory: AgentMemory) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if !guard.agent_memories.contains_key(&memory.id) {
+            return Err(ai_chat_shared::AppError::NotFound(
+                "Agent memory not found".into(),
+            ));
+        }
+        guard.agent_memories.insert(memory.id, memory);
+        Ok(())
+    }
+
+    fn get_agent_memory(&self, memory_id: Uuid) -> Option<AgentMemory> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        guard.agent_memories.get(&memory_id).cloned()
+    }
+
+    fn list_company_agent_memories(&self, company_id: Uuid) -> Vec<AgentMemory> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        let mut memories = guard
+            .agent_memories
+            .values()
+            .filter(|memory| memory.company_id == company_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        memories.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        memories
+    }
+
+    fn delete_agent_memory(&self, memory_id: Uuid) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        guard.agent_memories.remove(&memory_id);
+        Ok(())
     }
 
     fn save_company_project_asset_refresh_config(
@@ -1490,6 +1850,10 @@ impl PlatformRepository for MemoryPlatformRepository {
                 config.enabled
                     && config.maintainer_agent_id == agent_id
                     && config.next_refresh_at <= now
+                    && guard
+                        .company_projects
+                        .get(&config.project_id)
+                        .is_some_and(|project| project.status != PROJECT_STATUS_PAUSED)
             })
             .min_by(|left, right| {
                 left.next_refresh_at
@@ -1645,6 +2009,142 @@ impl PlatformRepository for MemoryPlatformRepository {
             .collect()
     }
 
+    fn save_codex_plugin_catalog_snapshot(
+        &self,
+        snapshot: CodexPluginCatalogSnapshot,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        guard
+            .codex_plugin_catalogs
+            .insert(snapshot.runner_id.clone(), snapshot);
+        Ok(())
+    }
+
+    fn list_codex_plugin_catalog_snapshots(&self) -> AppResult<Vec<CodexPluginCatalogSnapshot>> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        let mut catalogs = guard
+            .codex_plugin_catalogs
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        catalogs.sort_by(|left, right| right.discovered_at.cmp(&left.discovered_at));
+        Ok(catalogs)
+    }
+
+    fn insert_codex_plugin_operation(&self, operation: CodexPluginOperation) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if guard.codex_plugin_operations.values().any(|existing| {
+            existing.target_runner_id == operation.target_runner_id
+                && existing.operation == operation.operation
+                && existing.plugin_id == operation.plugin_id
+                && matches!(
+                    existing.status.as_str(),
+                    CODEX_PLUGIN_OPERATION_STATUS_QUEUED | CODEX_PLUGIN_OPERATION_STATUS_RUNNING
+                )
+        }) {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "the same Codex plugin operation is already queued".into(),
+            ));
+        }
+        guard
+            .codex_plugin_operations
+            .insert(operation.id, operation);
+        Ok(())
+    }
+
+    fn list_company_codex_plugin_operations(
+        &self,
+        company_id: Uuid,
+        limit: usize,
+    ) -> AppResult<Vec<CodexPluginOperation>> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        let mut operations = guard
+            .codex_plugin_operations
+            .values()
+            .filter(|operation| operation.company_id == company_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        operations.sort_by(|left, right| right.requested_at.cmp(&left.requested_at));
+        operations.truncate(limit);
+        Ok(operations)
+    }
+
+    fn claim_codex_plugin_operations(
+        &self,
+        target_runner_id: &str,
+        lease_owner: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<CodexPluginOperation>> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let mut ids = guard
+            .codex_plugin_operations
+            .values()
+            .filter(|operation| operation.target_runner_id == target_runner_id)
+            .filter(|operation| {
+                operation.status == CODEX_PLUGIN_OPERATION_STATUS_QUEUED
+                    || (operation.status == CODEX_PLUGIN_OPERATION_STATUS_RUNNING
+                        && operation
+                            .lease_expires_at
+                            .is_some_and(|expires_at| expires_at <= now))
+            })
+            .map(|operation| (operation.requested_at, operation.id))
+            .collect::<Vec<_>>();
+        ids.sort_by_key(|(requested_at, _)| *requested_at);
+        ids.truncate(limit);
+        let mut claimed = Vec::new();
+        for (_, id) in ids {
+            if let Some(operation) = guard.codex_plugin_operations.get_mut(&id) {
+                operation.status = CODEX_PLUGIN_OPERATION_STATUS_RUNNING.into();
+                operation.lease_owner = Some(lease_owner.into());
+                operation.lease_expires_at = Some(now + chrono::Duration::minutes(2));
+                operation.attempt_count += 1;
+                operation.started_at.get_or_insert(now);
+                operation.updated_at = now;
+                claimed.push(operation.clone());
+            }
+        }
+        Ok(claimed)
+    }
+
+    fn finish_codex_plugin_operation(
+        &self,
+        operation_id: Uuid,
+        lease_owner: &str,
+        succeeded: bool,
+        result: serde_json::Value,
+        error_message: Option<String>,
+        finished_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let operation = guard
+            .codex_plugin_operations
+            .get_mut(&operation_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound("plugin operation not found".into())
+            })?;
+        if operation.lease_owner.as_deref() != Some(lease_owner) {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "plugin operation lease is no longer owned by this Trigger".into(),
+            ));
+        }
+        operation.result = result;
+        operation.error_message = error_message;
+        operation.lease_owner = None;
+        operation.lease_expires_at = None;
+        operation.updated_at = finished_at;
+        if succeeded {
+            operation.status = CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED.into();
+            operation.finished_at = Some(finished_at);
+        } else if operation.attempt_count < 3 {
+            operation.status = CODEX_PLUGIN_OPERATION_STATUS_QUEUED.into();
+        } else {
+            operation.status = CODEX_PLUGIN_OPERATION_STATUS_FAILED.into();
+            operation.finished_at = Some(finished_at);
+        }
+        Ok(())
+    }
+
     fn save_agent_codex_trigger_config(&self, config: AgentCodexTriggerConfig) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
         if !guard.agent_profiles.contains_key(&config.agent_profile_id) {
@@ -1686,9 +2186,13 @@ impl PlatformRepository for MemoryPlatformRepository {
             .collect::<Vec<_>>();
         for run_id in stale_run_ids {
             if let Some(run) = guard.agent_codex_trigger_runs.get_mut(&run_id) {
-                run.status = AGENT_CODEX_RUN_STATUS_TIMED_OUT.into();
+                run.status = AGENT_CODEX_RUN_STATUS_LEASE_LOST.into();
                 run.finished_at = Some(now);
-                run.error_message = Some("Codex trigger run exceeded its execution lease".into());
+                run.error_message =
+                    Some("Codex trigger process stopped before the run completed".into());
+                run.activity_phase = "lease_lost".into();
+                run.activity_summary = Some("Trigger 进程中断，本轮已停止".into());
+                run.last_activity_at = Some(now);
             }
         }
         let running_agent_ids = guard
@@ -1745,6 +2249,42 @@ impl PlatformRepository for MemoryPlatformRepository {
                 Some(config.clone())
             })
             .collect())
+    }
+
+    fn abandon_agent_codex_trigger_leases(
+        &self,
+        lease_owner: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<usize> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let abandoned_agent_ids = guard
+            .agent_codex_trigger_configs
+            .iter_mut()
+            .filter_map(|(agent_id, config)| {
+                (config.lease_owner.as_deref() == Some(lease_owner)).then(|| {
+                    config.lease_owner = None;
+                    config.lease_expires_at = None;
+                    config.next_run_at = config.next_run_at.min(now);
+                    config.updated_at = now;
+                    *agent_id
+                })
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let mut abandoned_runs = 0;
+        for run in guard.agent_codex_trigger_runs.values_mut().filter(|run| {
+            run.status == AGENT_CODEX_RUN_STATUS_RUNNING
+                && abandoned_agent_ids.contains(&run.agent_profile_id)
+        }) {
+            run.status = AGENT_CODEX_RUN_STATUS_LEASE_LOST.into();
+            run.finished_at = Some(now);
+            run.error_message =
+                Some("Codex trigger process stopped before the run completed".into());
+            run.activity_phase = "lease_lost".into();
+            run.activity_summary = Some("Trigger 进程中断，本轮已停止".into());
+            run.last_activity_at = Some(now);
+            abandoned_runs += 1;
+        }
+        Ok(abandoned_runs)
     }
 
     fn request_agent_codex_trigger_wake(
@@ -2286,316 +2826,6 @@ impl PlatformRepository for MemoryPlatformRepository {
         updates
     }
 
-    fn save_agent_runtime_config(&self, config: AgentRuntimeConfig) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if guard.agent_runtime_configs.values().any(|existing| {
-            existing.agent_profile_id == config.agent_profile_id && existing.id != config.id
-        }) {
-            return Err(ai_chat_shared::AppError::Conflict(
-                "agent runtime is already configured".into(),
-            ));
-        }
-        guard.agent_runtime_configs.insert(config.id, config);
-        Ok(())
-    }
-
-    fn get_agent_runtime_config(&self, runtime_config_id: Uuid) -> Option<AgentRuntimeConfig> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.agent_runtime_configs.get(&runtime_config_id).cloned()
-    }
-
-    fn get_agent_runtime_config_by_agent(&self, agent_id: Uuid) -> Option<AgentRuntimeConfig> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .agent_runtime_configs
-            .values()
-            .find(|config| config.agent_profile_id == agent_id)
-            .cloned()
-    }
-
-    fn list_company_agent_runtime_configs(&self, company_id: Uuid) -> Vec<AgentRuntimeConfig> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut configs = guard
-            .agent_runtime_configs
-            .values()
-            .filter(|config| config.company_id == company_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        configs.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-        configs
-    }
-
-    fn save_agent_runtime_template(&self, template: AgentRuntimeTemplate) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if template.status == ai_chat_domain::company::AGENT_RUNTIME_TEMPLATE_STATUS_ACTIVE
-            && guard.agent_runtime_templates.values().any(|existing| {
-                existing.id != template.id
-                    && existing.company_id == template.company_id
-                    && existing.status
-                        == ai_chat_domain::company::AGENT_RUNTIME_TEMPLATE_STATUS_ACTIVE
-                    && existing.name.eq_ignore_ascii_case(&template.name)
-            })
-        {
-            return Err(ai_chat_shared::AppError::Conflict(
-                "an active runtime template with this name already exists".into(),
-            ));
-        }
-        guard.agent_runtime_templates.insert(template.id, template);
-        Ok(())
-    }
-
-    fn get_agent_runtime_template(&self, template_id: Uuid) -> Option<AgentRuntimeTemplate> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.agent_runtime_templates.get(&template_id).cloned()
-    }
-
-    fn list_company_agent_runtime_templates(&self, company_id: Uuid) -> Vec<AgentRuntimeTemplate> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut templates = guard
-            .agent_runtime_templates
-            .values()
-            .filter(|template| template.company_id == company_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        templates.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.name.cmp(&right.name))
-        });
-        templates
-    }
-
-    fn save_company_runtime_policy(&self, policy: CompanyRuntimePolicy) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .company_runtime_policies
-            .insert(policy.company_id, policy);
-        Ok(())
-    }
-
-    fn get_company_runtime_policy(&self, company_id: Uuid) -> Option<CompanyRuntimePolicy> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.company_runtime_policies.get(&company_id).cloned()
-    }
-
-    fn list_due_agent_runtime_configs(
-        &self,
-        now: chrono::DateTime<chrono::Utc>,
-        limit: usize,
-    ) -> Vec<AgentRuntimeConfig> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut configs = guard
-            .agent_runtime_configs
-            .values()
-            .filter(|config| {
-                config.status == AGENT_RUNTIME_STATUS_ACTIVE && config.next_run_at <= now
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        configs.sort_by(|left, right| left.next_run_at.cmp(&right.next_run_at));
-        configs.truncate(limit);
-        configs
-    }
-
-    fn claim_agent_runtime_config(
-        &self,
-        runtime_config_id: Uuid,
-        now: chrono::DateTime<chrono::Utc>,
-        next_run_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<bool> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        let Some(config) = guard.agent_runtime_configs.get_mut(&runtime_config_id) else {
-            return Ok(false);
-        };
-        if config.status != AGENT_RUNTIME_STATUS_ACTIVE || config.next_run_at > now {
-            return Ok(false);
-        }
-        config.next_run_at = next_run_at;
-        config.updated_at = now;
-        Ok(true)
-    }
-
-    fn insert_agent_runtime_run(&self, run: AgentRuntimeRun) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if guard.agent_runtime_runs.contains_key(&run.id) {
-            return Err(ai_chat_shared::AppError::Conflict(
-                "agent runtime run already exists".into(),
-            ));
-        }
-        guard.agent_runtime_runs.insert(run.id, run);
-        Ok(())
-    }
-
-    fn update_agent_runtime_run(&self, run: AgentRuntimeRun) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if !guard.agent_runtime_runs.contains_key(&run.id) {
-            return Err(ai_chat_shared::AppError::NotFound(
-                "agent runtime run not found".into(),
-            ));
-        }
-        guard.agent_runtime_runs.insert(run.id, run);
-        Ok(())
-    }
-
-    fn list_agent_runtime_runs(
-        &self,
-        runtime_config_id: Uuid,
-        limit: usize,
-    ) -> Vec<AgentRuntimeRun> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut runs = guard
-            .agent_runtime_runs
-            .values()
-            .filter(|run| run.runtime_config_id == runtime_config_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        runs.sort_by(|left, right| right.started_at.cmp(&left.started_at));
-        runs.truncate(limit);
-        runs
-    }
-
-    fn get_agent_runtime_daily_usage(
-        &self,
-        runtime_config_id: Uuid,
-        window_start: chrono::DateTime<chrono::Utc>,
-    ) -> AgentRuntimeDailyUsage {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let runs = guard.agent_runtime_runs.values().filter(|run| {
-            run.runtime_config_id == runtime_config_id
-                && run.started_at >= window_start
-                && run.status != AGENT_RUNTIME_RUN_STATUS_SKIPPED_BUDGET
-        });
-        let mut usage = AgentRuntimeDailyUsage {
-            window_start,
-            run_count: 0,
-            action_count: 0,
-            approval_request_count: 0,
-            failed_run_count: 0,
-            model_request_count: 0,
-            model_input_tokens: 0,
-            model_output_tokens: 0,
-            model_cost_microusd: 0,
-        };
-        for run in runs {
-            usage.run_count += 1;
-            usage.action_count += i64::from(run.action_count);
-            usage.approval_request_count += i64::from(run.approval_request_count);
-            usage.model_request_count += i64::from(run.model_request_count);
-            usage.model_input_tokens += run.model_input_tokens;
-            usage.model_output_tokens += run.model_output_tokens;
-            usage.model_cost_microusd += run.model_cost_microusd;
-            if run.status == AGENT_RUNTIME_RUN_STATUS_FAILED {
-                usage.failed_run_count += 1;
-            }
-        }
-        usage
-    }
-
-    fn save_company_model_budget_policy(&self, policy: CompanyModelBudgetPolicy) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .company_model_budget_policies
-            .insert(policy.company_id, policy);
-        Ok(())
-    }
-
-    fn get_company_model_budget_policy(
-        &self,
-        company_id: Uuid,
-    ) -> Option<CompanyModelBudgetPolicy> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .company_model_budget_policies
-            .get(&company_id)
-            .cloned()
-    }
-
-    fn publish_agent_model_price_catalog_entry(
-        &self,
-        mut entry: AgentModelPriceCatalogEntry,
-    ) -> AppResult<AgentModelPriceCatalogEntry> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        let next_version = guard
-            .agent_model_price_catalog_entries
-            .values()
-            .filter(|existing| {
-                existing.company_id == entry.company_id
-                    && existing.model_provider == entry.model_provider
-                    && existing.model_name == entry.model_name
-            })
-            .map(|existing| existing.version)
-            .max()
-            .unwrap_or(0)
-            + 1;
-        for existing in guard.agent_model_price_catalog_entries.values_mut() {
-            if existing.company_id == entry.company_id
-                && existing.model_provider == entry.model_provider
-                && existing.model_name == entry.model_name
-                && existing.status == AGENT_MODEL_PRICE_CATALOG_STATUS_ACTIVE
-            {
-                existing.status = AGENT_MODEL_PRICE_CATALOG_STATUS_ARCHIVED.into();
-                existing.updated_by_human_user_id = entry.updated_by_human_user_id;
-                existing.updated_at = entry.updated_at;
-            }
-        }
-        entry.version = next_version;
-        guard
-            .agent_model_price_catalog_entries
-            .insert(entry.id, entry.clone());
-        Ok(entry)
-    }
-
-    fn save_agent_model_price_catalog_entry(
-        &self,
-        entry: AgentModelPriceCatalogEntry,
-    ) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if !guard
-            .agent_model_price_catalog_entries
-            .contains_key(&entry.id)
-        {
-            return Err(ai_chat_shared::AppError::NotFound(
-                "model price catalog entry not found".into(),
-            ));
-        }
-        guard
-            .agent_model_price_catalog_entries
-            .insert(entry.id, entry);
-        Ok(())
-    }
-
-    fn get_agent_model_price_catalog_entry(
-        &self,
-        entry_id: Uuid,
-    ) -> Option<AgentModelPriceCatalogEntry> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .agent_model_price_catalog_entries
-            .get(&entry_id)
-            .cloned()
-    }
-
-    fn list_company_agent_model_price_catalog_entries(
-        &self,
-        company_id: Uuid,
-    ) -> Vec<AgentModelPriceCatalogEntry> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut entries = guard
-            .agent_model_price_catalog_entries
-            .values()
-            .filter(|entry| entry.company_id == company_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
-            left.model_provider
-                .cmp(&right.model_provider)
-                .then_with(|| left.model_name.cmp(&right.model_name))
-                .then_with(|| right.version.cmp(&left.version))
-        });
-        entries
-    }
-
     fn publish_company_governance_policy_version(
         &self,
         mut version: CompanyGovernancePolicyVersion,
@@ -2665,32 +2895,6 @@ impl PlatformRepository for MemoryPlatformRepository {
             .collect::<Vec<_>>();
         versions.sort_by(|left, right| right.version.cmp(&left.version));
         versions
-    }
-
-    fn get_company_model_daily_usage(
-        &self,
-        company_id: Uuid,
-        window_start: chrono::DateTime<chrono::Utc>,
-    ) -> CompanyModelDailyUsage {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut usage = CompanyModelDailyUsage {
-            window_start,
-            model_request_count: 0,
-            model_input_tokens: 0,
-            model_output_tokens: 0,
-            model_cost_microusd: 0,
-        };
-        for run in guard.agent_runtime_runs.values().filter(|run| {
-            run.company_id == company_id
-                && run.started_at >= window_start
-                && run.status != AGENT_RUNTIME_RUN_STATUS_SKIPPED_BUDGET
-        }) {
-            usage.model_request_count += i64::from(run.model_request_count);
-            usage.model_input_tokens += run.model_input_tokens;
-            usage.model_output_tokens += run.model_output_tokens;
-            usage.model_cost_microusd += run.model_cost_microusd;
-        }
-        usage
     }
 
     fn insert_agent_tool_approval_request(
@@ -2871,178 +3075,16 @@ impl PlatformRepository for MemoryPlatformRepository {
         for previews in guard.conversations.values_mut() {
             for preview in previews.iter_mut() {
                 if preview.id == message.conversation_id {
-                    preview.last_message_preview = Some(message.content.clone());
+                    preview.last_message_preview = Some(if message.content.is_empty() {
+                        format!("[{} 个附件]", message.attachments.len())
+                    } else {
+                        message.content.clone()
+                    });
                     preview.updated_at = message.created_at;
                 }
             }
         }
         Ok(())
-    }
-
-    fn insert_post(&self, post: PostView) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard.posts.insert(post.id, post);
-        Ok(())
-    }
-
-    fn insert_post_comment(&self, comment: PostCommentView) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .post_comments
-            .entry(comment.post_id)
-            .or_default()
-            .push(comment);
-        Ok(())
-    }
-
-    fn insert_diary_entry(&self, diary_entry: DiaryEntryView) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard.diary_entries.insert(diary_entry.id, diary_entry);
-        Ok(())
-    }
-
-    fn list_posts(&self) -> Vec<PostView> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.posts.values().cloned().collect()
-    }
-
-    fn list_post_comments(&self, post_id: Uuid) -> Vec<PostCommentView> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .post_comments
-            .get(&post_id)
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    fn list_diary_entries(&self) -> Vec<DiaryEntryView> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut entries = guard.diary_entries.values().cloned().collect::<Vec<_>>();
-        entries.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-        entries
-    }
-
-    fn insert_friend_request(&self, request: FriendRequestView) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard.friend_requests.insert(request.id, request);
-        Ok(())
-    }
-
-    fn list_friend_requests(&self, agent_id: Uuid) -> Vec<FriendRequestView> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .friend_requests
-            .values()
-            .filter(|item| item.requester_agent_id == agent_id || item.target_agent_id == agent_id)
-            .cloned()
-            .collect()
-    }
-
-    fn list_all_friend_requests(&self) -> Vec<FriendRequestView> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut requests = guard.friend_requests.values().cloned().collect::<Vec<_>>();
-        requests.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-        requests
-    }
-
-    fn list_friends(&self, agent_id: Uuid) -> Vec<FriendSummary> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .friendships
-            .iter()
-            .filter_map(|(left, right)| {
-                let friend_id = if *left == agent_id {
-                    *right
-                } else if *right == agent_id {
-                    *left
-                } else {
-                    return None;
-                };
-                guard
-                    .agent_profiles
-                    .get(&friend_id)
-                    .map(|profile| FriendSummary {
-                        agent_id: profile.id,
-                        display_name: profile.display_name.clone(),
-                        handle: profile.handle.clone(),
-                    })
-            })
-            .collect()
-    }
-
-    fn get_friend_request(&self, request_id: Uuid) -> Option<FriendRequestView> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.friend_requests.get(&request_id).cloned()
-    }
-
-    fn update_friend_request(&self, request: FriendRequestView) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard.friend_requests.insert(request.id, request);
-        Ok(())
-    }
-
-    fn link_friends(&self, left_agent_id: Uuid, right_agent_id: Uuid) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        let pair = ordered_pair(left_agent_id, right_agent_id);
-        if !guard.friendships.contains(&pair) {
-            guard.friendships.push(pair);
-        }
-        Ok(())
-    }
-
-    fn get_friend_profile(
-        &self,
-        owner_agent_id: Uuid,
-        friend_agent_id: Uuid,
-    ) -> Option<FriendProfileSnapshot> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .friend_profiles
-            .get(&(owner_agent_id, friend_agent_id))
-            .cloned()
-    }
-
-    fn upsert_friend_profile(&self, profile: FriendProfileSnapshot) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .friend_profiles
-            .insert((profile.owner_agent_id, profile.friend_agent_id), profile);
-        Ok(())
-    }
-
-    fn find_direct_conversation(
-        &self,
-        left_agent_id: Uuid,
-        right_agent_id: Uuid,
-    ) -> Option<ConversationPreview> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let pair = ordered_pair(left_agent_id, right_agent_id);
-        let conversation_id = guard.direct_conversations.get(&pair)?;
-        guard
-            .conversations
-            .get(&left_agent_id)
-            .and_then(|items| items.iter().find(|item| item.id == *conversation_id))
-            .cloned()
-    }
-
-    fn find_direct_conversation_peer(&self, conversation_id: Uuid, agent_id: Uuid) -> Option<Uuid> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let owners = guard
-            .conversations
-            .iter()
-            .filter_map(|(owner_id, items)| {
-                items
-                    .iter()
-                    .any(|item| item.id == conversation_id && item.conversation_type.is_direct())
-                    .then_some(*owner_id)
-            })
-            .collect::<Vec<_>>();
-
-        if owners.len() != 2 || !owners.contains(&agent_id) {
-            return None;
-        }
-
-        owners.into_iter().find(|owner_id| *owner_id != agent_id)
     }
 
     fn conversation_exists(&self, conversation_id: Uuid) -> bool {
@@ -3064,157 +3106,6 @@ impl PlatformRepository for MemoryPlatformRepository {
         logs.sort_by(|left, right| right.created_at.cmp(&left.created_at));
         logs.truncate(limit);
         logs
-    }
-
-    fn insert_problem_workspace(&self, workspace: ProblemWorkspace) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard.problem_workspaces.insert(workspace.id, workspace);
-        Ok(())
-    }
-
-    fn update_problem_workspace(&self, workspace: ProblemWorkspace) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard.problem_workspaces.insert(workspace.id, workspace);
-        Ok(())
-    }
-
-    fn get_problem_workspace(&self, workspace_id: Uuid) -> Option<ProblemWorkspace> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.problem_workspaces.get(&workspace_id).cloned()
-    }
-
-    fn list_problem_workspaces(&self, agent_id: Uuid, limit: usize) -> Vec<ProblemWorkspace> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut workspaces = guard
-            .problem_workspaces
-            .values()
-            .filter(|workspace| {
-                workspace.owner_agent_id == agent_id
-                    || workspace.participant_agent_ids.contains(&agent_id)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        workspaces.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        workspaces.truncate(limit);
-        workspaces
-    }
-
-    fn insert_problem_workspace_progress_record(
-        &self,
-        record: ProblemWorkspaceProgressRecord,
-    ) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if let Some(workspace) = guard.problem_workspaces.get_mut(&record.workspace_id) {
-            workspace.updated_at = record.created_at;
-        }
-        guard
-            .problem_workspace_progress_records
-            .entry(record.workspace_id)
-            .or_default()
-            .push(record);
-        Ok(())
-    }
-
-    fn get_problem_workspace_progress_record(
-        &self,
-        record_id: Uuid,
-    ) -> Option<ProblemWorkspaceProgressRecord> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .problem_workspace_progress_records
-            .values()
-            .flat_map(|records| records.iter())
-            .find(|record| record.id == record_id)
-            .cloned()
-    }
-
-    fn update_problem_workspace_progress_record(
-        &self,
-        record: ProblemWorkspaceProgressRecord,
-    ) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        let records = guard
-            .problem_workspace_progress_records
-            .entry(record.workspace_id)
-            .or_default();
-        if let Some(existing) = records.iter_mut().find(|item| item.id == record.id) {
-            *existing = record;
-        }
-        Ok(())
-    }
-
-    fn list_problem_workspace_progress_records(
-        &self,
-        workspace_id: Uuid,
-        limit: usize,
-    ) -> Vec<ProblemWorkspaceProgressRecord> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut records = guard
-            .problem_workspace_progress_records
-            .get(&workspace_id)
-            .cloned()
-            .unwrap_or_default();
-        records.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-        records.truncate(limit);
-        records
-    }
-
-    fn insert_problem_workspace_invitation(
-        &self,
-        invitation: ProblemWorkspaceInvitation,
-    ) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .problem_workspace_invitations
-            .insert(invitation.id, invitation);
-        Ok(())
-    }
-
-    fn get_problem_workspace_invitation(
-        &self,
-        invitation_id: Uuid,
-    ) -> Option<ProblemWorkspaceInvitation> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard
-            .problem_workspace_invitations
-            .get(&invitation_id)
-            .cloned()
-    }
-
-    fn update_problem_workspace_invitation(
-        &self,
-        invitation: ProblemWorkspaceInvitation,
-    ) -> AppResult<()> {
-        let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .problem_workspace_invitations
-            .insert(invitation.id, invitation);
-        Ok(())
-    }
-
-    fn list_problem_workspace_invitations(
-        &self,
-        agent_id: Uuid,
-        workspace_id: Option<Uuid>,
-        limit: usize,
-    ) -> Vec<ProblemWorkspaceInvitation> {
-        let guard = self.inner.read().expect("memory repo lock poisoned");
-        let mut invitations = guard
-            .problem_workspace_invitations
-            .values()
-            .filter(|invitation| {
-                invitation.inviter_agent_id == agent_id || invitation.invitee_agent_id == agent_id
-            })
-            .filter(|invitation| {
-                workspace_id
-                    .map(|value| invitation.workspace_id == value)
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        invitations.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-        invitations.truncate(limit);
-        invitations
     }
 }
 
@@ -3379,8 +3270,19 @@ mod tests {
                     codex_profile: "default".into(),
                     model: None,
                     reasoning_effort: None,
+                    reasoning_summary: None,
+                    verbosity: None,
+                    personality: None,
+                    service_tier: None,
                     sandbox_mode: "workspace_write".into(),
                     approval_policy: "never".into(),
+                    network_access: None,
+                    web_search: None,
+                    feature_multi_agent: None,
+                    feature_remote_plugin: None,
+                    feature_hooks: None,
+                    feature_goals: None,
+                    feature_shell_tool: None,
                     max_run_seconds: 1_800,
                     next_run_at: now,
                     lease_owner: None,
@@ -3478,8 +3380,19 @@ mod tests {
                     codex_profile: "default".into(),
                     model: None,
                     reasoning_effort: None,
+                    reasoning_summary: None,
+                    verbosity: None,
+                    personality: None,
+                    service_tier: None,
                     sandbox_mode: "workspace_write".into(),
                     approval_policy: "never".into(),
+                    network_access: None,
+                    web_search: None,
+                    feature_multi_agent: None,
+                    feature_remote_plugin: None,
+                    feature_hooks: None,
+                    feature_goals: None,
+                    feature_shell_tool: None,
                     max_run_seconds: 1_800,
                     next_run_at: claimed_at,
                     lease_owner: None,
@@ -3526,6 +3439,90 @@ mod tests {
     }
 
     #[test]
+    fn trigger_shutdown_marks_owned_running_cycles_as_lease_lost() {
+        let repo = MemoryPlatformRepository::default();
+        let agent_id = Uuid::new_v4();
+        let config_id = Uuid::new_v4();
+        let company_id = Uuid::new_v4();
+        let claimed_at = now_utc();
+        seed_logged_in_company(&repo, company_id, claimed_at);
+        repo.inner
+            .write()
+            .expect("memory repo lock poisoned")
+            .agent_codex_trigger_configs
+            .insert(
+                agent_id,
+                AgentCodexTriggerConfig {
+                    id: config_id,
+                    company_id,
+                    agent_profile_id: agent_id,
+                    status: AGENT_CODEX_TRIGGER_STATUS_ACTIVE.into(),
+                    interval_seconds: 3_600,
+                    codex_profile: "default".into(),
+                    model: None,
+                    reasoning_effort: None,
+                    reasoning_summary: None,
+                    verbosity: None,
+                    personality: None,
+                    service_tier: None,
+                    sandbox_mode: "workspace_write".into(),
+                    approval_policy: "never".into(),
+                    network_access: None,
+                    web_search: None,
+                    feature_multi_agent: None,
+                    feature_remote_plugin: None,
+                    feature_hooks: None,
+                    feature_goals: None,
+                    feature_shell_tool: None,
+                    max_run_seconds: 1_800,
+                    next_run_at: claimed_at,
+                    lease_owner: None,
+                    lease_expires_at: None,
+                    manual_run_requested_at: None,
+                    wake_requested_at: None,
+                    wake_reason: None,
+                    last_run_at: None,
+                    last_success_at: None,
+                    last_error: None,
+                    consecutive_failure_count: 0,
+                    created_by_human_user_id: Uuid::new_v4(),
+                    updated_by_human_user_id: None,
+                    created_at: claimed_at,
+                    updated_at: claimed_at,
+                },
+            );
+        repo.claim_due_agent_codex_trigger_configs("worker-1", claimed_at, 1)
+            .expect("trigger should be claimed");
+        let mut run = running_codex_run(agent_id);
+        run.trigger_config_id = config_id;
+        let run_id = run.id;
+        repo.insert_agent_codex_trigger_run(run)
+            .expect("running cycle should be inserted");
+
+        let stopped_at = claimed_at + chrono::Duration::seconds(5);
+        let abandoned = repo
+            .abandon_agent_codex_trigger_leases("worker-1", stopped_at)
+            .expect("owned leases should be abandoned");
+
+        assert_eq!(abandoned, 1);
+        let guard = repo.inner.read().expect("memory repo lock poisoned");
+        let config = guard
+            .agent_codex_trigger_configs
+            .get(&agent_id)
+            .expect("trigger config");
+        assert!(config.lease_owner.is_none());
+        assert!(config.lease_expires_at.is_none());
+        assert_eq!(config.next_run_at, claimed_at);
+        let run = guard
+            .agent_codex_trigger_runs
+            .get(&run_id)
+            .expect("trigger run");
+        assert_eq!(run.status, AGENT_CODEX_RUN_STATUS_LEASE_LOST);
+        assert_eq!(run.finished_at, Some(stopped_at));
+        assert_eq!(run.activity_phase, "lease_lost");
+    }
+
+    #[test]
     fn manual_wake_requested_during_a_run_is_preserved_for_the_next_cycle() {
         let repo = MemoryPlatformRepository::default();
         let agent_id = Uuid::new_v4();
@@ -3548,8 +3545,19 @@ mod tests {
                     codex_profile: "default".into(),
                     model: None,
                     reasoning_effort: None,
+                    reasoning_summary: None,
+                    verbosity: None,
+                    personality: None,
+                    service_tier: None,
                     sandbox_mode: "workspace_write".into(),
                     approval_policy: "never".into(),
+                    network_access: None,
+                    web_search: None,
+                    feature_multi_agent: None,
+                    feature_remote_plugin: None,
+                    feature_hooks: None,
+                    feature_goals: None,
+                    feature_shell_tool: None,
                     max_run_seconds: 1_800,
                     next_run_at: claimed_at,
                     lease_owner: None,

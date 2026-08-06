@@ -15,4 +15,5 @@ tokio.workspace = true
 uuid.workspace = true
 ai-chat-application = { path = "../application" }
 ai-chat-domain = { path = "../domain" }
+ai-chat-infrastructure = { path = "../infrastructure" }
 ai-chat-shared = { path = "../shared" }

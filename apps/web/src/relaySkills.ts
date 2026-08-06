@@ -1,5 +1,7 @@
 import employeeSkill from "../../../skills/relay-company-employee/SKILL.md?raw";
+import employeeSkillEn from "../../../skills/relay-company-employee/references/en.md?raw";
 import staffingManagerSkill from "../../../skills/relay-company-staffing-manager/SKILL.md?raw";
+import staffingManagerSkillEn from "../../../skills/relay-company-staffing-manager/references/en.md?raw";
 import projectManagerSkill from "../../../skills/relay-profession-project-manager/SKILL.md?raw";
 import productManagerSkill from "../../../skills/relay-profession-product-manager/SKILL.md?raw";
 import technicalManagerSkill from "../../../skills/relay-profession-technical-manager/SKILL.md?raw";
@@ -51,6 +53,19 @@ export type RelaySkillIdentity = {
   mcpServerName: string;
 };
 
+export type RelaySkillLanguage = "zh-CN" | "en";
+
+export type RelayProfessionSkillDefinition = {
+  key: string;
+  label: string;
+  label_en: string;
+  description: string;
+  description_en: string;
+  skill_name: string;
+  skill_markdown: string;
+  skill_markdown_en: string;
+};
+
 export const RELAY_EMPLOYEE_SKILL: RelaySkillDocument = {
   name: "relay-company-employee",
   title: "公司协作 Agent Skill",
@@ -61,6 +76,18 @@ export const RELAY_STAFFING_MANAGER_SKILL: RelaySkillDocument = {
   name: "relay-company-staffing-manager",
   title: "人员管理 Agent Skill",
   content: staffingManagerSkill,
+};
+
+export const RELAY_EMPLOYEE_SKILL_EN: RelaySkillDocument = {
+  name: "relay-company-employee",
+  title: "Company Collaboration Agent Skill",
+  content: employeeSkillEn,
+};
+
+export const RELAY_STAFFING_MANAGER_SKILL_EN: RelaySkillDocument = {
+  name: "relay-company-staffing-manager",
+  title: "Staffing Governance Agent Skill",
+  content: staffingManagerSkillEn,
 };
 
 export const RELAY_PROFESSION_SKILLS: Record<string, RelaySkillDocument> = {
@@ -84,6 +111,17 @@ export const RELAY_PROFESSION_SKILLS: Record<string, RelaySkillDocument> = {
   operations_specialist: { name: "relay-profession-operations-specialist", title: "运营专员职业 Skill", content: operationsSpecialistSkill },
   general_member: { name: "relay-profession-general-member", title: "通用成员职业 Skill", content: generalMemberSkill },
 };
+
+export function relayProfessionSkillDocument(
+  profession: RelayProfessionSkillDefinition,
+  language: RelaySkillLanguage,
+): RelaySkillDocument {
+  return {
+    name: profession.skill_name,
+    title: language === "en" ? `${profession.label_en} Profession Skill` : `${profession.label}职业 Skill`,
+    content: language === "en" ? profession.skill_markdown_en : profession.skill_markdown,
+  };
+}
 
 function skillSectionKind(title: string): RelaySkillSection["kind"] {
   if (/权限|边界|禁止|停止/.test(title)) return "boundary";
@@ -197,17 +235,25 @@ function bindSkillToAgent(
   document: RelaySkillDocument,
   identity: RelaySkillIdentity,
   suffix: string,
+  language: RelaySkillLanguage,
 ) {
   const handle = identity.handle.replace(/^@/, "");
   const name = `relay-${skillIdentityToken(identity)}-${suffix}`;
-  const identityGuide = [
+  const identityGuide = (language === "en" ? [
+    "## Relay Account Binding",
+    "",
+    `- This Skill represents only Relay Agent \`@${handle}\`.`,
+    `- Always use Relay tools provided by Codex MCP Server \`${identity.mcpServerName}\`.`,
+    `- After the first \`agent.bootstrap\`, verify the returned handle is \`${handle}\`; stop immediately on mismatch.`,
+    "- When one Codex setup has several Relay Agents, never mix IDs, sessions, projects, or messages returned by different MCP Servers.",
+  ] : [
     "## Relay 账号绑定",
     "",
     `- 本 Skill 只代表 Relay Agent \`@${handle}\`。`,
     `- 始终使用 Codex MCP Server \`${identity.mcpServerName}\` 提供的 Relay 工具。`,
     `- 首次调用 \`agent.bootstrap\` 后确认返回的 handle 为 \`${handle}\`；不一致时立即停止，避免串用其他 Agent 身份。`,
     "- 同一 Codex 配置多个 Relay Agent 时，不混用不同 MCP Server 返回的 ID、会话、项目或消息。",
-  ].join("\n");
+  ]).join("\n");
   const content = document.content
     .replace(/^name: .+$/m, `name: ${name}`)
     .replace(/`relay-company-employee`/g, `\`${name.replace(/-staffing$/, "-employee")}\``)
@@ -224,24 +270,31 @@ export function getRelaySkillDocuments(
   permissions: string[],
   identity: RelaySkillIdentity,
   professionKey: string,
+  language: RelaySkillLanguage = "zh-CN",
+  professionDefinition?: RelayProfessionSkillDefinition,
 ): RelaySkillDocument[] {
+  const employeeSkillDocument = language === "en" ? RELAY_EMPLOYEE_SKILL_EN : RELAY_EMPLOYEE_SKILL;
+  const staffingSkillDocument = language === "en" ? RELAY_STAFFING_MANAGER_SKILL_EN : RELAY_STAFFING_MANAGER_SKILL;
   const employeeDocument = {
-    ...RELAY_EMPLOYEE_SKILL,
-    content: tailorSkillToPermissions(RELAY_EMPLOYEE_SKILL.content, permissions),
+    ...employeeSkillDocument,
+    content: tailorSkillToPermissions(employeeSkillDocument.content, permissions),
   };
-  const documents = [bindSkillToAgent(employeeDocument, identity, "employee")];
-  const professionDocument = RELAY_PROFESSION_SKILLS[professionKey] ?? RELAY_PROFESSION_SKILLS.general_member;
+  const documents = [bindSkillToAgent(employeeDocument, identity, "employee", language)];
+  const professionDocument = professionDefinition
+    ? relayProfessionSkillDocument(professionDefinition, language)
+    : RELAY_PROFESSION_SKILLS[professionKey] ?? RELAY_PROFESSION_SKILLS.general_member;
   documents.push(bindSkillToAgent(
     professionDocument,
     identity,
     `profession-${professionKey.replace(/_/g, "-")}`,
+    language,
   ));
   if (permissions.some((permission) => permission.startsWith("agent.staff."))) {
     const staffingDocument = {
-      ...RELAY_STAFFING_MANAGER_SKILL,
-      content: tailorSkillToPermissions(RELAY_STAFFING_MANAGER_SKILL.content, permissions),
+      ...staffingSkillDocument,
+      content: tailorSkillToPermissions(staffingSkillDocument.content, permissions),
     };
-    documents.push(bindSkillToAgent(staffingDocument, identity, "staffing"));
+    documents.push(bindSkillToAgent(staffingDocument, identity, "staffing", language));
   }
   return documents;
 }

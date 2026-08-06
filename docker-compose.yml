@@ -16,6 +16,18 @@ services:
       timeout: 5s
       retries: 20
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    command: /app/scripts/run_pg_migrations.sh ensure
+    environment:
+      DATABASE_URL: ${SERVER_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}
+      PG_CONTAINER: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   redis:
     image: redis:7
     profiles: ["future"]
@@ -37,6 +49,50 @@ services:
     volumes:
       - minio_data:/data
 
+  harness:
+    image: ${HARNESS_IMAGE:-harness/harness:latest}
+    profiles: ["harness-self-hosted"]
+    container_name: ai-chat-harness
+    restart: unless-stopped
+    environment:
+      GITNESS_HTTP_HOST: 0.0.0.0
+      GITNESS_HTTP_PORT: 3000
+      GITNESS_HTTP_PROTO: http
+      GITNESS_URL_BASE: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      GITNESS_URL_API: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}/api
+      GITNESS_URL_UI: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      GITNESS_URL_INTERNAL: http://harness:3000
+      GITNESS_URL_CONTAINER: http://harness:3000
+      GITNESS_URL_GIT: ${HARNESS_GIT_BASE_URL:-http://127.0.0.1:3000/git}
+      GITNESS_URL_GIT_SSH: ssh://git@${HARNESS_SSH_PUBLIC_HOST:-127.0.0.1}:${HARNESS_SSH_PORT:-3022}
+      GITNESS_PRINCIPAL_ADMIN_EMAIL: ${HARNESS_ADMIN_EMAIL:-admin@relay.local}
+      GITNESS_PRINCIPAL_ADMIN_PASSWORD: ${HARNESS_ADMIN_PASSWORD:-change-me-harness-admin}
+      GITNESS_METRIC_ENABLED: "false"
+      GITNESS_WEBHOOK_ALLOW_LOOPBACK: "true"
+      GITNESS_SSH_ENABLE: "true"
+      GITNESS_SSH_HOST: 0.0.0.0
+      GITNESS_SSH_PORT: 3022
+      GITNESS_GITSPACE_ENABLE: ${HARNESS_GITSPACE_ENABLE:-true}
+      ENABLE_CI: ${HARNESS_CI_ENABLED:-true}
+      GITNESS_DOCKER_HOST: unix:///var/run/docker.sock
+      GITNESS_DATABASE_DRIVER: sqlite3
+      GITNESS_DATABASE_DATASOURCE: /data/database.sqlite
+      GITNESS_GIT_ROOT: /data
+      GITNESS_REGISTRY_STORAGE_TYPE: filesystem
+      GITNESS_REGISTRY_FILESYSTEM_ROOT_DIRECTORY: /data/registry
+      XDG_CACHE_HOME: /data
+    ports:
+      - "${HARNESS_HOST_PORT:-3000}:3000"
+      - "${HARNESS_SSH_PORT:-3022}:3022"
+    volumes:
+      - harness_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/v1/system/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
   server:
     build:
       context: .
@@ -45,7 +101,6 @@ services:
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 8080
-      REPOSITORY_MODE: postgres
       DATABASE_URL: ${SERVER_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}
       ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-true}
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-dev-admin-token}
@@ -57,11 +112,32 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:35173}
       REQUIRE_EMAIL_VERIFICATION: ${REQUIRE_EMAIL_VERIFICATION:-false}
       EMAIL_DELIVERY_WEBHOOK_URL: ${EMAIL_DELIVERY_WEBHOOK_URL:-}
+      HARNESS_MODE: ${HARNESS_MODE:-disabled}
+      HARNESS_BASE_URL: ${HARNESS_BASE_URL:-http://harness:3000}
+      HARNESS_PUBLIC_BASE_URL: ${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:3000}
+      HARNESS_SPACE_PREFIX: ${HARNESS_SPACE_PREFIX:-u-}
+      HARNESS_REQUEST_TIMEOUT_SECONDS: ${HARNESS_REQUEST_TIMEOUT_SECONDS:-15}
+      HARNESS_CREDENTIALS_ROOT: /relay-harness-credentials
       DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-16}
+      AGENT_TRIGGER_MANAGED_PROJECTS_ROOT: ${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-/tmp/relay-agent-trigger/projects}
+      AGENT_TRIGGER_MODEL_CATALOG_PATH: /relay-trigger-state/codex-models.json
+      AGENT_TRIGGER_STATE_ROOT: /relay-trigger-state
+      AGENT_TRIGGER_CODEX_CONTROL_ROOT: /relay-trigger-state/codex-control
+      AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS: ${AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS:-}
+      HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS: ${HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS:-}
+      RELAY_GIT_PROVIDER_KIND: ${RELAY_GIT_PROVIDER_KIND:-}
+      RELAY_GIT_PROVIDER_BASE_URL: ${RELAY_GIT_PROVIDER_BASE_URL:-}
+      RELAY_GIT_PROVIDER_CLONE_BASE_URL: ${RELAY_GIT_PROVIDER_CLONE_BASE_URL:-}
+      RELAY_GIT_PROVIDER_PARENT_REF: ${RELAY_GIT_PROVIDER_PARENT_REF:-}
+      RELAY_GIT_PROVIDER_USERNAME: ${RELAY_GIT_PROVIDER_USERNAME:-}
+      RELAY_GIT_PROVIDER_TOKEN: ${RELAY_GIT_PROVIDER_TOKEN:-}
       WEB_DIST_DIR: /app/web-dist
+    volumes:
+      - ${AGENT_TRIGGER_STATE_ROOT:-./.relay-agent-trigger}:/relay-trigger-state:rw
+      - harness_credentials:/relay-harness-credentials
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ready || exit 1"]
       interval: 5s
@@ -73,3 +149,5 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  harness_data:
+  harness_credentials:

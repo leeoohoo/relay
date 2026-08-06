@@ -1,12 +1,20 @@
-use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     process::Command,
-    time::timeout,
+    time::{sleep, timeout},
 };
+use uuid::Uuid;
 
 use ai_chat_domain::company::{
     AGENT_CODEX_APPROVAL_TOOL_COMMAND, AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE,
@@ -14,19 +22,69 @@ use ai_chat_domain::company::{
 };
 use ai_chat_shared::{AppError, AppResult};
 
+use crate::codex_control::{
+    managed_profile_id, CodexControlStore, CodexDefaultConfigSummary, CodexMcpServerInput,
+    CodexMcpServerView, CODEX_MCP_TRANSPORT_HTTP, CODEX_MCP_TRANSPORT_STDIO,
+};
+
 const DEFAULT_RUN_TOKEN_ENV: &str = "RELAY_AGENT_RUN_TOKEN";
 const MAX_STDERR_BYTES: usize = 32 * 1024;
 const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexModelReasoningEffort {
+    pub effort: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexModelInfo {
+    pub id: String,
+    pub display_name: String,
+    pub default_reasoning_effort: Option<String>,
+    pub reasoning_efforts: Vec<CodexModelReasoningEffort>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexModelCatalogSnapshot {
+    pub codex_profile: String,
+    pub bundled: bool,
+    pub models: Vec<CodexModelInfo>,
+    pub source: String,
+    pub discovered_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CodexModelCatalogFile {
+    pub catalogs: Vec<CodexModelCatalogSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodexPluginCatalogDiscovery {
+    pub installed: Value,
+    pub available: Value,
+    pub marketplaces: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexDefaultAuthProbe {
+    pub status: String,
+    pub method: Option<String>,
+    pub config: CodexDefaultConfigSummary,
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexTriggerRunner {
     executable: PathBuf,
+    executable_source: String,
     prefix_args: Vec<String>,
     mcp_url: String,
     mcp_server_name: String,
     run_token_env_name: String,
     inherited_environment: HashMap<String, String>,
     shell_excluded_environment_names: Vec<String>,
+    managed_profile_homes_root: PathBuf,
+    managed_cli_home: PathBuf,
 }
 
 #[derive(Clone)]
@@ -35,8 +93,19 @@ pub struct CodexRunRequest {
     pub codex_profile: String,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_summary: Option<String>,
+    pub verbosity: Option<String>,
+    pub personality: Option<String>,
+    pub service_tier: Option<String>,
     pub sandbox_mode: String,
     pub approval_policy: String,
+    pub network_access: bool,
+    pub web_search: String,
+    pub feature_multi_agent: bool,
+    pub feature_remote_plugin: bool,
+    pub feature_hooks: bool,
+    pub feature_goals: bool,
+    pub feature_shell_tool: bool,
     pub max_run_seconds: u64,
     pub prompt: String,
     pub existing_thread_id: Option<String>,
@@ -44,6 +113,7 @@ pub struct CodexRunRequest {
     pub environment: HashMap<String, String>,
     pub approval_handler: Option<Arc<dyn CodexApprovalHandler>>,
     pub progress_handler: Option<Arc<dyn CodexProgressHandler>>,
+    pub cancellation_handler: Option<Arc<dyn CodexCancellationHandler>>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +125,23 @@ pub struct CodexProgressEvent {
 
 pub trait CodexProgressHandler: Send + Sync {
     fn report(&self, event: CodexProgressEvent);
+}
+
+pub trait CodexCancellationHandler: Send + Sync {
+    fn should_cancel(&self) -> bool;
+}
+
+async fn wait_for_cancellation(handler: Option<&Arc<dyn CodexCancellationHandler>>) {
+    let Some(handler) = handler else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    loop {
+        sleep(Duration::from_millis(500)).await;
+        if handler.should_cancel() {
+            return;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +171,7 @@ pub enum CodexRunStatus {
     Succeeded,
     Failed,
     TimedOut,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -119,9 +207,14 @@ struct JsonlEvents {
 
 impl CodexTriggerRunner {
     pub fn from_env() -> AppResult<Self> {
-        let executable = std::env::var("AGENT_TRIGGER_CODEX_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("codex"));
+        let control_store = CodexControlStore::from_env()?;
+        let configured_executable = std::env::var("AGENT_TRIGGER_CODEX_BIN")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let (executable, executable_source) = resolve_codex_executable(
+            configured_executable.as_deref(),
+            &control_store.managed_cli_executable(),
+        );
         let prefix_args = std::env::var("AGENT_TRIGGER_CODEX_PREFIX_ARGS_JSON")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -145,6 +238,13 @@ impl CodexTriggerRunner {
             mcp_server_name,
             DEFAULT_RUN_TOKEN_ENV.into(),
         )?;
+        runner.executable_source = executable_source;
+        runner.managed_profile_homes_root = control_store
+            .managed_profile_home(Uuid::nil())
+            .parent()
+            .expect("managed profile home has a parent")
+            .to_path_buf();
+        runner.managed_cli_home = control_store.managed_cli_home();
         let allowlist = std::env::var("AGENT_TRIGGER_CODEX_ENV_ALLOWLIST")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -189,6 +289,7 @@ impl CodexTriggerRunner {
         }
         Ok(Self {
             executable,
+            executable_source: "explicit".into(),
             prefix_args,
             mcp_url,
             mcp_server_name,
@@ -199,7 +300,21 @@ impl CodexTriggerRunner {
                 run_token_env_name.clone(),
             ],
             run_token_env_name,
+            managed_profile_homes_root: PathBuf::from(".relay-agent-trigger")
+                .join("codex-profiles")
+                .join("homes"),
+            managed_cli_home: PathBuf::from(".relay-agent-trigger")
+                .join("codex-cli")
+                .join("home"),
         })
+    }
+
+    pub fn executable_path(&self) -> &Path {
+        &self.executable
+    }
+
+    pub fn executable_source(&self) -> &str {
+        &self.executable_source
     }
 
     pub fn detect_version(&self) -> Option<String> {
@@ -215,6 +330,465 @@ impl CodexTriggerRunner {
         }
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         (!version.is_empty()).then(|| truncate(&version, 200))
+    }
+
+    pub async fn probe_default_auth(&self) -> AppResult<CodexDefaultAuthProbe> {
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .arg("login")
+            .arg("status")
+            .env_clear()
+            .envs(&self.inherited_environment)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(15), command.output())
+            .await
+            .map_err(|_| AppError::Internal("Codex default login status timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!("failed to start Codex login status: {error}"))
+            })?;
+        let mut probe = classify_default_auth_probe(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        );
+        probe.config = self.read_default_config_summary(probe.config.credential_hint.clone());
+        Ok(probe)
+    }
+
+    fn read_default_config_summary(
+        &self,
+        credential_hint: Option<String>,
+    ) -> CodexDefaultConfigSummary {
+        let codex_home = self
+            .inherited_environment
+            .get("CODEX_HOME")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                self.inherited_environment
+                    .get("HOME")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|home| PathBuf::from(home).join(".codex"))
+            });
+        let Some(codex_home) = codex_home else {
+            return CodexDefaultConfigSummary {
+                credential_hint,
+                ..CodexDefaultConfigSummary::default()
+            };
+        };
+        let config_path = codex_home.join("config.toml");
+        let auth_path = codex_home.join("auth.json");
+        let mut summary = CodexDefaultConfigSummary {
+            codex_home: Some(codex_home.display().to_string()),
+            config_path: Some(config_path.display().to_string()),
+            config_exists: config_path.is_file(),
+            auth_path: Some(auth_path.display().to_string()),
+            auth_exists: auth_path.is_file(),
+            credential_hint,
+            ..CodexDefaultConfigSummary::default()
+        };
+        let Ok(metadata) = std::fs::metadata(&config_path) else {
+            return summary;
+        };
+        if metadata.len() > 2 * 1024 * 1024 {
+            return summary;
+        }
+        let Ok(content) = std::fs::read_to_string(&config_path) else {
+            return summary;
+        };
+        populate_default_config_summary(&content, &mut summary);
+        summary
+    }
+
+    pub async fn provision_auth_profile(
+        &self,
+        profile_id: Uuid,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+    ) -> AppResult<()> {
+        let codex_home = self.managed_profile_homes_root.join(profile_id.to_string());
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("cannot create managed Codex home: {error}"))
+            })?;
+        write_managed_openai_base_url(&codex_home, base_url).await?;
+        if let Some(api_key) = api_key {
+            if api_key.trim().is_empty() || api_key.chars().any(char::is_whitespace) {
+                return Err(AppError::Validation("OpenAI API key is invalid".into()));
+            }
+            let mut command = Command::new(&self.executable);
+            command
+                .args(&self.prefix_args)
+                .arg("login")
+                .arg("--with-api-key")
+                .env_clear()
+                .envs(&self.inherited_environment)
+                .env("CODEX_HOME", &codex_home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            let mut child = command.spawn().map_err(|error| {
+                AppError::Internal(format!("failed to start Codex login: {error}"))
+            })?;
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| AppError::Internal("Codex login stdin was not available".into()))?;
+            stdin.write_all(api_key.as_bytes()).await.map_err(|error| {
+                AppError::Internal(format!("failed to write Codex login input: {error}"))
+            })?;
+            stdin.write_all(b"\n").await.map_err(|error| {
+                AppError::Internal(format!("failed to finish Codex login input: {error}"))
+            })?;
+            drop(stdin);
+            let output = timeout(Duration::from_secs(90), child.wait_with_output())
+                .await
+                .map_err(|_| AppError::Internal("Codex API key login timed out".into()))?
+                .map_err(|error| AppError::Internal(format!("Codex login failed: {error}")))?;
+            if !output.status.success() {
+                return Err(AppError::Validation(format!(
+                    "Codex rejected the API key: {}",
+                    truncate(
+                        &sanitize_error(&String::from_utf8_lossy(&output.stderr)),
+                        1_000
+                    )
+                )));
+            }
+        }
+
+        let mut status = Command::new(&self.executable);
+        status
+            .args(&self.prefix_args)
+            .arg("login")
+            .arg("status")
+            .env_clear()
+            .envs(&self.inherited_environment)
+            .env("CODEX_HOME", &codex_home)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(30), status.output())
+            .await
+            .map_err(|_| AppError::Internal("Codex login status timed out".into()))?
+            .map_err(|error| AppError::Internal(format!("Codex login status failed: {error}")))?;
+        if !output.status.success() {
+            return Err(AppError::Validation(
+                "Codex did not persist the API key login".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn update_cli(&self) -> AppResult<String> {
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .arg("update")
+            .env_clear()
+            .envs(&self.inherited_environment)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        if self.executable_source == "managed" {
+            command.env("CODEX_HOME", &self.managed_cli_home);
+        }
+        let output = timeout(Duration::from_secs(300), command.output())
+            .await
+            .map_err(|_| AppError::Internal("Codex CLI update timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!("failed to start Codex update: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(AppError::Internal(format!(
+                "Codex CLI update failed: {}",
+                truncate(
+                    &sanitize_error(&String::from_utf8_lossy(&output.stderr)),
+                    2_000
+                )
+            )));
+        }
+        self.detect_version().ok_or_else(|| {
+            AppError::Internal(
+                "Codex CLI update finished but its version cannot be detected".into(),
+            )
+        })
+    }
+
+    pub async fn discover_mcp_servers(
+        &self,
+        target_selector: &str,
+    ) -> AppResult<Vec<CodexMcpServerView>> {
+        let configured_names = self.configured_mcp_server_names(target_selector)?;
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .env_clear()
+            .envs(&self.inherited_environment);
+        self.apply_profile_environment(&mut command, target_selector)?;
+        self.apply_profile_arguments(&mut command, target_selector)?;
+        command
+            .arg("mcp")
+            .arg("list")
+            .arg("--json")
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(30), command.output())
+            .await
+            .map_err(|_| AppError::Internal("Codex MCP discovery timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!("failed to start Codex MCP discovery: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(AppError::Internal(format!(
+                "Codex MCP discovery failed: {}",
+                truncate(
+                    &sanitize_error(&String::from_utf8_lossy(&output.stderr)),
+                    2_000
+                )
+            )));
+        }
+        let entries = serde_json::from_slice::<Vec<Value>>(&output.stdout).map_err(|error| {
+            AppError::Internal(format!("Codex MCP list returned invalid JSON: {error}"))
+        })?;
+        let mut servers = entries
+            .into_iter()
+            .filter_map(|entry| safe_mcp_server_view(entry, &configured_names))
+            .collect::<Vec<_>>();
+        servers.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(servers)
+    }
+
+    pub async fn add_mcp_server(&self, input: &CodexMcpServerInput) -> AppResult<()> {
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .env_clear()
+            .envs(&self.inherited_environment);
+        self.apply_profile_environment(&mut command, &input.target_selector)?;
+        self.apply_profile_arguments(&mut command, &input.target_selector)?;
+        command.arg("mcp").arg("add").arg(&input.name);
+        match input.transport.as_str() {
+            CODEX_MCP_TRANSPORT_HTTP => {
+                if let Some(environment_name) = input.bearer_token_env_var.as_deref() {
+                    command.arg("--bearer-token-env-var").arg(environment_name);
+                }
+                command
+                    .arg("--url")
+                    .arg(input.url.as_deref().ok_or_else(|| {
+                        AppError::Validation("Streamable HTTP MCP requires a URL".into())
+                    })?);
+            }
+            CODEX_MCP_TRANSPORT_STDIO => {
+                command
+                    .arg("--")
+                    .arg(input.command.as_deref().ok_or_else(|| {
+                        AppError::Validation("stdio MCP requires a command".into())
+                    })?)
+                    .args(&input.args);
+            }
+            _ => {
+                return Err(AppError::Validation(
+                    "unsupported Codex MCP transport".into(),
+                ))
+            }
+        }
+        command.stdin(Stdio::null()).kill_on_drop(true);
+        let output = timeout(Duration::from_secs(60), command.output())
+            .await
+            .map_err(|_| AppError::Internal("Codex MCP add timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!("failed to start Codex MCP add: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(AppError::Validation(format!(
+                "Codex rejected the MCP configuration: {}",
+                truncate(
+                    &sanitize_error(&String::from_utf8_lossy(&output.stderr)),
+                    2_000
+                )
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn remove_mcp_server(
+        &self,
+        target_selector: &str,
+        server_name: &str,
+    ) -> AppResult<()> {
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .env_clear()
+            .envs(&self.inherited_environment);
+        self.apply_profile_environment(&mut command, target_selector)?;
+        self.apply_profile_arguments(&mut command, target_selector)?;
+        command
+            .arg("mcp")
+            .arg("remove")
+            .arg(server_name)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(30), command.output())
+            .await
+            .map_err(|_| AppError::Internal("Codex MCP removal timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!("failed to start Codex MCP removal: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(AppError::Validation(format!(
+                "Codex could not remove the MCP server: {}",
+                truncate(
+                    &sanitize_error(&String::from_utf8_lossy(&output.stderr)),
+                    2_000
+                )
+            )));
+        }
+        Ok(())
+    }
+
+    pub async fn discover_models(
+        &self,
+        codex_profile: &str,
+        bundled: bool,
+    ) -> AppResult<CodexModelCatalogSnapshot> {
+        validate_config_key(codex_profile, "Codex profile")?;
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .env_clear()
+            .envs(&self.inherited_environment);
+        self.apply_profile_environment(&mut command, codex_profile)?;
+        self.apply_profile_arguments(&mut command, codex_profile)?;
+        command.arg("debug").arg("models");
+        if bundled {
+            command.arg("--bundled");
+        }
+        command.kill_on_drop(true);
+        let output = timeout(Duration::from_secs(20), command.output())
+            .await
+            .map_err(|_| AppError::Internal("local Codex model discovery timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "failed to start local Codex model discovery: {error}"
+                ))
+            })?;
+        if !output.status.success() {
+            let stderr = sanitize_error(&String::from_utf8_lossy(&output.stderr));
+            return Err(AppError::Internal(format!(
+                "local Codex model discovery failed: {}",
+                truncate(&stderr, 1_000)
+            )));
+        }
+        let catalog: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+            AppError::Internal(format!(
+                "local Codex returned an invalid model catalog: {error}"
+            ))
+        })?;
+        let mut models = BTreeMap::new();
+        collect_codex_models(&catalog, &mut models);
+        if models.is_empty() {
+            return Err(AppError::Internal(
+                "local Codex model catalog contained no selectable models".into(),
+            ));
+        }
+        Ok(CodexModelCatalogSnapshot {
+            codex_profile: codex_profile.to_string(),
+            bundled,
+            models: models
+                .into_iter()
+                .map(|(id, mut info)| {
+                    info.id = id;
+                    info
+                })
+                .collect(),
+            source: if bundled {
+                "local_codex_bundled".into()
+            } else {
+                "local_codex".into()
+            },
+            discovered_at: chrono::Utc::now(),
+        })
+    }
+
+    pub async fn discover_plugins(&self) -> AppResult<CodexPluginCatalogDiscovery> {
+        let plugins = self
+            .run_plugin_json(&["plugin", "list", "--available", "--json"], 30)
+            .await?;
+        let marketplaces = self
+            .run_plugin_json(&["plugin", "marketplace", "list", "--json"], 30)
+            .await?;
+        Ok(CodexPluginCatalogDiscovery {
+            installed: plugins
+                .get("installed")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            available: plugins
+                .get("available")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+            marketplaces: marketplaces
+                .get("marketplaces")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        })
+    }
+
+    pub async fn apply_plugin_operation(
+        &self,
+        operation: &str,
+        plugin_id: Option<&str>,
+    ) -> AppResult<Value> {
+        match operation {
+            "refresh" => Ok(json!({ "refreshed": true })),
+            "install" | "remove" => {
+                let plugin_id = plugin_id.ok_or_else(|| {
+                    AppError::Validation("plugin_id is required for this operation".into())
+                })?;
+                validate_plugin_id(plugin_id)?;
+                self.run_plugin_json(&["plugin", operation, plugin_id, "--json"], 120)
+                    .await
+            }
+            _ => Err(AppError::Validation(
+                "unsupported Codex plugin operation".into(),
+            )),
+        }
+    }
+
+    async fn run_plugin_json(&self, arguments: &[&str], timeout_seconds: u64) -> AppResult<Value> {
+        let mut command = Command::new(&self.executable);
+        command
+            .args(&self.prefix_args)
+            .args(arguments)
+            .env_clear()
+            .envs(&self.inherited_environment)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(timeout_seconds), command.output())
+            .await
+            .map_err(|_| AppError::Internal("local Codex plugin command timed out".into()))?
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "failed to start local Codex plugin command: {error}"
+                ))
+            })?;
+        if !output.status.success() {
+            let stderr = sanitize_error(&String::from_utf8_lossy(&output.stderr));
+            return Err(AppError::Internal(format!(
+                "local Codex plugin command failed: {}",
+                truncate(&stderr, 2_000)
+            )));
+        }
+        if output.stdout.is_empty() {
+            return Ok(json!({ "ok": true }));
+        }
+        serde_json::from_slice(&output.stdout).map_err(|error| {
+            AppError::Internal(format!(
+                "local Codex plugin command returned invalid JSON: {error}"
+            ))
+        })
     }
 
     pub async fn run(&self, request: CodexRunRequest) -> AppResult<CodexRunResult> {
@@ -258,18 +832,11 @@ impl CodexTriggerRunner {
             .arg("exec")
             .arg("--skip-git-repo-check")
             .arg("--json");
-        if request.codex_profile != "default" {
-            command.arg("--profile").arg(&request.codex_profile);
-        }
+        self.apply_profile_arguments(&mut command, &request.codex_profile)?;
         if let Some(model) = request.model.as_deref() {
             command.arg("--model").arg(model);
         }
-        if let Some(reasoning_effort) = request.reasoning_effort.as_deref() {
-            command.arg("--config").arg(format!(
-                "model_reasoning_effort={}",
-                toml_string(reasoning_effort)
-            ));
-        }
+        apply_managed_cli_settings(&mut command, request);
         command
             .arg("--sandbox")
             .arg(sandbox_mode)
@@ -297,11 +864,6 @@ impl CodexTriggerRunner {
             ))
             .arg("--config")
             .arg("shell_environment_policy.ignore_default_excludes=true");
-        if sandbox_mode == "workspace-write" {
-            command
-                .arg("--config")
-                .arg("sandbox_workspace_write.network_access=true");
-        }
         if let Some(thread_id) = resume_thread_id {
             command.arg("resume").arg(thread_id);
         }
@@ -316,6 +878,7 @@ impl CodexTriggerRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        self.apply_profile_environment(&mut command, &request.codex_profile)?;
         for (key, value) in &request.environment {
             command.env(key, value);
         }
@@ -358,11 +921,28 @@ impl CodexTriggerRunner {
         );
 
         let mut timed_out = false;
-        let wait_result = timeout(Duration::from_secs(request.max_run_seconds), child.wait()).await;
+        let mut cancelled = false;
+        let wait_result = tokio::select! {
+            result = timeout(Duration::from_secs(request.max_run_seconds), child.wait()) => Some(result),
+            _ = wait_for_cancellation(request.cancellation_handler.as_ref()) => {
+                cancelled = true;
+                None
+            }
+        };
         let exit_status = match wait_result {
-            Ok(result) => result.map_err(process_error)?,
-            Err(_) => {
+            Some(Ok(result)) => result.map_err(process_error)?,
+            Some(Err(_)) => {
                 timed_out = true;
+                terminate_process_tree(process_id);
+                match timeout(Duration::from_secs(5), child.wait()).await {
+                    Ok(result) => result.map_err(process_error)?,
+                    Err(_) => {
+                        kill_process_tree(process_id);
+                        child.wait().await.map_err(process_error)?
+                    }
+                }
+            }
+            None => {
                 terminate_process_tree(process_id);
                 match timeout(Duration::from_secs(5), child.wait()).await {
                     Ok(result) => result.map_err(process_error)?,
@@ -379,13 +959,17 @@ impl CodexTriggerRunner {
         if error_message.is_none() && !exit_status.success() && !stderr.trim().is_empty() {
             error_message = Some(truncate(&sanitize_error(&stderr), 2_000));
         }
-        if timed_out {
+        if cancelled {
+            error_message = Some("Codex run cancelled because the project was paused".into());
+        } else if timed_out {
             error_message = Some(format!(
                 "Codex run exceeded {} seconds",
                 request.max_run_seconds
             ));
         }
-        let mut status = if timed_out {
+        let mut status = if cancelled {
+            CodexRunStatus::Cancelled
+        } else if timed_out {
             CodexRunStatus::TimedOut
         } else if exit_status.success() && events.turn_completed && !events.turn_failed {
             CodexRunStatus::Succeeded
@@ -431,15 +1015,8 @@ impl CodexTriggerRunner {
         })?;
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args);
-        if request.codex_profile != "default" {
-            command.arg("--profile").arg(&request.codex_profile);
-        }
-        if let Some(reasoning_effort) = request.reasoning_effort.as_deref() {
-            command.arg("--config").arg(format!(
-                "model_reasoning_effort={}",
-                toml_string(reasoning_effort)
-            ));
-        }
+        self.apply_profile_arguments(&mut command, &request.codex_profile)?;
+        apply_managed_cli_settings(&mut command, request);
         command
             .arg("--config")
             .arg(format!(
@@ -465,11 +1042,6 @@ impl CodexTriggerRunner {
             ))
             .arg("--config")
             .arg("shell_environment_policy.ignore_default_excludes=true");
-        if sandbox_mode == "workspace-write" {
-            command
-                .arg("--config")
-                .arg("sandbox_workspace_write.network_access=true");
-        }
         command
             .arg("app-server")
             .arg("--stdio")
@@ -482,6 +1054,7 @@ impl CodexTriggerRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        self.apply_profile_environment(&mut command, &request.codex_profile)?;
         for (key, value) in &request.environment {
             command.env(key, value);
         }
@@ -510,21 +1083,23 @@ impl CodexTriggerRunner {
         })?;
         let stderr_task = tokio::spawn(read_limited_text(stderr, MAX_STDERR_BYTES));
 
-        let drive_result = timeout(
-            Duration::from_secs(request.max_run_seconds),
-            drive_app_server(
-                &mut stdin,
-                stdout,
-                request,
-                resume_thread_id,
-                sandbox_mode,
-                approval_handler.as_ref(),
-            ),
-        )
-        .await;
+        let drive_result = tokio::select! {
+            result = timeout(
+                Duration::from_secs(request.max_run_seconds),
+                drive_app_server(
+                    &mut stdin,
+                    stdout,
+                    request,
+                    resume_thread_id,
+                    sandbox_mode,
+                    approval_handler.as_ref(),
+                ),
+            ) => Some(result),
+            _ = wait_for_cancellation(request.cancellation_handler.as_ref()) => None,
+        };
         let mut outcome = match drive_result {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(error)) => ProcessOutcome {
+            Some(Ok(Ok(outcome))) => outcome,
+            Some(Ok(Err(error))) => ProcessOutcome {
                 status: CodexRunStatus::Failed,
                 thread_id: resume_thread_id.map(str::to_string),
                 exit_code: Some(1),
@@ -532,7 +1107,7 @@ impl CodexTriggerRunner {
                 error_message: Some(truncate(&sanitize_error(&error.to_string()), 2_000)),
                 turn_started: false,
             },
-            Err(_) => ProcessOutcome {
+            Some(Err(_)) => ProcessOutcome {
                 status: CodexRunStatus::TimedOut,
                 thread_id: resume_thread_id.map(str::to_string),
                 exit_code: None,
@@ -541,6 +1116,14 @@ impl CodexTriggerRunner {
                     "Codex run exceeded {} seconds while waiting for completion or approval",
                     request.max_run_seconds
                 )),
+                turn_started: true,
+            },
+            None => ProcessOutcome {
+                status: CodexRunStatus::Cancelled,
+                thread_id: resume_thread_id.map(str::to_string),
+                exit_code: None,
+                final_message: None,
+                error_message: Some("Codex run cancelled because the project was paused".into()),
                 turn_started: true,
             },
         };
@@ -571,6 +1154,501 @@ impl CodexTriggerRunner {
         }
         Ok(outcome)
     }
+
+    fn apply_profile_arguments(&self, command: &mut Command, codex_profile: &str) -> AppResult<()> {
+        validate_config_key(codex_profile, "Codex profile")?;
+        if codex_profile.starts_with("relay_") {
+            managed_profile_id(codex_profile).ok_or_else(|| {
+                AppError::Validation("managed Codex profile selector is invalid".into())
+            })?;
+        } else if codex_profile != "default" {
+            command.arg("--profile").arg(codex_profile);
+        }
+        Ok(())
+    }
+
+    fn apply_profile_environment(
+        &self,
+        command: &mut Command,
+        codex_profile: &str,
+    ) -> AppResult<()> {
+        if codex_profile.starts_with("relay_") {
+            let profile_id = managed_profile_id(codex_profile).ok_or_else(|| {
+                AppError::Validation("managed Codex profile selector is invalid".into())
+            })?;
+            command.env(
+                "CODEX_HOME",
+                self.managed_profile_homes_root.join(profile_id.to_string()),
+            );
+        }
+        Ok(())
+    }
+
+    fn codex_home_for_selector(&self, target_selector: &str) -> AppResult<Option<PathBuf>> {
+        if target_selector.starts_with("relay_") {
+            let profile_id = managed_profile_id(target_selector).ok_or_else(|| {
+                AppError::Validation("managed Codex profile selector is invalid".into())
+            })?;
+            return Ok(Some(
+                self.managed_profile_homes_root.join(profile_id.to_string()),
+            ));
+        }
+        if target_selector != "default" {
+            return Err(AppError::Validation(
+                "Codex MCP target environment is invalid".into(),
+            ));
+        }
+        Ok(self
+            .inherited_environment
+            .get("CODEX_HOME")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                self.inherited_environment
+                    .get("HOME")
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|home| PathBuf::from(home).join(".codex"))
+            }))
+    }
+
+    fn configured_mcp_server_names(
+        &self,
+        target_selector: &str,
+    ) -> AppResult<std::collections::HashSet<String>> {
+        let Some(codex_home) = self.codex_home_for_selector(target_selector)? else {
+            return Ok(std::collections::HashSet::new());
+        };
+        let config_path = codex_home.join("config.toml");
+        let Ok(metadata) = std::fs::metadata(&config_path) else {
+            return Ok(std::collections::HashSet::new());
+        };
+        if metadata.len() > 2 * 1024 * 1024 {
+            return Ok(std::collections::HashSet::new());
+        }
+        let Ok(content) = std::fs::read_to_string(config_path) else {
+            return Ok(std::collections::HashSet::new());
+        };
+        Ok(content
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('[') && line.ends_with(']'))
+            .filter_map(|line| first_section_name(&line[1..line.len() - 1], "mcp_servers."))
+            .collect())
+    }
+}
+
+fn safe_mcp_server_view(
+    entry: Value,
+    configured_names: &std::collections::HashSet<String>,
+) -> Option<CodexMcpServerView> {
+    let name = entry.get("name")?.as_str()?.to_string();
+    if name.is_empty() || name.len() > 160 || name.chars().any(char::is_control) {
+        return None;
+    }
+    let transport = entry.get("transport")?;
+    let transport_type = transport.get("type")?.as_str()?.to_string();
+    let (address, command, argument_count, bearer_token_env_var) = match transport_type.as_str() {
+        CODEX_MCP_TRANSPORT_HTTP => (
+            transport
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(safe_mcp_url),
+            None,
+            0,
+            transport
+                .get("bearer_token_env_var")
+                .and_then(Value::as_str)
+                .filter(|value| value.len() <= 128 && !value.chars().any(char::is_control))
+                .map(str::to_string),
+        ),
+        CODEX_MCP_TRANSPORT_STDIO => (
+            None,
+            transport
+                .get("command")
+                .and_then(Value::as_str)
+                .and_then(|value| {
+                    Path::new(value)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                })
+                .filter(|value| value.len() <= 256 && !value.chars().any(char::is_control))
+                .map(str::to_string),
+            transport
+                .get("args")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default(),
+            None,
+        ),
+        _ => (None, None, 0, None),
+    };
+    Some(CodexMcpServerView {
+        configured_by_user: configured_names.contains(&name),
+        name,
+        transport: transport_type,
+        enabled: entry
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        auth_status: entry
+            .get("auth_status")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        address,
+        command,
+        argument_count,
+        bearer_token_env_var,
+        startup_timeout_sec: entry.get("startup_timeout_sec").and_then(Value::as_u64),
+        tool_timeout_sec: entry.get("tool_timeout_sec").and_then(Value::as_u64),
+        disabled_reason: entry
+            .get("disabled_reason")
+            .and_then(Value::as_str)
+            .filter(|value| value.len() <= 500 && !value.chars().any(char::is_control))
+            .map(str::to_string),
+    })
+}
+
+fn safe_mcp_url(value: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(value).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    let result = url.to_string();
+    (result.len() <= 2_048).then_some(result)
+}
+
+fn classify_default_auth_probe(success: bool, stdout: &str, stderr: &str) -> CodexDefaultAuthProbe {
+    if !success {
+        return CodexDefaultAuthProbe {
+            status: "logged_out".into(),
+            method: None,
+            config: CodexDefaultConfigSummary::default(),
+        };
+    }
+    let combined = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    let method = if combined.contains("chatgpt") {
+        "chatgpt"
+    } else if combined.contains("api key") || combined.contains("api_key") {
+        "api_key"
+    } else {
+        "configured"
+    };
+    CodexDefaultAuthProbe {
+        status: "active".into(),
+        method: Some(method.into()),
+        config: CodexDefaultConfigSummary {
+            credential_hint: extract_masked_credential_hint(&combined),
+            ..CodexDefaultConfigSummary::default()
+        },
+    }
+}
+
+fn extract_masked_credential_hint(status_output: &str) -> Option<String> {
+    status_output.lines().find_map(|line| {
+        let candidate = line.rsplit_once(" - ")?.1.trim();
+        (candidate.contains("***")
+            && candidate.len() <= 96
+            && candidate
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "-_*".contains(character)))
+        .then(|| candidate.to_string())
+    })
+}
+
+fn populate_default_config_summary(content: &str, summary: &mut CodexDefaultConfigSummary) {
+    let mut section = String::new();
+    let mut mcp_servers = std::collections::BTreeSet::new();
+    let mut named_profiles = std::collections::BTreeSet::new();
+    let mut trusted_projects = std::collections::BTreeSet::new();
+    let mut plugins = std::collections::BTreeSet::new();
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line[1..line.len() - 1].trim().to_string();
+            if let Some(name) = first_section_name(&section, "mcp_servers.") {
+                mcp_servers.insert(name);
+            }
+            if let Some(name) = first_section_name(&section, "profiles.") {
+                named_profiles.insert(name);
+            }
+            if section.starts_with("projects.") {
+                trusted_projects.insert(section.clone());
+            }
+            if let Some(name) = first_section_name(&section, "plugins.") {
+                plugins.insert(name);
+            }
+            continue;
+        }
+        if !section.is_empty() {
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = parse_safe_toml_scalar(raw_value);
+        match key.trim() {
+            "openai_base_url" => summary.openai_base_url = value,
+            "model_provider" => summary.model_provider = value,
+            "model" => summary.model = value,
+            "model_reasoning_effort" => summary.reasoning_effort = value,
+            "sandbox_mode" => summary.sandbox_mode = value,
+            "approval_policy" => summary.approval_policy = value,
+            _ => {}
+        }
+    }
+    summary.mcp_servers = mcp_servers.into_iter().collect();
+    summary.named_profiles = named_profiles.into_iter().collect();
+    summary.trusted_project_count = trusted_projects.len();
+    summary.plugin_count = plugins.len();
+}
+
+async fn write_managed_openai_base_url(codex_home: &Path, base_url: Option<&str>) -> AppResult<()> {
+    let base_url = validate_managed_openai_base_url(base_url)?;
+    let config_path = codex_home.join("config.toml");
+    let existing = match tokio::fs::read_to_string(&config_path).await {
+        Ok(content) if content.len() <= 2 * 1024 * 1024 => content,
+        Ok(_) => {
+            return Err(AppError::Validation(
+                "managed Codex config.toml is too large to update safely".into(),
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(AppError::Internal(format!(
+                "cannot read managed Codex config: {error}"
+            )))
+        }
+    };
+    let rendered = render_openai_base_url_config(&existing, base_url.as_deref());
+    let temporary_path = codex_home.join(format!(".config-{}.toml.tmp", Uuid::new_v4()));
+    tokio::fs::write(&temporary_path, rendered)
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("cannot write managed Codex config: {error}"))
+        })?;
+    #[cfg(unix)]
+    tokio::fs::set_permissions(
+        &temporary_path,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+    )
+    .await
+    .map_err(|error| AppError::Internal(format!("cannot protect managed Codex config: {error}")))?;
+    activate_managed_codex_config(&temporary_path, &config_path).await
+}
+
+async fn activate_managed_codex_config(temporary_path: &Path, config_path: &Path) -> AppResult<()> {
+    let backup_path = config_path.with_file_name(format!(".config-{}.toml.bak", Uuid::new_v4()));
+    let had_existing = tokio::fs::metadata(config_path).await.is_ok();
+    if had_existing {
+        tokio::fs::rename(config_path, &backup_path)
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("cannot back up managed Codex config: {error}"))
+            })?;
+    }
+    if let Err(error) = tokio::fs::rename(temporary_path, config_path).await {
+        if had_existing {
+            let _ = tokio::fs::rename(&backup_path, config_path).await;
+        }
+        let _ = tokio::fs::remove_file(temporary_path).await;
+        return Err(AppError::Internal(format!(
+            "cannot activate managed Codex config: {error}"
+        )));
+    }
+    if had_existing {
+        let _ = tokio::fs::remove_file(backup_path).await;
+    }
+    Ok(())
+}
+
+fn validate_managed_openai_base_url(value: Option<&str>) -> AppResult<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = reqwest::Url::parse(value)
+        .map_err(|_| AppError::Validation("Codex Base URL is invalid".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || value.len() > 2_048
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppError::Validation("Codex Base URL is invalid".into()));
+    }
+    Ok(Some(value.trim_end_matches('/').to_string()))
+}
+
+fn render_openai_base_url_config(content: &str, base_url: Option<&str>) -> String {
+    let mut lines = Vec::new();
+    let mut in_root = true;
+    let mut inserted = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if in_root && trimmed.starts_with('[') {
+            if let Some(base_url) = base_url {
+                lines.push(format!(
+                    "openai_base_url = {}",
+                    serde_json::to_string(base_url).expect("Base URL JSON string")
+                ));
+                inserted = true;
+            }
+            in_root = false;
+        }
+        if in_root
+            && trimmed
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "openai_base_url")
+        {
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+    if !inserted {
+        if let Some(base_url) = base_url {
+            lines.push(format!(
+                "openai_base_url = {}",
+                serde_json::to_string(base_url).expect("Base URL JSON string")
+            ));
+        }
+    }
+    let mut rendered = lines.join("\n");
+    if !rendered.is_empty() {
+        rendered.push('\n');
+    }
+    rendered
+}
+
+fn first_section_name(section: &str, prefix: &str) -> Option<String> {
+    let remainder = section.strip_prefix(prefix)?;
+    let first = remainder.split('.').next()?.trim().trim_matches('"');
+    (!first.is_empty() && first.len() <= 128 && !first.chars().any(char::is_control))
+        .then(|| first.to_string())
+}
+
+fn parse_safe_toml_scalar(raw: &str) -> Option<String> {
+    let value = raw.trim().trim_matches('"').trim_matches('\'').trim();
+    (!value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control))
+        .then(|| value.to_string())
+}
+
+pub fn collect_codex_models(value: &Value, models: &mut BTreeMap<String, CodexModelInfo>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_codex_models(item, models);
+            }
+        }
+        Value::Object(object) => {
+            let is_selectable = object
+                .get("visibility")
+                .and_then(Value::as_str)
+                .map(|visibility| visibility.eq_ignore_ascii_case("list"))
+                .unwrap_or(true);
+            let id = object
+                .get("slug")
+                .or_else(|| object.get("model"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty() && id.len() <= 128);
+            if let Some(id) = id.filter(|_| is_selectable) {
+                let display_name = object
+                    .get("display_name")
+                    .or_else(|| object.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(id);
+                let default_reasoning_effort = object
+                    .get("default_reasoning_level")
+                    .or_else(|| object.get("defaultReasoningEffort"))
+                    .and_then(Value::as_str)
+                    .filter(|effort| is_codex_reasoning_effort(effort))
+                    .map(str::to_string);
+                let mut reasoning_efforts = Vec::new();
+                if let Some(values) = object
+                    .get("supported_reasoning_levels")
+                    .or_else(|| object.get("supportedReasoningEfforts"))
+                    .and_then(Value::as_array)
+                {
+                    for reasoning in values {
+                        let Some(effort) = reasoning
+                            .get("effort")
+                            .or_else(|| reasoning.get("reasoningEffort"))
+                            .and_then(Value::as_str)
+                            .filter(|effort| is_codex_reasoning_effort(effort))
+                        else {
+                            continue;
+                        };
+                        if reasoning_efforts
+                            .iter()
+                            .any(|item: &CodexModelReasoningEffort| item.effort == effort)
+                        {
+                            continue;
+                        }
+                        let description = reasoning
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|description| !description.is_empty())
+                            .unwrap_or(effort);
+                        reasoning_efforts.push(CodexModelReasoningEffort {
+                            effort: effort.to_string(),
+                            description: description.to_string(),
+                        });
+                    }
+                }
+                models.insert(
+                    id.to_string(),
+                    CodexModelInfo {
+                        id: id.to_string(),
+                        display_name: display_name.to_string(),
+                        default_reasoning_effort,
+                        reasoning_efforts,
+                    },
+                );
+            }
+            for nested in object.values() {
+                if nested.is_array() || nested.is_object() {
+                    collect_codex_models(nested, models);
+                }
+            }
+        }
+        Value::String(id) if !id.trim().is_empty() && id.len() <= 128 => {
+            if (id.contains("gpt-") || id.contains("codex"))
+                && id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                })
+            {
+                models.insert(
+                    id.clone(),
+                    CodexModelInfo {
+                        id: id.clone(),
+                        display_name: id.clone(),
+                        default_reasoning_effort: None,
+                        reasoning_efforts: Vec::new(),
+                    },
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_codex_reasoning_effort(value: &str) -> bool {
+    matches!(
+        value,
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+    )
 }
 
 async fn drive_app_server<W, R>(
@@ -774,6 +1852,44 @@ where
             }
             _ => {}
         }
+    }
+    if let Some(reasoning_summary) = request.reasoning_summary.as_deref() {
+        if !matches!(reasoning_summary, "auto" | "concise" | "detailed" | "none") {
+            return Err(AppError::Validation(
+                "Codex reasoning summary must be auto, concise, detailed, or none".into(),
+            ));
+        }
+    }
+    if let Some(verbosity) = request.verbosity.as_deref() {
+        if !matches!(verbosity, "low" | "medium" | "high") {
+            return Err(AppError::Validation(
+                "Codex verbosity must be low, medium, or high".into(),
+            ));
+        }
+    }
+    if let Some(personality) = request.personality.as_deref() {
+        if !matches!(personality, "none" | "friendly" | "pragmatic") {
+            return Err(AppError::Validation(
+                "Codex personality must be none, friendly, or pragmatic".into(),
+            ));
+        }
+    }
+    if request
+        .service_tier
+        .as_deref()
+        .is_some_and(|value| value != "fast")
+    {
+        return Err(AppError::Validation(
+            "Codex service tier must be fast when configured".into(),
+        ));
+    }
+    if !matches!(
+        request.web_search.as_str(),
+        "disabled" | "cached" | "indexed" | "live"
+    ) {
+        return Err(AppError::Validation(
+            "Codex web search must be disabled, cached, indexed, or live".into(),
+        ));
     }
 
     Ok(ProcessOutcome {
@@ -1351,6 +2467,27 @@ fn validate_config_key(value: &str, field: &str) -> AppResult<()> {
     Ok(())
 }
 
+fn validate_plugin_id(value: &str) -> AppResult<()> {
+    let Some((name, marketplace)) = value.split_once('@') else {
+        return Err(AppError::Validation(
+            "Codex plugin id must use name@marketplace format".into(),
+        ));
+    };
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part.chars().count() <= 100
+            && part.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            })
+    };
+    if value.chars().count() > 201 || !valid(name) || !valid(marketplace) {
+        return Err(AppError::Validation(
+            "Codex plugin id contains unsupported characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_environment_name(value: &str) -> AppResult<()> {
     let mut characters = value.chars();
     let valid_first = characters
@@ -1370,6 +2507,53 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
 }
 
+fn apply_managed_cli_settings(command: &mut Command, request: &CodexRunRequest) {
+    let mut set_string = |key: &str, value: Option<&str>| {
+        if let Some(value) = value {
+            command
+                .arg("--config")
+                .arg(format!("{key}={}", toml_string(value)));
+        }
+    };
+    set_string(
+        "model_reasoning_effort",
+        request.reasoning_effort.as_deref(),
+    );
+    set_string(
+        "model_reasoning_summary",
+        request.reasoning_summary.as_deref(),
+    );
+    set_string("model_verbosity", request.verbosity.as_deref());
+    set_string("personality", request.personality.as_deref());
+    set_string("service_tier", request.service_tier.as_deref());
+    set_string("web_search", Some(&request.web_search));
+    command
+        .arg("--config")
+        .arg(format!(
+            "sandbox_workspace_write.network_access={}",
+            request.network_access
+        ))
+        .arg("--config")
+        .arg(format!(
+            "features.multi_agent={}",
+            request.feature_multi_agent
+        ))
+        .arg("--config")
+        .arg(format!(
+            "features.remote_plugin={}",
+            request.feature_remote_plugin
+        ))
+        .arg("--config")
+        .arg(format!("features.hooks={}", request.feature_hooks))
+        .arg("--config")
+        .arg(format!("features.goals={}", request.feature_goals))
+        .arg("--config")
+        .arg(format!(
+            "features.shell_tool={}",
+            request.feature_shell_tool
+        ));
+}
+
 fn toml_string_array(values: &[String]) -> String {
     let values = values
         .iter()
@@ -1386,6 +2570,46 @@ fn split_csv(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+fn resolve_codex_executable(
+    configured: Option<&str>,
+    managed_executable: &Path,
+) -> (PathBuf, String) {
+    if let Some(configured) = configured {
+        let candidate = PathBuf::from(configured);
+        if candidate.components().count() > 1 || candidate.is_absolute() {
+            return (candidate, "explicit".into());
+        }
+        if executable_in_path(configured).is_some() {
+            return (candidate, "explicit".into());
+        }
+        if configured != "codex" {
+            return (candidate, "explicit".into());
+        }
+    }
+    if let Some(system) = executable_in_path("codex") {
+        return (system, "system".into());
+    }
+    (managed_executable.to_path_buf(), "managed".into())
+}
+
+fn executable_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        {
+            let candidate = directory.join(format!("{name}.exe"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn default_environment_allowlist() -> Vec<String> {
@@ -1479,9 +2703,103 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn model_catalog_excludes_hidden_models_and_nested_ids() {
+        let catalog = json!({
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "display_name": "GPT-5.6-Sol",
+                    "visibility": "list",
+                    "default_reasoning_level": "low",
+                    "supported_reasoning_levels": [
+                        { "effort": "low", "description": "Fast" },
+                        { "effort": "high", "description": "Deep" }
+                    ],
+                    "service_tiers": [{ "id": "priority", "name": "Fast" }]
+                },
+                {
+                    "slug": "codex-auto-review",
+                    "display_name": "Codex Auto Review",
+                    "visibility": "hide"
+                }
+            ]
+        });
+        let mut models = BTreeMap::new();
+
+        collect_codex_models(&catalog, &mut models);
+
+        assert_eq!(models.len(), 1);
+        let model = models.get("gpt-5.6-sol").expect("selectable model");
+        assert_eq!(model.display_name, "GPT-5.6-Sol");
+        assert_eq!(model.default_reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(
+            model
+                .reasoning_efforts
+                .iter()
+                .map(|effort| effort.effort.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "high"]
+        );
+    }
+
+    #[test]
+    fn managed_cli_settings_are_injected_as_cli_overrides() {
+        let request = CodexRunRequest {
+            cwd: PathBuf::from("/tmp"),
+            codex_profile: "default".into(),
+            model: Some("gpt-test".into()),
+            reasoning_effort: Some("high".into()),
+            reasoning_summary: Some("concise".into()),
+            verbosity: Some("medium".into()),
+            personality: Some("pragmatic".into()),
+            service_tier: Some("fast".into()),
+            sandbox_mode: "workspace_write".into(),
+            approval_policy: "never".into(),
+            network_access: false,
+            web_search: "live".into(),
+            feature_multi_agent: true,
+            feature_remote_plugin: false,
+            feature_hooks: true,
+            feature_goals: false,
+            feature_shell_tool: true,
+            max_run_seconds: 60,
+            prompt: "test".into(),
+            existing_thread_id: None,
+            run_token: "token".into(),
+            environment: HashMap::new(),
+            approval_handler: None,
+            progress_handler: None,
+            cancellation_handler: None,
+        };
+        let mut command = Command::new("codex");
+        apply_managed_cli_settings(&mut command, &request);
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(args.contains(&"model_reasoning_summary=\"concise\"".into()));
+        assert!(args.contains(&"model_verbosity=\"medium\"".into()));
+        assert!(args.contains(&"service_tier=\"fast\"".into()));
+        assert!(args.contains(&"web_search=\"live\"".into()));
+        assert!(args.contains(&"sandbox_workspace_write.network_access=false".into()));
+        assert!(args.contains(&"features.remote_plugin=false".into()));
+        assert!(args.contains(&"features.shell_tool=true".into()));
+    }
+
     #[derive(Default)]
     struct AcceptingApprovalHandler {
         calls: AtomicUsize,
+    }
+
+    struct AlwaysCancelHandler;
+
+    impl CodexCancellationHandler for AlwaysCancelHandler {
+        fn should_cancel(&self) -> bool {
+            true
+        }
     }
 
     #[async_trait]
@@ -1556,6 +2874,56 @@ mod tests {
     }
 
     #[test]
+    fn mcp_discovery_view_removes_secrets_and_argument_contents() {
+        let configured_names = std::collections::HashSet::from(["private-http".to_string()]);
+        let http = safe_mcp_server_view(
+            json!({
+                "name": "private-http",
+                "enabled": true,
+                "auth_status": "bearer_token",
+                "transport": {
+                    "type": "streamable_http",
+                    "url": "https://user:secret@example.com/mcp?token=secret#fragment",
+                    "bearer_token_env_var": "PRIVATE_MCP_TOKEN",
+                    "http_headers": {"Authorization": "Bearer secret"}
+                }
+            }),
+            &configured_names,
+        )
+        .expect("HTTP MCP view");
+        assert_eq!(http.address.as_deref(), Some("https://example.com/mcp"));
+        assert_eq!(
+            http.bearer_token_env_var.as_deref(),
+            Some("PRIVATE_MCP_TOKEN")
+        );
+        assert!(http.configured_by_user);
+
+        let stdio = safe_mcp_server_view(
+            json!({
+                "name": "local",
+                "enabled": true,
+                "transport": {
+                    "type": "stdio",
+                    "command": "/usr/local/bin/npx",
+                    "args": ["-y", "@example/mcp", "--token", "secret"],
+                    "env": {"PRIVATE_TOKEN": "secret"}
+                }
+            }),
+            &std::collections::HashSet::new(),
+        )
+        .expect("stdio MCP view");
+        assert_eq!(stdio.command.as_deref(), Some("npx"));
+        assert_eq!(stdio.argument_count, 4);
+        assert!(!stdio.configured_by_user);
+
+        let serialized = serde_json::to_string(&(http, stdio)).expect("serialize safe views");
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("Authorization"));
+        assert!(!serialized.contains("PRIVATE_TOKEN"));
+        assert!(!serialized.contains("@example/mcp"));
+    }
+
+    #[test]
     fn only_pre_turn_resume_errors_replace_a_session() {
         assert!(should_replace_session(&ProcessOutcome {
             status: CodexRunStatus::Failed,
@@ -1594,6 +2962,227 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_auth_probe_reports_login_without_persisting_account_details() {
+        assert_eq!(
+            classify_default_auth_probe(
+                true,
+                "Logged in using an API key - sk-example***masked",
+                ""
+            ),
+            CodexDefaultAuthProbe {
+                status: "active".into(),
+                method: Some("api_key".into()),
+                config: CodexDefaultConfigSummary {
+                    credential_hint: Some("sk-example***masked".into()),
+                    ..CodexDefaultConfigSummary::default()
+                },
+            }
+        );
+        assert_eq!(
+            classify_default_auth_probe(true, "Logged in using ChatGPT", ""),
+            CodexDefaultAuthProbe {
+                status: "active".into(),
+                method: Some("chatgpt".into()),
+                config: CodexDefaultConfigSummary::default(),
+            }
+        );
+        assert_eq!(
+            classify_default_auth_probe(false, "", "Not logged in"),
+            CodexDefaultAuthProbe {
+                status: "logged_out".into(),
+                method: None,
+                config: CodexDefaultConfigSummary::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn default_config_summary_exposes_only_safe_operational_metadata() {
+        let mut summary = CodexDefaultConfigSummary::default();
+        populate_default_config_summary(
+            r#"
+openai_base_url = "https://proxy.example.com/v1"
+model_provider = "codex"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "high"
+
+[mcp_servers.relay]
+url = "http://127.0.0.1:38080/mcp"
+[mcp_servers.relay.env]
+OPENAI_API_KEY = "must-not-be-returned"
+[profiles.team]
+model = "gpt-5.5"
+[projects."/private/work"]
+trust_level = "trusted"
+[plugins."browser@openai-bundled"]
+enabled = true
+"#,
+            &mut summary,
+        );
+        assert_eq!(summary.model_provider.as_deref(), Some("codex"));
+        assert_eq!(
+            summary.openai_base_url.as_deref(),
+            Some("https://proxy.example.com/v1")
+        );
+        assert_eq!(summary.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(summary.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(summary.mcp_servers, vec!["relay"]);
+        assert_eq!(summary.named_profiles, vec!["team"]);
+        assert_eq!(summary.trusted_project_count, 1);
+        assert_eq!(summary.plugin_count, 1);
+        assert!(!format!("{summary:?}").contains("must-not-be-returned"));
+    }
+
+    #[test]
+    fn managed_base_url_config_replaces_only_the_root_codex_setting() {
+        let rendered = render_openai_base_url_config(
+            r#"model = "gpt-5.6-sol"
+openai_base_url = "https://old.example.com/v1"
+
+[profiles.team]
+openai_base_url = "keep-this-profile-value"
+model = "gpt-5.5"
+"#,
+            Some("https://new.example.com/v1"),
+        );
+        assert!(rendered.contains("openai_base_url = \"https://new.example.com/v1\""));
+        assert!(!rendered.contains("https://old.example.com/v1"));
+        assert!(rendered.contains("openai_base_url = \"keep-this-profile-value\""));
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| *line == "openai_base_url = \"https://new.example.com/v1\"")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn managed_base_url_validation_rejects_credentials_and_query_tokens() {
+        assert!(validate_managed_openai_base_url(Some("https://proxy.example.com/v1")).is_ok());
+        assert!(
+            validate_managed_openai_base_url(Some("https://user:secret@proxy.example.com/v1"))
+                .is_err()
+        );
+        assert!(validate_managed_openai_base_url(Some(
+            "https://proxy.example.com/v1?token=secret"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn managed_profile_uses_an_independent_codex_home_without_profile_argument() {
+        let runner = CodexTriggerRunner::new(
+            PathBuf::from("codex"),
+            Vec::new(),
+            "http://127.0.0.1:8080/mcp".into(),
+            "relay_company".into(),
+            DEFAULT_RUN_TOKEN_ENV.into(),
+        )
+        .expect("runner");
+        let profile_id = Uuid::new_v4();
+        let selector = format!("relay_{profile_id}");
+        let mut command = Command::new("codex");
+        runner
+            .apply_profile_arguments(&mut command, &selector)
+            .expect("managed arguments");
+        runner
+            .apply_profile_environment(&mut command, &selector)
+            .expect("managed environment");
+        assert!(!command
+            .as_std()
+            .get_args()
+            .any(|argument| argument == "--profile"));
+        let codex_home = command
+            .as_std()
+            .get_envs()
+            .find(|(name, _)| *name == "CODEX_HOME")
+            .and_then(|(_, value)| value)
+            .expect("CODEX_HOME");
+        assert!(codex_home
+            .to_string_lossy()
+            .ends_with(&profile_id.to_string()));
+    }
+
+    #[test]
+    fn ordinary_codex_profile_still_uses_profile_argument() {
+        let runner = CodexTriggerRunner::new(
+            PathBuf::from("codex"),
+            Vec::new(),
+            "http://127.0.0.1:8080/mcp".into(),
+            "relay_company".into(),
+            DEFAULT_RUN_TOKEN_ENV.into(),
+        )
+        .expect("runner");
+        let mut command = Command::new("codex");
+        runner
+            .apply_profile_arguments(&mut command, "team")
+            .expect("ordinary arguments");
+        assert_eq!(
+            command
+                .as_std()
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec!["--profile", "team"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_codex_process_is_cancelled_when_the_project_pauses() {
+        let workspace = std::env::temp_dir().join(format!(
+            "relay-fake-codex-cancel-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let runner = CodexTriggerRunner::new(
+            PathBuf::from("/bin/sh"),
+            vec!["-c".into(), "sleep 30".into(), "--".into()],
+            "http://127.0.0.1:8080/mcp".into(),
+            "relay_company".into(),
+            DEFAULT_RUN_TOKEN_ENV.into(),
+        )
+        .expect("runner");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let result = runtime
+            .block_on(runner.run(CodexRunRequest {
+                cwd: workspace.clone(),
+                codex_profile: "default".into(),
+                model: None,
+                reasoning_effort: None,
+                reasoning_summary: Some("auto".into()),
+                verbosity: None,
+                personality: Some("pragmatic".into()),
+                service_tier: None,
+                sandbox_mode: "workspace_write".into(),
+                approval_policy: "never".into(),
+                network_access: true,
+                web_search: "cached".into(),
+                feature_multi_agent: true,
+                feature_remote_plugin: true,
+                feature_hooks: true,
+                feature_goals: true,
+                feature_shell_tool: true,
+                max_run_seconds: 30,
+                prompt: "work on project".into(),
+                existing_thread_id: None,
+                run_token: "art_test".into(),
+                environment: HashMap::new(),
+                approval_handler: None,
+                progress_handler: None,
+                cancellation_handler: Some(Arc::new(AlwaysCancelHandler)),
+            }))
+            .expect("fake Codex cancellation");
+        assert_eq!(result.status, CodexRunStatus::Cancelled);
+        assert!(result
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("project was paused")));
+        std::fs::remove_dir_all(workspace).expect("cleanup");
+    }
+
     #[cfg(unix)]
     #[test]
     fn transient_reconnect_error_is_cleared_after_the_turn_completes() {
@@ -1618,8 +3207,19 @@ mod tests {
                 codex_profile: "default".into(),
                 model: None,
                 reasoning_effort: None,
+                reasoning_summary: Some("auto".into()),
+                verbosity: None,
+                personality: Some("pragmatic".into()),
+                service_tier: None,
                 sandbox_mode: "workspace_write".into(),
                 approval_policy: "never".into(),
+                network_access: true,
+                web_search: "cached".into(),
+                feature_multi_agent: true,
+                feature_remote_plugin: true,
+                feature_hooks: true,
+                feature_goals: true,
+                feature_shell_tool: true,
                 max_run_seconds: 10,
                 prompt: "check Relay inbox".into(),
                 existing_thread_id: None,
@@ -1627,6 +3227,7 @@ mod tests {
                 environment: HashMap::new(),
                 approval_handler: None,
                 progress_handler: None,
+                cancellation_handler: None,
             }))
             .expect("fake Codex run");
         assert_eq!(result.status, CodexRunStatus::Succeeded);
@@ -1662,8 +3263,19 @@ mod tests {
                 codex_profile: "relay-test".into(),
                 model: Some("gpt-5.6-sol".into()),
                 reasoning_effort: Some("high".into()),
+                reasoning_summary: Some("auto".into()),
+                verbosity: Some("medium".into()),
+                personality: Some("pragmatic".into()),
+                service_tier: None,
                 sandbox_mode: "workspace_write".into(),
                 approval_policy: "never".into(),
+                network_access: true,
+                web_search: "cached".into(),
+                feature_multi_agent: true,
+                feature_remote_plugin: true,
+                feature_hooks: true,
+                feature_goals: true,
+                feature_shell_tool: true,
                 max_run_seconds: 10,
                 prompt: "check Relay inbox".into(),
                 existing_thread_id: Some("missing-thread".into()),
@@ -1671,6 +3283,7 @@ mod tests {
                 environment: HashMap::new(),
                 approval_handler: None,
                 progress_handler: None,
+                cancellation_handler: None,
             }))
             .expect("fake Codex run");
         assert_eq!(result.status, CodexRunStatus::Succeeded);
@@ -1720,8 +3333,19 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-approval"
                 codex_profile: "default".into(),
                 model: None,
                 reasoning_effort: Some("high".into()),
+                reasoning_summary: Some("auto".into()),
+                verbosity: None,
+                personality: Some("pragmatic".into()),
+                service_tier: None,
                 sandbox_mode: "workspace_write".into(),
                 approval_policy: "on-request".into(),
+                network_access: true,
+                web_search: "cached".into(),
+                feature_multi_agent: true,
+                feature_remote_plugin: true,
+                feature_hooks: true,
+                feature_goals: true,
+                feature_shell_tool: true,
                 max_run_seconds: 10,
                 prompt: "push the branch".into(),
                 existing_thread_id: None,
@@ -1729,6 +3353,7 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-approval"
                 environment: HashMap::new(),
                 approval_handler: Some(handler.clone()),
                 progress_handler: None,
+                cancellation_handler: None,
             }))
             .expect("fake app-server run");
         assert_eq!(result.status, CodexRunStatus::Succeeded);

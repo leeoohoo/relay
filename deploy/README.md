@@ -1,18 +1,6 @@
-# 生产部署
+# Relay 生产部署
 
-仓库提供 `docker-compose.prod.yml`，生产拓扑为：
-
-```text
-Internet / TLS reverse proxy
-          |
-        web (Nginx)
-          |
-        server
-          |
-       PostgreSQL
-```
-
-`web` 只公开一个 HTTP 端口，并把 `/api`、`/mcp`、`/health`、`/ready` 转发给 API。PostgreSQL 和 API 不映射宿主机端口。Redis、MinIO 当前没有业务用途，不属于生产依赖。
+生产环境使用 `docker-compose.prod.yml`，唯一应用数据库为 PostgreSQL。部署栈包含数据库迁移、Rust Server、Web，以及可选的自建 Harness；Agent Trigger 默认运行在宿主机，以便访问宿主机 Codex 登录态、本地项目与 Git worktree。
 
 ## 1. 准备配置
 
@@ -20,78 +8,98 @@ Internet / TLS reverse proxy
 cp deploy/.env.production.example .env.production
 ```
 
-至少替换这些值：
+至少修改以下配置：
 
-- `POSTGRES_PASSWORD` 与 `DATABASE_URL` 中的密码
-- `PUBLIC_BASE_URL`、`API_ALLOWED_ORIGINS`
-- `MCP_ALLOWED_HOSTS`，必须包含真实域名
-- `ADMIN_API_TOKEN` 或 `ADMIN_API_TOKENS_JSON`
-- `EMAIL_DELIVERY_WEBHOOK_URL`
+- `POSTGRES_PASSWORD`
+- `DATABASE_URL`
+- `PUBLIC_BASE_URL`
+- `API_ALLOWED_ORIGINS`
+- `MCP_ALLOWED_HOSTS`
+- `AGENT_TRIGGER_STATE_ROOT`
+- 管理员 Token 或 `ADMIN_API_TOKENS_JSON`
 
-建议将 `.env.production` 放进主机 Secret 管理工具，不提交到版本库。`ADMIN_API_TOKEN` 是兼容用的根权限令牌；日常运维优先使用 `ADMIN_API_TOKENS_JSON` 创建分权限令牌：
+不要把 `.env.production` 提交到 Git。
 
-- `admin:read`：读取 Admin Console
-- `admin:agents`：冻结、解冻、轮换 Agent Key
-- `*`：全部权限，只建议用于应急或 bootstrap
-
-应用状态中的 Admin 凭证列表只保存 SHA-256 hash；环境变量仍应交给主机 Secret 管理工具保护。
-
-## 2. 启动
+## 2. 启动 PostgreSQL、迁移、API 与 Web
 
 ```bash
-docker compose \
-  --env-file .env.production \
-  -f docker-compose.prod.yml \
-  up -d --build
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
 ```
 
-启动顺序是 PostgreSQL 就绪、migration 成功、API `/ready` 成功，最后启动 Web。检查状态：
+启动顺序由 Compose 保证：
+
+1. PostgreSQL 健康检查通过。
+2. `migrate` 执行 `scripts/run_pg_migrations.sh ensure`。
+3. Server 启动并连接 PostgreSQL。
+4. Web 等待 Server 健康后启动。
+
+查看状态与日志：
 
 ```bash
 docker compose --env-file .env.production -f docker-compose.prod.yml ps
-curl -fsS http://127.0.0.1:8080/ready
+docker compose --env-file .env.production -f docker-compose.prod.yml logs -f server web migrate
 ```
 
-## 3. TLS / HTTPS
+## 3. Harness 模式
 
-`deploy/nginx/web.conf` 负责容器内同源反代，不内置证书。生产环境应在它前面使用云负载均衡、Caddy、Traefik 或宿主机 Nginx 终止 TLS，并强制 HTTP 跳转 HTTPS。
+默认不启动 Harness。连接已有服务时设置：
 
-转发时保留 `Host` 和 `X-Forwarded-Proto`。标准 MCP 会校验 Host，因此真实域名必须出现在 `MCP_ALLOWED_HOSTS` 中。
+```env
+HARNESS_MODE=official
+HARNESS_BASE_URL=https://harness.example.com
+HARNESS_PUBLIC_BASE_URL=https://harness.example.com
+```
 
-## 4. 备份与恢复
-
-主机安装 PostgreSQL client 后执行：
+在同一 Docker 栈中启动自建 Harness：
 
 ```bash
-export DATABASE_URL='postgres://ai_chat:***@127.0.0.1:5432/ai_chat'
-./scripts/backup_postgres.sh backup
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile harness-self-hosted up -d harness
 ```
 
-生产 Compose 默认不公开数据库端口。可以通过安全隧道连接，或在维护窗口临时运行同网络备份容器。备份文件默认写入 `backups/`，应再复制到加密的异地对象存储，并定期验证恢复。
+同时设置：
 
-恢复会清理目标库中的同名对象，必须显式确认：
+```env
+HARNESS_MODE=self_hosted
+HARNESS_BASE_URL=http://harness:3000
+HARNESS_PUBLIC_BASE_URL=https://git.example.com
+HARNESS_ADMIN_PASSWORD=replace-with-a-long-random-password
+```
+
+## 4. 宿主机 Agent Trigger
+
+Trigger 必须：
+
+- 使用与 Server 相同的 `DATABASE_URL`；
+- 能访问 `AGENT_TRIGGER_STATE_ROOT` 与托管项目目录；
+- 能调用宿主机 Codex CLI；
+- 使用与 Server 一致的 Git/Harness 配置。
 
 ```bash
-export CONFIRM_RESTORE=yes
-./scripts/backup_postgres.sh restore /absolute/path/to/ai_chat_YYYYMMDDTHHMMSSZ.dump
+set -a
+source .env.production
+set +a
+cargo run --release -p ai-chat-agent-trigger
 ```
 
-恢复前停止 `server` 和 `web`，恢复后重新执行 migration，再启动服务：
+## 5. PostgreSQL 备份与恢复
+
+备份：
 
 ```bash
-docker compose --env-file .env.production -f docker-compose.prod.yml stop web server
-docker compose --env-file .env.production -f docker-compose.prod.yml run --rm migrate
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d server web
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  exec -T postgres pg_dump -U "$POSTGRES_USER" -d "${POSTGRES_DB:-ai_chat}" -Fc \
+  > relay-postgres.dump
 ```
 
-## 5. 上线检查
+恢复前先停止写入，再执行：
 
-- `APP_ENV=production`
-- `ENABLE_DEV_ENDPOINTS=false`
-- Repository 必须是 PostgreSQL
-- 邮箱验证开启时邮件 webhook 必须可用
-- `/ready` 而不是 `/health` 用作流量就绪探针
-- API 与 MCP Origin/Host 使用显式白名单
-- 数据库不暴露公网端口
-- 定期轮换 Admin Token 和 Agent Key
-- 定期运行 `cargo test`、安全冒烟和备份恢复演练
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml stop server
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  exec -T postgres pg_restore -U "$POSTGRES_USER" -d "${POSTGRES_DB:-ai_chat}" \
+  --clean --if-exists < relay-postgres.dump
+docker compose --env-file .env.production -f docker-compose.prod.yml start server
+```
+
+生产环境不要暴露 PostgreSQL 端口到公网，并定期验证备份可恢复。

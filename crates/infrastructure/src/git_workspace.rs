@@ -3,6 +3,8 @@ use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     process::{Command, Output},
+    thread,
+    time::Duration,
 };
 
 use fs2::FileExt;
@@ -12,7 +14,9 @@ use uuid::Uuid;
 use ai_chat_domain::company::CompanyProjectGitConfig;
 use ai_chat_shared::{AppError, AppResult};
 
-use crate::git_credentials::{is_github_token_profile, GitCredentialStore};
+use crate::git_credentials::{
+    is_github_token_profile, is_managed_token_profile, GitCredentialStore,
+};
 
 const AGENT_GIT_DIR_NAME: &str = ".relay-git";
 
@@ -108,7 +112,7 @@ impl GitWorkspaceManager {
 
         let auth_environment = self.auth_environment(git.auth_profile.as_deref())?;
         let worktree_path = relay_root.join("worktrees").join(agent_id.to_string());
-        let branch = format!(
+        let inbox_branch = format!(
             "{}{}/inbox",
             git.branch_prefix,
             sanitize_branch_component(agent_handle)
@@ -125,24 +129,26 @@ impl GitWorkspaceManager {
         }
         let repository_environment =
             agent_repository_environment(&auth_environment, &worktree_path)?;
-        if git_marker.is_file() {
+        let branch = if git_marker.is_file() {
             migrate_legacy_linked_worktree(
                 &relay_root,
                 &worktree_path,
                 agent_id,
-                &branch,
+                &inbox_branch,
                 &git.default_branch,
                 &git.remote_url,
                 &repository_environment,
             )?;
+            inbox_branch
         } else if agent_git_dir.is_dir() {
             prepare_existing_agent_repository(
                 &worktree_path,
-                &branch,
+                &inbox_branch,
                 &git.default_branch,
+                &git.branch_prefix,
                 &git.remote_url,
                 &repository_environment,
-            )?;
+            )?
         } else {
             if worktree_path.exists()
                 && fs::read_dir(&worktree_path)
@@ -159,13 +165,14 @@ impl GitWorkspaceManager {
             }
             clone_agent_repository(
                 &worktree_path,
-                &branch,
+                &inbox_branch,
                 &git.default_branch,
                 &git.remote_url,
                 &auth_environment,
                 &repository_environment,
             )?;
-        }
+            inbox_branch
+        };
 
         let worktree_key = format!("{project_id}/{agent_id}");
         drop(lock);
@@ -217,7 +224,7 @@ impl GitWorkspaceManager {
         if profile_name == "public" {
             return Ok(HashMap::new());
         }
-        if is_github_token_profile(profile_name) {
+        if is_github_token_profile(profile_name) || is_managed_token_profile(profile_name) {
             return self.credential_store.auth_environment(profile_name);
         }
         self.auth_profiles
@@ -279,9 +286,10 @@ fn prepare_existing_agent_repository(
     worktree_path: &Path,
     branch: &str,
     default_branch: &str,
+    branch_prefix: &str,
     remote_url: &str,
     environment: &HashMap<String, String>,
-) -> AppResult<()> {
+) -> AppResult<String> {
     ensure_origin_remote(worktree_path, remote_url, environment)?;
     run_git(
         Some(worktree_path),
@@ -294,9 +302,7 @@ fn prepare_existing_agent_repository(
         ["branch".into(), "--show-current".into()],
     )?;
     if current_branch.trim().is_empty() {
-        return Err(AppError::Conflict(
-            "existing Agent repository is in detached HEAD state".into(),
-        ));
+        return attach_detached_agent_repository(worktree_path, branch, environment);
     }
     let git_dir = worktree_path.join(AGENT_GIT_DIR_NAME);
     if current_branch.trim() == default_branch {
@@ -310,16 +316,23 @@ fn prepare_existing_agent_repository(
                 environment,
                 ["switch".into(), "-c".into(), branch.into(), base_ref],
             )?;
-            return configure_agent_repository(worktree_path, branch, environment);
+            configure_agent_repository(worktree_path, branch, environment)?;
+            return Ok(branch.to_owned());
         }
         return Err(AppError::Conflict(
             "existing Agent repository is checked out on the protected default branch".into(),
         ));
     }
     if current_branch.trim() != branch {
+        if current_branch.trim().starts_with(branch_prefix) {
+            let current_branch = current_branch.trim().to_owned();
+            configure_agent_repository(worktree_path, &current_branch, environment)?;
+            return Ok(current_branch);
+        }
         return Err(AppError::Conflict(format!(
-            "existing Agent repository is checked out on unexpected branch {}",
-            current_branch.trim()
+            "existing Agent repository is checked out on unexpected branch {} outside the configured Agent branch prefix {}",
+            current_branch.trim(),
+            branch_prefix
         )));
     }
     if !ref_exists(&git_dir, environment, &format!("refs/heads/{branch}"))? {
@@ -330,7 +343,65 @@ fn prepare_existing_agent_repository(
             ["reset".into(), "--mixed".into(), base_ref],
         )?;
     }
-    configure_agent_repository(worktree_path, branch, environment)
+    configure_agent_repository(worktree_path, branch, environment)?;
+    Ok(branch.to_owned())
+}
+
+fn attach_detached_agent_repository(
+    worktree_path: &Path,
+    inbox_branch: &str,
+    environment: &HashMap<String, String>,
+) -> AppResult<String> {
+    let head = run_git(
+        Some(worktree_path),
+        environment,
+        ["rev-parse".into(), "HEAD".into()],
+    )?;
+    let short_head = run_git(
+        Some(worktree_path),
+        environment,
+        ["rev-parse".into(), "--short=12".into(), "HEAD".into()],
+    )?;
+    let branch_namespace = inbox_branch.strip_suffix("/inbox").unwrap_or(inbox_branch);
+    let mut recovery_branch = format!("{branch_namespace}/recovery-{}", short_head.trim());
+    let git_dir = worktree_path.join(AGENT_GIT_DIR_NAME);
+    let mut recovery_ref = format!("refs/heads/{recovery_branch}");
+    if ref_exists(&git_dir, environment, &recovery_ref)? {
+        let existing_head = run_git(
+            Some(worktree_path),
+            environment,
+            ["rev-parse".into(), recovery_ref.clone()],
+        )?;
+        if existing_head.trim() != head.trim() {
+            recovery_branch = format!("{branch_namespace}/recovery-{}", head.trim());
+            recovery_ref = format!("refs/heads/{recovery_branch}");
+        }
+    }
+    if ref_exists(&git_dir, environment, &recovery_ref)? {
+        let existing_head = run_git(
+            Some(worktree_path),
+            environment,
+            ["rev-parse".into(), recovery_ref],
+        )?;
+        if existing_head.trim() != head.trim() {
+            return Err(AppError::Conflict(format!(
+                "cannot attach detached Agent repository because recovery branch {recovery_branch} points to a different commit"
+            )));
+        }
+        run_git(
+            Some(worktree_path),
+            environment,
+            ["switch".into(), recovery_branch.clone()],
+        )?;
+    } else {
+        run_git(
+            Some(worktree_path),
+            environment,
+            ["switch".into(), "-c".into(), recovery_branch.clone()],
+        )?;
+    }
+    configure_agent_repository(worktree_path, &recovery_branch, environment)?;
+    Ok(recovery_branch)
 }
 
 fn agent_worktree_has_no_user_files(worktree_path: &Path) -> AppResult<bool> {
@@ -641,6 +712,31 @@ fn run_git<I>(
 where
     I: IntoIterator<Item = String>,
 {
+    let args = args.into_iter().collect::<Vec<_>>();
+    let max_attempts = if is_retryable_git_operation(&args) {
+        3
+    } else {
+        1
+    };
+    for attempt in 0..max_attempts {
+        let output = execute_git(cwd, environment, &args)?;
+        if output.status.success() {
+            return git_output(output);
+        }
+        let retryable = is_transient_git_network_error(&output.stderr);
+        if !retryable || attempt + 1 == max_attempts {
+            return git_output(output);
+        }
+        thread::sleep(Duration::from_millis(500 * (attempt as u64 + 1)));
+    }
+    unreachable!("Git retry loop always returns")
+}
+
+fn execute_git(
+    cwd: Option<&Path>,
+    environment: &HashMap<String, String>,
+    args: &[String],
+) -> AppResult<Output> {
     let mut command = Command::new("git");
     command.args(args).env("GIT_TERMINAL_PROMPT", "0");
     if let Some(cwd) = cwd {
@@ -649,13 +745,34 @@ where
     for (key, value) in environment {
         command.env(key, value);
     }
-    let output = command.output().map_err(|error| {
+    command.output().map_err(|error| {
         AppError::Validation(format!(
             "failed to start Git: {}",
             sanitize_error(&error.to_string())
         ))
-    })?;
-    git_output(output)
+    })
+}
+
+fn is_retryable_git_operation(args: &[String]) -> bool {
+    args.first().is_some_and(|operation| operation == "fetch")
+}
+
+fn is_transient_git_network_error(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    [
+        "connection reset by peer",
+        "recv failure",
+        "failed to connect",
+        "could not resolve host",
+        "remote end hung up unexpectedly",
+        "gnutls recv error",
+        "tls connection was non-properly terminated",
+        "the requested url returned error: 502",
+        "the requested url returned error: 503",
+        "the requested url returned error: 504",
+    ]
+    .iter()
+    .any(|pattern| stderr.contains(pattern))
 }
 
 fn run_git_bytes<I>(
@@ -812,6 +929,25 @@ fn truncate(value: &str, max_characters: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retries_only_fetch_for_transient_network_failures() {
+        assert!(is_retryable_git_operation(&[
+            "fetch".into(),
+            "--prune".into(),
+            "origin".into(),
+        ]));
+        assert!(!is_retryable_git_operation(&[
+            "clone".into(),
+            "https://example.test/repo.git".into(),
+        ]));
+        assert!(is_transient_git_network_error(
+            b"fatal: unable to access remote: Recv failure: Connection reset by peer"
+        ));
+        assert!(!is_transient_git_network_error(
+            b"fatal: Authentication failed for remote"
+        ));
+    }
 
     fn seed_remote(root: &Path) -> PathBuf {
         let remote = root.join("remote.git");
@@ -1183,6 +1319,138 @@ mod tests {
         assert!(error
             .to_string()
             .contains("checked out on the protected default branch"));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn project_workspace_attaches_a_detached_head_without_losing_local_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "relay-detached-agent-head-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("test root");
+        let remote = seed_remote(&root);
+        let project_root = root.join("project");
+        let git = project_git_config(&project_root, &remote);
+        let manager = test_manager(&root);
+        let agent_id = Uuid::new_v4();
+        let prepared = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("project workspace");
+        run_git(
+            Some(&prepared.path),
+            &prepared.auth_environment,
+            ["switch".into(), "--detach".into(), "origin/main".into()],
+        )
+        .expect("detach Agent HEAD");
+        fs::write(prepared.path.join("local-note.txt"), "preserve me\n")
+            .expect("local detached work");
+        let detached_head = run_git(
+            Some(&prepared.path),
+            &prepared.auth_environment,
+            ["rev-parse".into(), "HEAD".into()],
+        )
+        .expect("detached head");
+
+        let resumed = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("detached Agent repository should be attached safely");
+
+        assert!(resumed.branch.starts_with("relay/backend/recovery-"));
+        assert_eq!(
+            run_git(
+                Some(&resumed.path),
+                &resumed.auth_environment,
+                ["rev-parse".into(), "HEAD".into()]
+            )
+            .expect("attached head"),
+            detached_head
+        );
+        assert_eq!(
+            fs::read_to_string(resumed.path.join("local-note.txt")).expect("preserved local work"),
+            "preserve me\n"
+        );
+        assert_eq!(
+            run_git(
+                Some(&resumed.path),
+                &resumed.auth_environment,
+                ["branch".into(), "--show-current".into()]
+            )
+            .expect("recovery branch"),
+            resumed.branch
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn project_workspace_preserves_an_active_agent_prefixed_branch() {
+        let root = std::env::temp_dir().join(format!(
+            "relay-active-agent-branch-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("test root");
+        let remote = seed_remote(&root);
+        let project_root = root.join("project");
+        let git = project_git_config(&project_root, &remote);
+        let manager = test_manager(&root);
+        let agent_id = Uuid::new_v4();
+        let prepared = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("project workspace");
+        let active_branch = "relay/backend-integration";
+        run_git(
+            Some(&prepared.path),
+            &prepared.auth_environment,
+            ["switch".into(), "-c".into(), active_branch.into()],
+        )
+        .expect("switch to active Agent branch");
+
+        let resumed = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("active Agent branch should be preserved");
+
+        assert_eq!(resumed.branch, active_branch);
+        assert_eq!(
+            run_git(
+                Some(&resumed.path),
+                &resumed.auth_environment,
+                ["branch".into(), "--show-current".into()]
+            )
+            .expect("current branch"),
+            active_branch
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn project_workspace_rejects_a_branch_outside_the_agent_prefix() {
+        let root = std::env::temp_dir().join(format!(
+            "relay-outside-agent-prefix-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("test root");
+        let remote = seed_remote(&root);
+        let project_root = root.join("project");
+        let git = project_git_config(&project_root, &remote);
+        let manager = test_manager(&root);
+        let agent_id = Uuid::new_v4();
+        let prepared = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("project workspace");
+        run_git(
+            Some(&prepared.path),
+            &prepared.auth_environment,
+            ["switch".into(), "-c".into(), "feature/manual".into()],
+        )
+        .expect("switch outside Agent prefix");
+
+        let error = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect_err("branch outside Agent prefix must be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("outside the configured Agent branch prefix relay/"));
         fs::remove_dir_all(root).expect("cleanup");
     }
 

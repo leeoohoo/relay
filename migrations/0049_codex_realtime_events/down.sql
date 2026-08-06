@@ -1,0 +1,6 @@
+DROP TRIGGER IF EXISTS trg_agent_codex_trigger_runs_realtime_update ON agent_codex_trigger_runs;
+DROP TRIGGER IF EXISTS trg_agent_codex_trigger_runs_realtime_insert ON agent_codex_trigger_runs;
+DROP FUNCTION IF EXISTS emit_agent_codex_run_realtime_event();
+
+DROP TRIGGER IF EXISTS trg_agent_codex_trigger_configs_realtime ON agent_codex_trigger_configs;
+DROP FUNCTION IF EXISTS emit_agent_codex_trigger_realtime_event();

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MIGRATIONS_ROOT="$ROOT_DIR/migrations"
+MIGRATIONS_ROOT="${MIGRATIONS_ROOT:-$ROOT_DIR/migrations}"
 
 MODE="${1:-up}"
 DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/ai_chat}"
@@ -135,6 +135,49 @@ run_psql_file() {
     -f - < "$sql_file"
 }
 
+run_psql_migration() {
+  local database="$1"
+  local sql_file="$2"
+  local tracking_sql="$3"
+
+  if [[ "$HAS_LOCAL_PSQL" == "true" ]]; then
+    {
+      printf '\\set ON_ERROR_STOP on\n'
+      sed -e '$a\' "$sql_file"
+      printf '%s\n' "$tracking_sql"
+    } | PGPASSWORD="$DB_PASSWORD" psql \
+      --single-transaction \
+      -v ON_ERROR_STOP=1 \
+      -h "$DB_HOST" \
+      -p "$DB_PORT" \
+      -U "$DB_USER" \
+      -d "$database" \
+      -f -
+    return
+  fi
+
+  {
+    printf '\\set ON_ERROR_STOP on\n'
+    sed -e '$a\' "$sql_file"
+    printf '%s\n' "$tracking_sql"
+  } | docker exec -i -e PGPASSWORD="$DB_PASSWORD" "$PG_CONTAINER" psql \
+    --single-transaction \
+    -v ON_ERROR_STOP=1 \
+    -h 127.0.0.1 \
+    -p 5432 \
+    -U "$DB_USER" \
+    -d "$database" \
+    -f -
+}
+
+validate_migration_version() {
+  local version="$1"
+  if [[ ! "$version" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "Unsafe migration version: $version" >&2
+    exit 1
+  fi
+}
+
 database_exists() {
   local result
   result="$(run_psql_cmd postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME';" | tr -d '[:space:]')"
@@ -203,6 +246,7 @@ is_migration_applied() {
 
 apply_migration_up() {
   local version="$1"
+  validate_migration_version "$version"
   local up_file
   up_file="$(migration_up_file "$version")"
 
@@ -217,12 +261,13 @@ apply_migration_up() {
   fi
 
   echo "Applying migration $version"
-  run_psql_file "$DB_NAME" "$up_file"
-  run_psql_cmd "$DB_NAME" -c "INSERT INTO schema_migrations(version) VALUES ('$version');" >/dev/null
+  run_psql_migration "$DB_NAME" "$up_file" \
+    "INSERT INTO schema_migrations(version) VALUES ('$version');"
 }
 
 apply_migration_down() {
   local version="$1"
+  validate_migration_version "$version"
   local down_file
   down_file="$(migration_down_file "$version")"
 
@@ -237,8 +282,8 @@ apply_migration_down() {
   fi
 
   echo "Rolling back migration $version"
-  run_psql_file "$DB_NAME" "$down_file"
-  run_psql_cmd "$DB_NAME" -c "DELETE FROM schema_migrations WHERE version = '$version';" >/dev/null
+  run_psql_migration "$DB_NAME" "$down_file" \
+    "DELETE FROM schema_migrations WHERE version = '$version';"
 }
 
 apply_all_up() {

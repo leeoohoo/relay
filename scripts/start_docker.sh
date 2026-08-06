@@ -1,7 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="${1:-up}"
+MODE="up"
+HARNESS_SELECTION="${HARNESS_MODE:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    up|rebuild|down|restart|ps|logs)
+      MODE="$1"
+      shift
+      ;;
+    --harness)
+      [[ $# -ge 2 ]] || { echo "--harness requires a mode" >&2; exit 1; }
+      HARNESS_SELECTION="$2"
+      shift 2
+      ;;
+    --harness=*)
+      HARNESS_SELECTION="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      echo "Usage: $0 [up|rebuild|down|restart|ps|logs] [--harness official|self-hosted|disabled]" >&2
+      exit 1
+      ;;
+  esac
+done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-$HOME/.docker/daemon.json}"
@@ -26,7 +49,51 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 compose() {
-  docker compose -f "$COMPOSE_FILE" "$@"
+  docker compose -f "$COMPOSE_FILE" --profile harness-self-hosted "$@"
+}
+
+prepare_harness_mode() {
+  local selection="$HARNESS_SELECTION"
+
+  if [[ -z "$selection" && -t 0 && "$MODE" =~ ^(up|rebuild)$ ]]; then
+    echo "Harness deployment mode:"
+    echo "  1) official     Use an existing hosted Harness service"
+    echo "  2) self-hosted  Start Harness in this Docker stack"
+    echo "  3) disabled     Do not provision Harness accounts"
+    read -r -p "Select [1-3, default 3]: " selection
+    case "$selection" in
+      1) selection="official" ;;
+      2) selection="self-hosted" ;;
+      *) selection="disabled" ;;
+    esac
+  fi
+
+  selection="${selection:-disabled}"
+  selection="${selection//-/_}"
+  case "$selection" in
+    official|hosted|cloud)
+      export HARNESS_MODE="official"
+      if [[ "$MODE" =~ ^(up|rebuild)$ && -z "${HARNESS_BASE_URL:-}" ]]; then
+        echo "HARNESS_BASE_URL is required for official Harness mode." >&2
+        exit 1
+      fi
+      if [[ -n "${HARNESS_BASE_URL:-}" ]]; then
+        export HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-$HARNESS_BASE_URL}"
+      fi
+      ;;
+    self_hosted|local|docker)
+      export HARNESS_MODE="self_hosted"
+      export HARNESS_BASE_URL="http://harness:3000"
+      REQUIRED_DOCKER_IMAGES+=("${HARNESS_IMAGE:-harness/harness:latest}")
+      ;;
+    disabled|off|none)
+      export HARNESS_MODE="disabled"
+      ;;
+    *)
+      echo "Unsupported Harness mode: $selection" >&2
+      exit 1
+      ;;
+  esac
 }
 
 build_web_assets() {
@@ -184,6 +251,16 @@ load_existing_port_assignments() {
     existing_port="$(existing_host_port_for ai-chat-server 8080/tcp)"
     [[ -n "$existing_port" ]] && WEB_HOST_PORT="$existing_port"
   fi
+
+  if [[ -z "${HARNESS_HOST_PORT:-}" ]]; then
+    existing_port="$(existing_host_port_for ai-chat-harness 3000/tcp)"
+    [[ -n "$existing_port" ]] && HARNESS_HOST_PORT="$existing_port"
+  fi
+
+  if [[ -z "${HARNESS_SSH_PORT:-}" ]]; then
+    existing_port="$(existing_host_port_for ai-chat-harness 3022/tcp)"
+    [[ -n "$existing_port" ]] && HARNESS_SSH_PORT="$existing_port"
+  fi
 }
 
 assign_port() {
@@ -197,7 +274,7 @@ assign_port() {
 }
 
 prepare_ports() {
-  local postgres_host_port public_host_port
+  local postgres_host_port public_host_port harness_host_port harness_ssh_port
 
   load_existing_port_assignments
 
@@ -221,10 +298,36 @@ prepare_ports() {
   export POSTGRES_HOST_PORT="$postgres_host_port"
   export API_HOST_PORT="$public_host_port"
   export WEB_HOST_PORT="$public_host_port"
-  export PG_CONTAINER="${PG_CONTAINER:-ai-chat-postgres}"
   export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:${POSTGRES_HOST_PORT}/ai_chat}"
-  export SERVER_DATABASE_URL="${SERVER_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}"
   export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://127.0.0.1:${WEB_HOST_PORT}}"
+
+  if [[ "$HARNESS_MODE" == "self_hosted" ]]; then
+    if [[ -n "${HARNESS_HOST_PORT:-}" ]]; then
+      harness_host_port="$HARNESS_HOST_PORT"
+      reserve_port "$harness_host_port"
+    else
+      assign_port harness_host_port 3000
+    fi
+    export HARNESS_HOST_PORT="$harness_host_port"
+    if [[ -n "${HARNESS_SSH_PORT:-}" ]]; then
+      harness_ssh_port="$HARNESS_SSH_PORT"
+      reserve_port "$harness_ssh_port"
+    else
+      assign_port harness_ssh_port 3022
+    fi
+    export HARNESS_SSH_PORT="$harness_ssh_port"
+    export HARNESS_PUBLIC_BASE_URL="${HARNESS_PUBLIC_BASE_URL:-http://127.0.0.1:${HARNESS_HOST_PORT}}"
+    export HARNESS_GIT_BASE_URL="${HARNESS_GIT_BASE_URL:-http://127.0.0.1:${HARNESS_HOST_PORT}/git}"
+  fi
+}
+
+start_harness_service() {
+  if [[ "$HARNESS_MODE" != "self_hosted" ]]; then
+    compose stop harness >/dev/null 2>&1 || true
+    return 0
+  fi
+  compose up -d harness
+  wait_for_container_health ai-chat-harness 90
 }
 
 start_application_services() {
@@ -292,7 +395,7 @@ run_migrations() {
   FORCE_DOCKER_PSQL=true \
   DATABASE_URL="$database_url" \
   PG_CONTAINER="$pg_container" \
-  bash "$ROOT_DIR/scripts/run_pg_migrations.sh" reset
+  bash "$ROOT_DIR/scripts/run_pg_migrations.sh" ensure
 }
 
 print_summary() {
@@ -301,7 +404,8 @@ AI Chat Docker stack is ready.
 
 Services:
 - Web/API: http://127.0.0.1:${WEB_HOST_PORT}
-- Postgres: 127.0.0.1:${POSTGRES_HOST_PORT}
+- PostgreSQL: 127.0.0.1:${POSTGRES_HOST_PORT} (ai_chat)
+- Harness mode: ${HARNESS_MODE}
 
 Useful commands:
 - View status: ./scripts/start_docker.sh ps
@@ -313,46 +417,55 @@ EOF
 case "$MODE" in
   up)
     ensure_docker_daemon
+    prepare_harness_mode
     preflight_docker_images
     build_web_assets
     prepare_ports
-    compose up -d --build postgres
+    compose up -d postgres
     wait_for_container_health ai-chat-postgres
     wait_for_tcp_port 127.0.0.1 "$POSTGRES_HOST_PORT"
     run_migrations
+    start_harness_service
     start_application_services
     print_summary
     ;;
   rebuild)
     ensure_docker_daemon
+    prepare_harness_mode
     preflight_docker_images
     build_web_assets
     prepare_ports
     compose down
-    compose up -d --build postgres
+    compose up -d postgres
     wait_for_container_health ai-chat-postgres
     wait_for_tcp_port 127.0.0.1 "$POSTGRES_HOST_PORT"
     run_migrations
+    start_harness_service
     start_application_services
     print_summary
     ;;
   down)
+    prepare_harness_mode
     compose down
     ;;
   restart)
+    prepare_harness_mode
     prepare_ports
-    compose restart
+    start_harness_service
+    compose restart postgres server
     ;;
   ps)
+    prepare_harness_mode
     prepare_ports
     compose ps
     ;;
   logs)
+    prepare_harness_mode
     prepare_ports
     compose logs -f --tail=100
     ;;
   *)
-    echo "Usage: $0 [up|rebuild|down|restart|ps|logs]" >&2
+    echo "Usage: $0 [up|rebuild|down|restart|ps|logs] [--harness official|self-hosted|disabled]" >&2
     exit 1
     ;;
 esac

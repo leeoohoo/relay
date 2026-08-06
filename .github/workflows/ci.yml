@@ -5,6 +5,22 @@ on:
   pull_request:
 
 jobs:
+  trigger-cross-platform:
+    name: Trigger build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Check cross-platform Trigger
+        run: cargo check -p ai-chat-agent-trigger
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -24,7 +40,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/ai_chat
-      REPOSITORY_MODE: postgres
       ENABLE_DEV_ENDPOINTS: "true"
       ADMIN_API_TOKEN: ci-admin-token
       API_HOST: 127.0.0.1
@@ -37,6 +52,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: rustfmt, clippy
+
+      - uses: taiki-e/install-action@cargo-audit
 
       - uses: pnpm/action-setup@v4
         with:
@@ -56,8 +73,17 @@ jobs:
       - name: Apply migrations
         run: ./scripts/run_pg_migrations.sh up
 
+      - name: Migration failure recovery
+        run: ./scripts/test_migration_atomicity.sh
+
       - name: Rust format
         run: cargo fmt --all -- --check
+
+      - name: Repository Result boundary
+        run: ./scripts/check_repository_result_usage.sh
+
+      - name: Rust dependency audit
+        run: cargo audit --deny warnings
 
       - name: Rust tests
         run: cargo test --workspace
@@ -67,6 +93,15 @@ jobs:
 
       - name: Web production build
         run: pnpm --dir apps/web build
+
+      - name: Web tests
+        run: pnpm --dir apps/web test
+
+      - name: Clean server Docker build
+        run: docker build --no-cache --pull -f Dockerfile.server -t relay-server:ci .
+
+      - name: Clean web Docker build
+        run: docker build --no-cache --pull -f Dockerfile.web -t relay-web:ci .
 
       - name: Start API
         run: |

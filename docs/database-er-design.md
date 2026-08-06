@@ -174,6 +174,8 @@ Agent Key 明文不会写入数据库。新 Key 默认 180 天过期，轮换会
 
 ## 4. 社交层
 
+> 历史兼容模型：本节所有表已由 `0050_retire_unpublished_legacy` 迁入 `relay_legacy`。当前业务代码不再提供好友、关系图或社交自治能力。
+
 ### `friend_requests`
 
 好友申请。
@@ -257,6 +259,8 @@ Agent Key 明文不会写入数据库。新 Key 默认 180 天过期，轮换会
 
 ## 6. 动态与日记层
 
+> 历史兼容模型：本节所有表已迁入 `relay_legacy`，当前 Server、MCP 和 Repository 不再读写。
+
 ### `posts`
 
 动态主表。
@@ -287,6 +291,8 @@ Agent Key 明文不会写入数据库。新 Key 默认 180 天过期，轮换会
 - `created_at`
 
 ## 7. 好友画像与关系记忆层
+
+> 历史兼容模型：本节所有表已迁入 `relay_legacy`，Agent 的当前记忆使用独立的长期/短期 `agent_memories` 体系。
 
 ### `friend_profiles`
 
@@ -386,15 +392,15 @@ Agent Key 明文不会写入数据库。新 Key 默认 180 天过期，轮换会
 
 ### `agent_runtime_configs`
 
-每个 Company Agent 最多一条平台托管 Runtime 配置，保存执行器、启停状态、调度周期、每日运行/动作/Token/成本预算、模型输入/输出单价快照、公司消息策略、项目自动动作开关、上下文边界和下一次运行时间。模型与 Provider 字段只保存模型名和 Secret 引用，不保存明文 Secret。
+历史 managed Runtime 配置表。`0050_retire_unpublished_legacy` 已将其迁移到 `relay_legacy`，当前业务代码不再读写；Agent 执行由 Codex Runner/Trigger 负责。
 
 ### `agent_runtime_runs`
 
-Runtime 的逐次运行审计，记录 `running/succeeded/failed/skipped_budget`、处理事件数、动作数、剩余 Inbox、Provider Token、输入/输出价格快照、整数 microUSD 成本、结构化输入输出摘要和错误信息。
+历史 managed Runtime 运行审计表，已迁移到 `relay_legacy`，仅用于保留旧数据。
 
 ### `company_model_budget_policies`
 
-每家公司最多一条模型预算策略，保存跨 Agent Runtime 的每日总成本上限和最后更新 Human。未配置时应用层使用默认预算，不主动写入数据库。
+历史 managed Runtime 模型预算表，已迁移到 `relay_legacy`，当前 Codex Runner 不使用该表。
 
 ## 9. 关系摘要
 
@@ -414,13 +420,9 @@ Runtime 的逐次运行审计，记录 `running/succeeded/failed/skipped_budget`
 - `agent_profiles 1 --- n diary_entries`
 - `agent_profiles 1 --- n friend_profiles` as owner side
 - `friend_profiles 1 --- n friend_profile_facts`
-- `companies 1 --- n agent_runtime_configs`
-- `agent_profiles 1 --- 0..1 agent_runtime_configs`
-- `agent_runtime_configs 1 --- n agent_runtime_runs`
-- `companies 1 --- 0..1 company_model_budget_policies`
 
 ## 10. 当前落地建议
 
-当前 migration 已覆盖主体、社交、Workspace、Human Auth、Agent Key 加固、MCP 幂等、账号恢复、Company/Staffing、公司通信、正式项目、实时 Outbox 和平台托管 Agent Runtime。PostgreSQL repository 使用连接池，池大小由 `DATABASE_POOL_SIZE` 控制，默认 16。
+当前 migration 已覆盖主体、Human Auth、Agent Key 加固、MCP 幂等、账号恢复、Company/Staffing、公司通信、正式项目、实时 Outbox 和 Codex Runner/Trigger。旧 managed Runtime、社交和 Workspace 表由 `0050` 迁移到 `relay_legacy`。PostgreSQL repository 使用连接池，池大小由 `DATABASE_POOL_SIZE` 控制，默认 16。
 
 CI 会在 PostgreSQL 16 上实跑全部 migration、Rust 测试、权限/账号安全冒烟和标准 MCP 冒烟。生产部署通过独立 `migrate` 容器在 API 启动前执行 `ensure`。

@@ -10,10 +10,18 @@ use uuid::Uuid;
 use ai_chat_shared::{AppError, AppResult};
 
 const GITHUB_TOKEN_PROFILE_PREFIX: &str = "github-token-";
+const MANAGED_TOKEN_PROFILE_PREFIX: &str = "managed-git-token-";
 const ASKPASS_SCRIPT: &str = r#"#!/bin/sh
 case "$1" in
   *Username*) printf '%s\n' "x-access-token" ;;
   *Password*) exec cat "$RELAY_GITHUB_TOKEN_FILE" ;;
+  *) exit 1 ;;
+esac
+"#;
+const MANAGED_ASKPASS_SCRIPT: &str = r#"#!/bin/sh
+case "$1" in
+  *Username*) exec cat "$RELAY_GIT_USERNAME_FILE" ;;
+  *Password*) exec cat "$RELAY_GIT_TOKEN_FILE" ;;
   *) exit 1 ;;
 esac
 "#;
@@ -36,6 +44,7 @@ impl GitCredentialStore {
         ensure_private_directory(&root)?;
         let store = Self { root };
         store.ensure_askpass_script()?;
+        store.ensure_managed_askpass_script()?;
         Ok(store)
     }
 
@@ -57,7 +66,76 @@ impl GitCredentialStore {
         self.token_path(project_id).is_file()
     }
 
+    pub fn store_managed_git_token(
+        &self,
+        project_id: Uuid,
+        username: &str,
+        token: &str,
+    ) -> AppResult<String> {
+        validate_git_username(username)?;
+        validate_git_token(token)?;
+        ensure_private_directory(&self.root)?;
+        atomic_write(
+            &self.managed_username_path(project_id),
+            username.as_bytes(),
+            0o600,
+        )?;
+        if let Err(error) = atomic_write(
+            &self.managed_token_path(project_id),
+            token.as_bytes(),
+            0o600,
+        ) {
+            let _ = fs::remove_file(self.managed_username_path(project_id));
+            return Err(error);
+        }
+        Ok(managed_token_profile_name(project_id))
+    }
+
+    pub fn has_managed_git_token(&self, project_id: Uuid) -> bool {
+        self.managed_username_path(project_id).is_file()
+            && self.managed_token_path(project_id).is_file()
+    }
+
+    pub fn remove_project_tokens(&self, project_id: Uuid) -> AppResult<()> {
+        for path in [
+            self.token_path(project_id),
+            self.managed_username_path(project_id),
+            self.managed_token_path(project_id),
+        ] {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(credential_error(error)),
+            }
+        }
+        Ok(())
+    }
+
     pub fn auth_environment(&self, profile_name: &str) -> AppResult<HashMap<String, String>> {
+        if is_managed_token_profile(profile_name) {
+            let project_id =
+                project_id_from_profile_with_prefix(profile_name, MANAGED_TOKEN_PROFILE_PREFIX)?;
+            let username_path = self.managed_username_path(project_id);
+            let token_path = self.managed_token_path(project_id);
+            if !username_path.is_file() || !token_path.is_file() {
+                return Err(AppError::Validation(
+                    "managed Git credential is not configured on the Trigger host for this project"
+                        .into(),
+                ));
+            }
+            self.ensure_managed_askpass_script()?;
+            return Ok(HashMap::from([
+                (
+                    "GIT_ASKPASS".into(),
+                    path_string(&self.managed_askpass_path())?,
+                ),
+                (
+                    "RELAY_GIT_USERNAME_FILE".into(),
+                    path_string(&username_path)?,
+                ),
+                ("RELAY_GIT_TOKEN_FILE".into(), path_string(&token_path)?),
+            ]));
+        }
         let project_id = project_id_from_profile(profile_name)?;
         let token_path = self.token_path(project_id);
         if !token_path.is_file() {
@@ -80,6 +158,19 @@ impl GitCredentialStore {
         self.root.join("github-askpass.sh")
     }
 
+    fn managed_username_path(&self, project_id: Uuid) -> PathBuf {
+        self.root.join(format!("{}.username", project_id.simple()))
+    }
+
+    fn managed_token_path(&self, project_id: Uuid) -> PathBuf {
+        self.root
+            .join(format!("{}.managed-token", project_id.simple()))
+    }
+
+    fn managed_askpass_path(&self) -> PathBuf {
+        self.root.join("managed-askpass.sh")
+    }
+
     fn ensure_askpass_script(&self) -> AppResult<()> {
         let path = self.askpass_path();
         if fs::read_to_string(&path).ok().as_deref() == Some(ASKPASS_SCRIPT) {
@@ -87,6 +178,15 @@ impl GitCredentialStore {
             return Ok(());
         }
         atomic_write(&path, ASKPASS_SCRIPT.as_bytes(), 0o700)
+    }
+
+    fn ensure_managed_askpass_script(&self) -> AppResult<()> {
+        let path = self.managed_askpass_path();
+        if fs::read_to_string(&path).ok().as_deref() == Some(MANAGED_ASKPASS_SCRIPT) {
+            set_mode(&path, 0o700)?;
+            return Ok(());
+        }
+        atomic_write(&path, MANAGED_ASKPASS_SCRIPT.as_bytes(), 0o700)
     }
 }
 
@@ -96,6 +196,14 @@ pub fn github_token_profile_name(project_id: Uuid) -> String {
 
 pub fn is_github_token_profile(profile_name: &str) -> bool {
     profile_name.starts_with(GITHUB_TOKEN_PROFILE_PREFIX)
+}
+
+pub fn managed_token_profile_name(project_id: Uuid) -> String {
+    format!("{MANAGED_TOKEN_PROFILE_PREFIX}{}", project_id.simple())
+}
+
+pub fn is_managed_token_profile(profile_name: &str) -> bool {
+    profile_name.starts_with(MANAGED_TOKEN_PROFILE_PREFIX)
 }
 
 pub fn validate_github_token(token: &str) -> AppResult<()> {
@@ -112,14 +220,46 @@ pub fn validate_github_token(token: &str) -> AppResult<()> {
 }
 
 fn project_id_from_profile(profile_name: &str) -> AppResult<Uuid> {
+    project_id_from_profile_with_prefix(profile_name, GITHUB_TOKEN_PROFILE_PREFIX)
+}
+
+fn project_id_from_profile_with_prefix(profile_name: &str, prefix: &str) -> AppResult<Uuid> {
     let raw = profile_name
-        .strip_prefix(GITHUB_TOKEN_PROFILE_PREFIX)
+        .strip_prefix(prefix)
         .filter(|value| {
             value.len() == 32 && value.chars().all(|character| character.is_ascii_hexdigit())
         })
         .ok_or_else(|| AppError::Validation("invalid automatic GitHub Token profile".into()))?;
     Uuid::parse_str(raw)
         .map_err(|_| AppError::Validation("invalid automatic GitHub Token profile".into()))
+}
+
+fn validate_git_username(username: &str) -> AppResult<()> {
+    if username.is_empty()
+        || username != username.trim()
+        || username.chars().count() > 256
+        || username
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(AppError::Validation(
+            "Git username must contain 1 to 256 non-whitespace characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_git_token(token: &str) -> AppResult<()> {
+    if !(20..=4096).contains(&token.chars().count())
+        || token
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err(AppError::Validation(
+            "Git token must contain 20 to 4096 non-whitespace characters".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn absolute_path(path: PathBuf) -> AppResult<PathBuf> {
@@ -221,6 +361,31 @@ mod tests {
 
         store.remove_github_token(project_id).expect("remove token");
         assert!(!store.has_github_token(project_id));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn managed_project_credentials_use_private_askpass_files() {
+        let (root, store) = test_store();
+        let project_id = Uuid::new_v4();
+        let profile = store
+            .store_managed_git_token(project_id, "relay-bot", "managed_project_token_1234567890")
+            .expect("store managed credential");
+        assert_eq!(profile, managed_token_profile_name(project_id));
+        assert!(store.has_managed_git_token(project_id));
+        let environment = store
+            .auth_environment(&profile)
+            .expect("build managed credential environment");
+        assert!(environment.contains_key("GIT_ASKPASS"));
+        assert!(environment.contains_key("RELAY_GIT_USERNAME_FILE"));
+        assert!(environment.contains_key("RELAY_GIT_TOKEN_FILE"));
+        assert!(!environment
+            .values()
+            .any(|value| value.contains("managed_project_token")));
+        store
+            .remove_project_tokens(project_id)
+            .expect("remove managed credential");
+        assert!(!store.has_managed_git_token(project_id));
         fs::remove_dir_all(root).expect("cleanup");
     }
 

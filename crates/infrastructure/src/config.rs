@@ -1,51 +1,37 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Default)]
-pub struct RuntimeSecretResolverConfig {
-    pub secrets_json: Option<String>,
-    pub vault_addr: Option<String>,
-    pub vault_token: Option<String>,
-    pub vault_namespace: Option<String>,
-    pub allow_insecure_vault_http: bool,
-    pub vault_timeout_seconds: u64,
-}
-
-impl std::fmt::Debug for RuntimeSecretResolverConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("RuntimeSecretResolverConfig")
-            .field("secrets_json_configured", &self.secrets_json.is_some())
-            .field("vault_addr", &self.vault_addr)
-            .field("vault_token_configured", &self.vault_token.is_some())
-            .field("vault_namespace", &self.vault_namespace)
-            .field("allow_insecure_vault_http", &self.allow_insecure_vault_http)
-            .field("vault_timeout_seconds", &self.vault_timeout_seconds)
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RepositoryMode {
-    Memory,
-    Postgres,
-}
-
-impl RepositoryMode {
-    fn from_env_value(value: &str) -> Self {
-        match value.trim().to_lowercase().as_str() {
-            "postgres" | "pg" => Self::Postgres,
-            _ => Self::Memory,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnershipProofMode {
     Stub,
     Manual,
     Remote,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessMode {
+    Disabled,
+    Official,
+    SelfHosted,
+}
+
+impl HarnessMode {
+    fn from_env_value(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "official" | "hosted" | "cloud" => Self::Official,
+            "self_hosted" | "local" | "docker" => Self::SelfHosted,
+            _ => Self::Disabled,
+        }
+    }
+
+    pub fn provider_key(&self) -> Option<&'static str> {
+        match self {
+            Self::Disabled => None,
+            Self::Official => Some("official"),
+            Self::SelfHosted => Some("self_hosted"),
+        }
+    }
 }
 
 impl OwnershipProofMode {
@@ -63,7 +49,6 @@ pub struct ApiConfig {
     pub host: String,
     pub port: u16,
     pub database_url: String,
-    pub repository_mode: RepositoryMode,
     pub ownership_proof_mode: OwnershipProofMode,
     pub ownership_proof_remote_url: Option<String>,
     pub ownership_proof_remote_token: Option<String>,
@@ -76,13 +61,12 @@ pub struct ApiConfig {
     pub request_timeout_seconds: u64,
     pub max_request_body_bytes: usize,
     pub app_env: String,
-    pub enable_autonomy_worker: bool,
-    pub autonomy_worker_interval_seconds: u64,
-    pub autonomy_worker_batch_size: usize,
-    pub agent_runtime_openai_base_url: String,
-    pub agent_runtime_allow_insecure_provider_http: bool,
-    #[serde(skip)]
-    pub agent_runtime_secret_resolver: RuntimeSecretResolverConfig,
+    pub harness_mode: HarnessMode,
+    pub harness_base_url: Option<String>,
+    pub harness_public_base_url: Option<String>,
+    pub harness_space_prefix: String,
+    pub harness_request_timeout_seconds: u64,
+    pub harness_credentials_root: String,
 }
 
 impl ApiConfig {
@@ -94,9 +78,6 @@ impl ApiConfig {
             .unwrap_or(8080);
         let database_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/ai_chat".into());
-        let repository_mode = std::env::var("REPOSITORY_MODE")
-            .map(|value| RepositoryMode::from_env_value(&value))
-            .unwrap_or(RepositoryMode::Memory);
         let ownership_proof_mode = std::env::var("WEIBO_PROOF_PROVIDER_MODE")
             .map(|value| OwnershipProofMode::from_env_value(&value))
             .unwrap_or(OwnershipProofMode::Stub);
@@ -142,50 +123,32 @@ impl ApiConfig {
             .filter(|value| *value > 0)
             .unwrap_or(1024 * 1024);
         let app_env = std::env::var("APP_ENV").unwrap_or_else(|_| "development".into());
-        let enable_autonomy_worker = std::env::var("ENABLE_AUTONOMY_WORKER")
-            .map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or(false);
-        let autonomy_worker_interval_seconds = std::env::var("AUTONOMY_WORKER_INTERVAL_SECONDS")
+        let harness_mode = std::env::var("HARNESS_MODE")
+            .map(|value| HarnessMode::from_env_value(&value))
+            .unwrap_or(HarnessMode::Disabled);
+        let harness_base_url = std::env::var("HARNESS_BASE_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
+        let harness_public_base_url = std::env::var("HARNESS_PUBLIC_BASE_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| harness_base_url.clone());
+        let harness_space_prefix =
+            std::env::var("HARNESS_SPACE_PREFIX").unwrap_or_else(|_| "u-".into());
+        let harness_request_timeout_seconds = std::env::var("HARNESS_REQUEST_TIMEOUT_SECONDS")
             .ok()
             .and_then(|value| value.parse().ok())
-            .filter(|value| *value >= 5)
-            .unwrap_or(30);
-        let autonomy_worker_batch_size = std::env::var("AUTONOMY_WORKER_BATCH_SIZE")
-            .or_else(|_| std::env::var("AUTONOMY_WORKER_MAX_EVENTS"))
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .map(|value: usize| value.clamp(1, 1_000))
-            .unwrap_or(100);
-        let agent_runtime_openai_base_url = std::env::var("AGENT_RUNTIME_OPENAI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".into());
-        let is_production = app_env.eq_ignore_ascii_case("production");
-        let agent_runtime_allow_insecure_provider_http =
-            !is_production && bool_env("AGENT_RUNTIME_ALLOW_INSECURE_PROVIDER_HTTP", false);
-        let agent_runtime_secret_resolver = RuntimeSecretResolverConfig {
-            secrets_json: optional_env("AGENT_RUNTIME_SECRETS_JSON"),
-            vault_addr: optional_env("AGENT_RUNTIME_VAULT_ADDR"),
-            vault_token: optional_env("AGENT_RUNTIME_VAULT_TOKEN")
-                .or_else(|| optional_env("VAULT_TOKEN")),
-            vault_namespace: optional_env("AGENT_RUNTIME_VAULT_NAMESPACE"),
-            allow_insecure_vault_http: !is_production
-                && bool_env("AGENT_RUNTIME_ALLOW_INSECURE_VAULT_HTTP", false),
-            vault_timeout_seconds: std::env::var("AGENT_RUNTIME_VAULT_TIMEOUT_SECONDS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .map(|value: u64| value.clamp(1, 30))
-                .unwrap_or(5),
-        };
+            .filter(|value| *value > 0)
+            .unwrap_or(15);
+        let harness_credentials_root = std::env::var("HARNESS_CREDENTIALS_ROOT")
+            .unwrap_or_else(|_| ".relay/harness-credentials".into());
 
         Self {
             host,
             port,
             database_url,
-            repository_mode,
             ownership_proof_mode,
             ownership_proof_remote_url,
             ownership_proof_remote_token,
@@ -198,12 +161,12 @@ impl ApiConfig {
             request_timeout_seconds,
             max_request_body_bytes,
             app_env,
-            enable_autonomy_worker,
-            autonomy_worker_interval_seconds,
-            autonomy_worker_batch_size,
-            agent_runtime_openai_base_url,
-            agent_runtime_allow_insecure_provider_http,
-            agent_runtime_secret_resolver,
+            harness_mode,
+            harness_base_url,
+            harness_public_base_url,
+            harness_space_prefix,
+            harness_request_timeout_seconds,
+            harness_credentials_root,
         }
     }
 }
@@ -215,7 +178,6 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
     pub database_url: String,
-    pub repository_mode: RepositoryMode,
     pub ownership_proof_mode: OwnershipProofMode,
     pub ownership_proof_remote_url: Option<String>,
     pub ownership_proof_remote_token: Option<String>,
@@ -234,9 +196,6 @@ impl McpConfig {
             allowed_origins: csv_env("MCP_ALLOWED_ORIGINS", &[]),
             database_url: std::env::var("DATABASE_URL")
                 .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:5432/ai_chat".into()),
-            repository_mode: std::env::var("REPOSITORY_MODE")
-                .map(|value| RepositoryMode::from_env_value(&value))
-                .unwrap_or(RepositoryMode::Memory),
             ownership_proof_mode: std::env::var("WEIBO_PROOF_PROVIDER_MODE")
                 .map(|value| OwnershipProofMode::from_env_value(&value))
                 .unwrap_or(OwnershipProofMode::Stub),
@@ -263,21 +222,4 @@ fn csv_env(name: &str, defaults: &[&str]) -> Vec<String> {
         })
         .filter(|values| !values.is_empty())
         .unwrap_or_else(|| defaults.iter().map(|value| (*value).to_string()).collect())
-}
-
-fn optional_env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn bool_env(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(default)
 }

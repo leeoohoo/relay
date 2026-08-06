@@ -1,32 +1,42 @@
-import { FormEvent, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { API_BASE_URL, api } from "../api/client";
+import type { CompanyRealtimeEvent } from "../api/types";
+import { AuthScreen } from "../components/AuthScreen";
+import { CodexCliSettingsView } from "../components/CodexCliSettingsView";
+import { MessagesView } from "../components/MessagesView";
+import { Pagination, usePagination } from "../components/Pagination";
+import { Sidebar } from "../components/Sidebar";
+import { Field, Icon } from "../components/ui";
+import { useCompanyEvents } from "../hooks/useCompanyEvents";
+import { UiLanguage, useUiLanguage } from "../i18n/uiLanguage";
 import {
   analyzeRelaySkill,
   getRelaySkillDocuments,
+  relayProfessionSkillDocument,
   RELAY_EMPLOYEE_SKILL,
+  RELAY_EMPLOYEE_SKILL_EN,
   RELAY_PROFESSION_SKILLS,
   RELAY_STAFFING_MANAGER_SKILL,
+  RELAY_STAFFING_MANAGER_SKILL_EN,
   RelaySkillDocument,
+  RelaySkillLanguage,
   RelaySkillSection,
 } from "../relaySkills";
-
-type HumanUser = {
-  id: string;
-  email: string;
-  display_name: string;
-};
-
-type Company = {
-  id: string;
-  name: string;
-  slug: string;
-  description: string;
-};
+import type { Company, HumanUser, RuntimeConfig, Session, View } from "../types/appShell";
+import type { Conversation, Message } from "../types/chat";
 
 type CompanyProfession = {
   key: string;
   label: string;
+  label_en: string;
   description: string;
+  description_en: string;
+  category_key: string;
+  category_label: string;
+  category_label_en: string;
   skill_name: string;
+  skill_markdown: string;
+  skill_markdown_en: string;
   can_create_tasks: boolean;
 };
 
@@ -70,34 +80,11 @@ type AgentConnection = {
   last_used_at: string | null;
 };
 
-type CompanyAgent = {
+export type CompanyAgent = {
   agent_profile: AgentProfile;
   membership: AgentMembership;
   profession?: CompanyProfession;
   connection: AgentConnection;
-};
-
-type Conversation = {
-  preview: {
-    id: string;
-    title: string;
-    conversation_type: "direct" | "group";
-    last_message_preview: string | null;
-    updated_at: string;
-  };
-  context: {
-    context_type: string;
-    project_id: string | null;
-  };
-  member_agent_ids: string[];
-};
-
-type Message = {
-  id: string;
-  sender_agent_id: string | null;
-  sender_human_user_id: string | null;
-  content: string;
-  created_at: string;
 };
 
 type ProjectGitView = {
@@ -114,6 +101,7 @@ type ProjectGitAdminView = {
   default_branch: string;
   git_host: string;
   host_local_path: string;
+  auth_profile: string | null;
   allow_agent_push: boolean;
   branch_prefix: string;
   created_at: string;
@@ -143,6 +131,10 @@ type CompanyProject = {
     id: string;
     name: string;
     description: string;
+    project_type: string;
+    project_type_source: string;
+    project_type_confidence: number;
+    project_type_evidence: string[];
     status: string;
   };
   git: ProjectGitView | null;
@@ -210,6 +202,19 @@ type CompanyProject = {
   }>;
 };
 
+type CompanyProjectType = {
+  key: string;
+  label: string;
+  label_en: string;
+  description: string;
+  description_en: string;
+  category_key: string;
+  category_label: string;
+  category_label_en: string;
+  rule_markdown: string;
+  rule_markdown_en: string;
+};
+
 type CodexTriggerRun = {
   id: string;
   trigger_type: string;
@@ -239,8 +244,19 @@ type CodexTriggerView = {
     codex_profile: string;
     model: string | null;
     reasoning_effort: CodexReasoningEffort | null;
-    sandbox_mode: "read_only" | "workspace_write";
-    approval_policy: "never" | "on-request";
+    reasoning_summary: CodexReasoningSummary | null;
+    verbosity: CodexVerbosity | null;
+    personality: CodexPersonality | null;
+    service_tier: "fast" | null;
+    sandbox_mode: CodexSandboxMode;
+    approval_policy: CodexApprovalPolicy;
+    network_access: boolean | null;
+    web_search: CodexWebSearch | null;
+    feature_multi_agent: boolean | null;
+    feature_remote_plugin: boolean | null;
+    feature_hooks: boolean | null;
+    feature_goals: boolean | null;
+    feature_shell_tool: boolean | null;
     max_run_seconds: number;
     next_run_at: string;
     lease_owner: string | null;
@@ -265,14 +281,159 @@ type CodexRunnerProfileView = {
     codex_profile: string;
     model: string | null;
     reasoning_effort: CodexReasoningEffort | null;
-    sandbox_mode: "read_only" | "workspace_write";
-    approval_policy: "never" | "on-request";
+    reasoning_summary: CodexReasoningSummary | null;
+    verbosity: CodexVerbosity | null;
+    personality: CodexPersonality | null;
+    service_tier: "fast" | null;
+    sandbox_mode: CodexSandboxMode;
+    approval_policy: CodexApprovalPolicy;
+    network_access: boolean | null;
+    web_search: CodexWebSearch | null;
+    feature_multi_agent: boolean | null;
+    feature_remote_plugin: boolean | null;
+    feature_hooks: boolean | null;
+    feature_goals: boolean | null;
+    feature_shell_tool: boolean | null;
     max_run_seconds: number;
     is_default: boolean;
     created_at: string;
     updated_at: string;
   };
   assigned_agent_count: number;
+};
+
+type CodexReasoningSummary = "auto" | "concise" | "detailed" | "none";
+type CodexVerbosity = "low" | "medium" | "high";
+type CodexPersonality = "none" | "friendly" | "pragmatic";
+type CodexWebSearch = "disabled" | "cached" | "indexed" | "live";
+type CodexSandboxMode = "inherit" | "read_only" | "workspace_write";
+type CodexApprovalPolicy = "inherit" | "never" | "on-request";
+
+type CodexCliRuntime = {
+  installed: boolean;
+  source: string;
+  executable_path: string | null;
+  installed_version: string | null;
+  latest_version: string | null;
+  update_available: boolean;
+  operation_status: "idle" | "install_pending" | "installing" | "update_pending" | "updating" | "failed";
+  last_checked_at: string | null;
+  update_check_error: string | null;
+  last_error: string | null;
+  host_os: string;
+  host_arch: string;
+  installer_kind: "posix_shell" | "powershell" | "unsupported";
+  installation_supported: boolean;
+  default_auth: CodexDefaultAuthEnvironment;
+  updated_at: string;
+};
+
+type CodexDefaultAuthEnvironment = {
+  selector: "default";
+  name: string;
+  status: "active" | "logged_out" | "unknown";
+  method: "api_key" | "chatgpt" | "configured" | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+  config: {
+    codex_home: string | null;
+    config_path: string | null;
+    config_exists: boolean;
+    auth_path: string | null;
+    auth_exists: boolean;
+    credential_hint: string | null;
+    openai_base_url: string | null;
+    model_provider: string | null;
+    model: string | null;
+    reasoning_effort: string | null;
+    sandbox_mode: string | null;
+    approval_policy: string | null;
+    mcp_servers: string[];
+    named_profiles: string[];
+    trusted_project_count: number;
+    plugin_count: number;
+  };
+};
+
+type CodexAuthProfile = {
+  id: string;
+  company_id: string;
+  name: string;
+  selector: string;
+  base_url: string | null;
+  status: "pending" | "active" | "failed" | "deleting";
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type CodexEnvironmentView = {
+  runtime: CodexCliRuntime;
+  profiles: CodexAuthProfile[];
+  mcp_environments: CodexMcpEnvironmentSnapshot[];
+};
+
+type CodexMcpServer = {
+  name: string;
+  transport: "stdio" | "streamable_http" | string;
+  enabled: boolean;
+  auth_status: string | null;
+  address: string | null;
+  command: string | null;
+  argument_count: number;
+  bearer_token_env_var: string | null;
+  startup_timeout_sec: number | null;
+  tool_timeout_sec: number | null;
+  disabled_reason: string | null;
+  configured_by_user: boolean;
+};
+
+type CodexMcpEnvironmentSnapshot = {
+  selector: string;
+  status: "unknown" | "ready" | "failed";
+  operation_status: "idle" | "refresh_pending" | "refreshing" | "add_pending" | "adding" | "remove_pending" | "removing" | "failed";
+  pending_server_name: string | null;
+  servers: CodexMcpServer[];
+  last_checked_at: string | null;
+  last_error: string | null;
+};
+
+type CodexPluginItem = {
+  pluginId: string;
+  name: string;
+  marketplaceName: string;
+  version: string;
+  installed: boolean;
+  enabled: boolean;
+  installPolicy?: string;
+  authPolicy?: string;
+};
+
+type CodexPluginCatalog = {
+  runner_id: string;
+  hostname: string;
+  codex_version: string | null;
+  fingerprint: string;
+  installed: CodexPluginItem[];
+  available: CodexPluginItem[];
+  marketplaces: Array<{
+    name: string;
+    root?: string;
+    marketplaceSource?: { sourceType?: string; source?: string };
+  }>;
+  discovered_at: string;
+};
+
+type CodexPluginOperation = {
+  id: string;
+  target_runner_id: string;
+  operation: "install" | "remove" | "refresh";
+  plugin_id: string | null;
+  status: "queued" | "running" | "succeeded" | "failed";
+  attempt_count: number;
+  error_message: string | null;
+  requested_at: string;
+  finished_at: string | null;
 };
 
 type AgentToolApproval = {
@@ -298,7 +459,33 @@ type AgentToolApproval = {
   updated_at: string;
 };
 
-type CompanyConsole = {
+type AgentMemory = {
+  id: string;
+  company_id: string;
+  owner_agent_id: string;
+  project_id: string | null;
+  memory_tier: "short_term" | "long_term";
+  memory_type: "fact" | "decision" | "lesson" | "preference" | "procedure" | "relationship" | "handoff";
+  topic_key: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  tags: string[];
+  importance: number;
+  confidence: number;
+  pinned: boolean;
+  status: "draft" | "active" | "archived" | "superseded";
+  source_refs: Array<{ source_type: string; source_id: string; label: string | null }>;
+  supersedes_memory_id: string | null;
+  expires_at: string | null;
+  verified_by_agent_id: string | null;
+  verified_by_human_user_id: string | null;
+  verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CompanyConsole = {
   company: Company;
   human_membership: { role: "owner" | "admin" | "viewer"; status: string };
   org_units: OrgUnit[];
@@ -306,16 +493,13 @@ type CompanyConsole = {
   conversations: Conversation[];
   projects: CompanyProject[];
   professions: CompanyProfession[];
-};
-
-type RuntimeConfig = {
-  dev_endpoints_enabled: boolean;
-  email_verification_required: boolean;
-};
-
-type Session = {
-  token: string;
-  user: HumanUser;
+  project_types: CompanyProjectType[];
+  governance_policy: {
+    effective_settings: {
+      managed_workspace_root: string | null;
+      skill_language: RelaySkillLanguage;
+    };
+  };
 };
 
 type Credential = {
@@ -324,6 +508,8 @@ type Credential = {
   keyPrefix: string;
   permissions: string[];
   professionKey: string;
+  profession?: CompanyProfession;
+  skillLanguage: RelaySkillLanguage;
 };
 
 type BatchCredentialResult = {
@@ -331,12 +517,8 @@ type BatchCredentialResult = {
   failures: Array<{ agentName: string; message: string }>;
 };
 
-type View = "agents" | "organization" | "skills" | "projects" | "tasks" | "codex" | "approvals" | "messages";
-
-const API_BASE_URL =
-  (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE_URL ??
-  window.location.origin;
 const SESSION_KEY = "agent_company_session";
+const CODEX_DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const STAFFING_PERMISSIONS = [
   { key: "agent.staff.hire", label: "扩招 Agent" },
   { key: "agent.staff.suspend", label: "暂停 Agent" },
@@ -359,15 +541,18 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [showCompanyForm, setShowCompanyForm] = useState(false);
   const [showAgentForm, setShowAgentForm] = useState(false);
+  const [showUserPreferences, setShowUserPreferences] = useState(false);
   const [credential, setCredential] = useState<Credential | null>(null);
   const [batchCredentials, setBatchCredentials] = useState<BatchCredentialResult | null>(null);
   const [approvals, setApprovals] = useState<AgentToolApproval[]>([]);
   const [dismissedApprovalIds, setDismissedApprovalIds] = useState<Set<string>>(() => new Set());
+  const [realtimeEvent, setRealtimeEvent] = useState<CompanyRealtimeEvent | null>(null);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     api<RuntimeConfig>("/api/v1/runtime-config")
       .then(setRuntimeConfig)
-      .catch(() => setRuntimeConfig({ dev_endpoints_enabled: false, email_verification_required: false }));
+      .catch(() => setRuntimeConfig({ dev_endpoints_enabled: false, email_verification_required: false, project_types: [] }));
   }, []);
 
   useEffect(() => {
@@ -385,10 +570,8 @@ export function App() {
       }
     };
     void heartbeat();
-    const timer = window.setInterval(() => void heartbeat(), 15_000);
     return () => {
       active = false;
-      window.clearInterval(timer);
     };
   }, [session?.token]);
 
@@ -428,12 +611,36 @@ export function App() {
       }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 2_000);
     return () => {
       active = false;
-      window.clearInterval(timer);
     };
   }, [session?.token, selectedCompanyId, companyConsole?.human_membership.role]);
+
+  useCompanyEvents({
+    companyId: selectedCompanyId,
+    token: session?.token ?? null,
+    onEvent: (event) => {
+      setRealtimeEvent(event);
+      if (event.event_type.startsWith("agent.runtime.approval_")) {
+        void refreshApprovals().catch(() => undefined);
+      }
+      if (realtimeRefreshTimerRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+      }
+      realtimeRefreshTimerRef.current = window.setTimeout(() => {
+        realtimeRefreshTimerRef.current = null;
+        if (selectedCompanyId && session?.token) {
+          void loadCompanyConsole(selectedCompanyId, session.token);
+        }
+      }, 100);
+    },
+  });
+
+  useEffect(() => () => {
+    if (realtimeRefreshTimerRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+  }, []);
 
   async function loadCompanies(token: string, preferredCompanyId?: string) {
     try {
@@ -540,6 +747,7 @@ export function App() {
         onViewChange={setView}
         pendingApprovalCount={pendingApprovals.length}
         onCreateCompany={() => setShowCompanyForm(true)}
+        onOpenPreferences={() => setShowUserPreferences(true)}
         onSignOut={() => void signOut()}
       />
 
@@ -553,10 +761,13 @@ export function App() {
               <div>
                 <span className="eyebrow">{companyConsole?.company.slug ?? "system-skills"}</span>
                 <h1>Skill 中心</h1>
-                <p>查看通用协作、职业方法和特殊授权 Skill；有 Agent 时，还可以查看每个 Agent 实际使用的组合。</p>
+                <p>Agent 工作协议与职业能力目录</p>
               </div>
             </header>
-            <SkillsView consoleData={companyConsole} />
+            <SkillsView
+              consoleData={companyConsole}
+              systemProjectTypes={runtimeConfig?.project_types ?? []}
+            />
           </>
         ) : !companies.length ? (
           <EmptyCompany onCreate={() => setShowCompanyForm(true)} />
@@ -567,14 +778,14 @@ export function App() {
             <header className="page-header">
               <div>
                 <span className="eyebrow">{companyConsole.company.slug}</span>
-                <h1>{view === "codex" ? "Codex 运行器" : view === "tasks" ? "任务中心" : view === "approvals" ? "审批中心" : companyConsole.company.name}</h1>
+                <h1>{view === "agents" ? "组织与 Agent" : view === "projects" ? "项目中心" : view === "messages" ? "聊天" : view === "codex" ? "Codex 控制台" : companyConsole.company.name}</h1>
                 <p>{view === "codex"
-                  ? "Human 消息即时唤醒 Agent；定时检查只作为兜底，并继续宿主机上的固定 Codex 会话。"
-                  : view === "tasks"
-                    ? "Human 在这里创建和分配任务；Agent 通过 MCP 读取自己的任务并同步进度。"
-                    : view === "approvals"
-                      ? "处理 Codex 越权操作和 Agent 高影响动作；审批后原运行会继续。"
-                    : companyConsole.company.description || "为外部 Agent 提供组织身份与 MCP 通信。"}</p>
+                  ? "运行配置、CLI 能力与宿主机环境"
+                  : view === "messages"
+                      ? "Human、群组与 Agent 实时通信和审批"
+                      : view === "projects"
+                        ? "仓库、规则、资产、任务与项目记忆"
+                        : "身份、凭证、组织架构与权限范围"}</p>
               </div>
               {view === "agents" ? (
                 <button className="button primary" onClick={() => setShowAgentForm(true)}>
@@ -584,7 +795,7 @@ export function App() {
             </header>
 
             {view === "agents" ? (
-              <AgentsView
+              <OrganizationAgentCenter
                 consoleData={companyConsole}
                 humanUserId={session.user.id}
                 token={session.token}
@@ -593,16 +804,6 @@ export function App() {
                 onChanged={refreshCompany}
                 onError={showError}
                 onNotice={setNotice}
-              />
-            ) : null}
-            {view === "organization" ? (
-              <OrganizationView
-                companyId={companyConsole.company.id}
-                orgUnits={companyConsole.org_units}
-                agents={companyConsole.agents}
-                token={session.token}
-                onChanged={refreshCompany}
-                onError={showError}
               />
             ) : null}
             {view === "projects" ? (
@@ -614,36 +815,23 @@ export function App() {
                 onNotice={setNotice}
               />
             ) : null}
-            {view === "tasks" ? (
-              <TasksView
-                consoleData={companyConsole}
-                token={session.token}
-                onChanged={refreshCompany}
-                onError={showError}
-                onNotice={setNotice}
-              />
-            ) : null}
             {view === "codex" ? (
-              <CodexRunnersView
+              <CodexControlCenter
                 consoleData={companyConsole}
                 token={session.token}
+                realtimeEvent={realtimeEvent}
                 onError={showError}
                 onNotice={setNotice}
-              />
-            ) : null}
-            {view === "approvals" ? (
-              <ApprovalsView
-                approvals={approvals}
-                agents={companyConsole.agents}
-                onReview={reviewApproval}
-                onError={showError}
               />
             ) : null}
             {view === "messages" ? (
-              <MessagesView
+              <ChatCenter
                 consoleData={companyConsole}
                 humanUser={session.user}
                 token={session.token}
+                realtimeEvent={realtimeEvent}
+                approvals={approvals}
+                onReview={reviewApproval}
                 onChanged={refreshCompany}
                 onError={showError}
                 onNotice={setNotice}
@@ -664,12 +852,23 @@ export function App() {
           onError={showError}
         />
       ) : null}
+      {showUserPreferences ? (
+        <UserPreferencesDialog
+          companyConsole={companyConsole}
+          token={session.token}
+          onChanged={refreshCompany}
+          onError={showError}
+          onNotice={setNotice}
+          onClose={() => setShowUserPreferences(false)}
+        />
+      ) : null}
       {showAgentForm && companyConsole ? (
         <CreateAgentDialog
           company={companyConsole.company}
           orgUnits={companyConsole.org_units}
           agents={companyConsole.agents}
           professions={companyConsole.professions}
+          skillLanguage={companyConsole.governance_policy.effective_settings.skill_language}
           token={session.token}
           onClose={() => setShowAgentForm(false)}
           onCreated={async (nextCredential) => {
@@ -695,146 +894,70 @@ export function App() {
   );
 }
 
-function AuthScreen(props: {
-  runtimeConfig: RuntimeConfig | null;
-  busy: boolean;
-  error: string;
-  setBusy: (value: boolean) => void;
-  setError: (value: string) => void;
-  onAuthenticated: (session: Session) => void;
+function OrganizationAgentCenter(props: {
+  consoleData: CompanyConsole;
+  humanUserId: string;
+  token: string;
+  onCredential: (credential: Credential) => void;
+  onBatchCredentials: (result: BatchCredentialResult) => void;
+  onChanged: () => Promise<void>;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
 }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("owner@example.com");
-  const [displayName, setDisplayName] = useState("Owner");
-  const [password, setPassword] = useState("password123");
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    props.setBusy(true);
-    props.setError("");
-    try {
-      const response = await api<{ user: HumanUser; session_token: string }>(
-        mode === "login" ? "/api/v1/auth/login" : "/api/v1/auth/register",
-        {
-          method: "POST",
-          body: JSON.stringify(
-            mode === "login" ? { email, password } : { email, display_name: displayName, password },
-          ),
-        },
-      );
-      props.onAuthenticated({ token: response.session_token, user: response.user });
-    } catch (requestError) {
-      props.setError(requestError instanceof Error ? requestError.message : "登录失败");
-    } finally {
-      props.setBusy(false);
-    }
-  }
-
-  async function devLogin() {
-    props.setBusy(true);
-    props.setError("");
-    try {
-      const response = await api<{ user: HumanUser; session_token: string }>("/api/v1/dev/login", {
-        method: "POST",
-        body: JSON.stringify({ email, display_name: displayName }),
-      });
-      props.onAuthenticated({ token: response.session_token, user: response.user });
-    } catch (requestError) {
-      props.setError(requestError instanceof Error ? requestError.message : "开发登录失败");
-    } finally {
-      props.setBusy(false);
-    }
-  }
+  const [tab, setTab] = useState<"agents" | "organization">("agents");
 
   return (
-    <div className="auth-shell">
-      <section className="auth-story">
-        <div className="brand-mark"><Icon name="network" /></div>
-        <span className="eyebrow">Agent Company Network</span>
-        <h1>让你的本地 Agent<br />真正拥有同事。</h1>
-        <p>给 Codex、Claude Code 或任意外部 Agent 分配公司身份、同事目录和收件箱。它们通过 MCP 自主收发消息，而不是被平台托管运行。</p>
-        <div className="auth-flow">
-          <FlowStep index="1" title="创建身份" detail="公司、组织与独立 Agent Key" />
-          <FlowStep index="2" title="连接 MCP" detail="粘贴一段配置到本地 Agent" />
-          <FlowStep index="3" title="开始协作" detail="找同事、发消息、维护项目进度" />
-        </div>
-      </section>
-      <section className="auth-panel">
-        <form className="auth-card" onSubmit={submit}>
-          <div className="segmented">
-            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button>
-            <button type="button" className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>注册</button>
-          </div>
-          <div className="auth-heading">
-            <h2>{mode === "login" ? "欢迎回来" : "创建管理账号"}</h2>
-            <p>人类账号只负责组织与凭证治理，不替 Agent 工作。</p>
-          </div>
-          {mode === "register" ? (
-            <Field label="你的名字">
-              <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
-            </Field>
-          ) : null}
-          <Field label="邮箱">
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-          </Field>
-          <Field label="密码">
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required />
-          </Field>
-          {props.error ? <div className="inline-error">{props.error}</div> : null}
-          <button className="button primary wide" disabled={props.busy}>
-            {props.busy ? "请稍候…" : mode === "login" ? "进入控制台" : "创建账号"}
-          </button>
-          {props.runtimeConfig?.dev_endpoints_enabled ? (
-            <button className="button ghost wide" type="button" onClick={() => void devLogin()} disabled={props.busy}>
-              开发环境快速进入
-            </button>
-          ) : null}
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function Sidebar(props: {
-  user: HumanUser;
-  companies: Company[];
-  selectedCompanyId: string | null;
-  view: View;
-  onCompanyChange: (id: string) => void;
-  onViewChange: (view: View) => void;
-  pendingApprovalCount: number;
-  onCreateCompany: () => void;
-  onSignOut: () => void;
-}) {
-  return (
-    <aside className="sidebar">
-      <div className="brand"><span className="brand-mark small"><Icon name="network" /></span><strong>Relay</strong></div>
-      <div className="company-switcher">
-        <span>当前公司</span>
-        <select value={props.selectedCompanyId ?? ""} onChange={(event) => props.onCompanyChange(event.target.value)} disabled={!props.companies.length}>
-          {!props.companies.length ? <option value="">尚未创建公司</option> : null}
-          {props.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
-        </select>
-        <button onClick={props.onCreateCompany}><Icon name="plus" /> 新建公司</button>
-      </div>
-      <nav className="side-nav">
-        <NavItem icon="key" label="Agent 与凭证" active={props.view === "agents"} onClick={() => props.onViewChange("agents")} />
-        <NavItem icon="org" label="组织与权限" active={props.view === "organization"} onClick={() => props.onViewChange("organization")} />
-        <NavItem icon="book" label="Skill 中心" active={props.view === "skills"} onClick={() => props.onViewChange("skills")} />
-        <NavItem icon="git" label="项目中心" active={props.view === "projects"} onClick={() => props.onViewChange("projects")} />
-        <NavItem icon="tasks" label="任务中心" active={props.view === "tasks"} onClick={() => props.onViewChange("tasks")} />
-        <NavItem icon="terminal" label="Codex 运行器" active={props.view === "codex"} onClick={() => props.onViewChange("codex")} />
-        <NavItem icon="shield" label="审批中心" badge={props.pendingApprovalCount} active={props.view === "approvals"} onClick={() => props.onViewChange("approvals")} />
-        <NavItem icon="message" label="通信观察" active={props.view === "messages"} onClick={() => props.onViewChange("messages")} />
+    <div className="control-center organization-agent-center">
+      <nav className="control-center-tabs two-tabs" role="tablist" aria-label="组织与 Agent">
+        <button
+          className={tab === "agents" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "agents"}
+          onClick={() => setTab("agents")}
+        >
+          <span className="control-center-tab-icon"><Icon name="key" /></span>
+          <span><strong>Agent 成员</strong><small>身份、凭证、记忆与个人权限</small></span>
+        </button>
+        <button
+          className={tab === "organization" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "organization"}
+          onClick={() => setTab("organization")}
+        >
+          <span className="control-center-tab-icon"><Icon name="org" /></span>
+          <span><strong>组织架构</strong><small>组织节点、归属与权限范围</small></span>
+        </button>
       </nav>
-      <div className="sidebar-spacer" />
-      <div className="mcp-status"><span className="status-dot online" /><div><strong>MCP 服务</strong><small>{API_BASE_URL.replace(/^https?:\/\//, "")}/mcp</small></div></div>
-      <div className="user-menu">
-        <span className="avatar">{props.user.display_name.slice(0, 1).toUpperCase()}</span>
-        <div><strong>{props.user.display_name}</strong><small>{props.user.email}</small></div>
-        <button title="退出登录" onClick={props.onSignOut}><Icon name="logout" /></button>
+
+      <div className="control-center-panel" role="tabpanel">
+        {tab === "agents" ? (
+          <AgentsView
+            consoleData={props.consoleData}
+            humanUserId={props.humanUserId}
+            token={props.token}
+            onCredential={props.onCredential}
+            onBatchCredentials={props.onBatchCredentials}
+            onChanged={props.onChanged}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+        {tab === "organization" ? (
+          <OrganizationView
+            companyId={props.consoleData.company.id}
+            orgUnits={props.consoleData.org_units}
+            agents={props.consoleData.agents}
+            managedWorkspaceRoot={props.consoleData.governance_policy.effective_settings.managed_workspace_root}
+            token={props.token}
+            onChanged={props.onChanged}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -850,9 +973,9 @@ function AgentsView(props: {
 }) {
   const activeAgents = props.consoleData.agents.filter((agent) => agent.membership.employment_status === "active");
   const connectedAgents = activeAgents.filter((agent) => agent.connection.status === "connected");
-  const issuedAgents = props.consoleData.agents.filter((agent) => agent.connection.key_prefix);
   const provisioningAgents = props.consoleData.agents.filter((agent) => agent.membership.employment_status === "provisioning");
   const [batchBusy, setBatchBusy] = useState(false);
+  const agentPagination = usePagination(props.consoleData.agents, 8, props.consoleData.company.id);
 
   async function activateAllProvisioningAgents() {
     if (!window.confirm(`依次激活 ${provisioningAgents.length} 个 Agent 并签发一次性 Key？`)) return;
@@ -872,6 +995,8 @@ function AgentsView(props: {
           keyPrefix: response.result.agent_key_prefix,
           permissions: response.result.membership.permissions,
           professionKey: companyAgentProfessionKey(agent, props.consoleData.professions),
+          profession: props.consoleData.professions.find((profession) => profession.key === companyAgentProfessionKey(agent, props.consoleData.professions)),
+          skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
         });
       } catch (error) {
         failures.push({
@@ -895,29 +1020,16 @@ function AgentsView(props: {
   }
   return (
     <div className="content-stack">
-      <section className="connect-card">
-        <div className="connect-copy">
-          <span className="pill"><span className="status-dot online" /> 远程 MCP 已就绪</span>
-          <h2>这里不运行 Agent，只给它们一间办公室。</h2>
-          <p>每个外部 Agent 使用自己的 Key 连接 MCP。连接后，它会知道自己在哪家公司、同事是谁，并通过 Inbox 收发消息。</p>
-        </div>
-        <div className="connect-steps">
-          <MiniStep number="01" text="创建 Agent 账号" done={props.consoleData.agents.length > 0} />
-          <MiniStep number="02" text="复制 Key 与 MCP 配置" done={issuedAgents.length > 0} />
-          <MiniStep number="03" text="让 Agent 完成首次连接" done={connectedAgents.length > 0} />
-        </div>
-      </section>
-
       <section className="metric-row">
         <Metric label="Agent 账号" value={String(props.consoleData.agents.length)} detail={`${connectedAgents.length} 个已连接，${Math.max(0, activeAgents.length - connectedAgents.length)} 个待连接`} />
         <Metric label="组织节点" value={String(props.consoleData.org_units.length)} detail="用于身份与授权范围" />
         <Metric label="公司会话" value={String(props.consoleData.conversations.length)} detail="私聊、群聊与项目群" />
-        <Metric label="正式项目" value={String(props.consoleData.projects.length)} detail="由 Agent 通过 MCP 维护" />
+        <Metric label="正式项目" value={String(props.consoleData.projects.length)} detail="Human 创建，Agent 协作维护" />
       </section>
 
       <section className="section-card">
         <div className="section-heading">
-          <div><span className="eyebrow">IDENTITIES</span><h2>Agent 账号</h2><p>凭证属于外部 Agent，不属于浏览器或平台 Runtime。</p></div>
+          <div><span className="eyebrow">IDENTITIES</span><h2>Agent 账号</h2></div>
           <div className="section-heading-actions">
             {provisioningAgents.length ? <button className="button small primary" onClick={() => void activateAllProvisioningAgents()} disabled={batchBusy}>{batchBusy ? "正在依次激活…" : `批量激活 ${provisioningAgents.length} 个`}</button> : null}
             <span className="count-badge">{props.consoleData.agents.length}</span>
@@ -925,9 +1037,10 @@ function AgentsView(props: {
         </div>
         {props.consoleData.agents.length ? (
           <div className="agent-list">
-            {props.consoleData.agents.map((agent) => (
+            {agentPagination.pageItems.map((agent) => (
               <AgentRow key={agent.agent_profile.id} agent={agent} {...props} />
             ))}
+            <Pagination {...agentPagination} onPageChange={agentPagination.setPage} />
           </div>
         ) : (
           <div className="empty-inline"><Icon name="key" /><h3>还没有 Agent 账号</h3><p>点击右上角创建第一个账号，系统会签发一次性 Key。</p></div>
@@ -948,7 +1061,17 @@ function AgentRow(props: {
   onNotice: (notice: string) => void;
 }) {
   const currentProfessionKey = companyAgentProfessionKey(props.agent, props.consoleData.professions);
+  const skillLanguage = props.consoleData.governance_policy.effective_settings.skill_language;
+  const professionGroups = useMemo(() => {
+    const groups = new Map<string, CompanyProfession[]>();
+    props.consoleData.professions.forEach((profession) => {
+      const category = skillLanguage === "en" ? profession.category_label_en : profession.category_label;
+      groups.set(category, [...(groups.get(category) ?? []), profession]);
+    });
+    return Array.from(groups.entries());
+  }, [props.consoleData.professions, skillLanguage]);
   const [expanded, setExpanded] = useState(false);
+  const [showMemories, setShowMemories] = useState(false);
   const [permissions, setPermissions] = useState(props.agent.membership.permissions);
   const [scopeId, setScopeId] = useState(props.agent.membership.staffing_scope_org_unit_id ?? "");
   const [roleKey, setRoleKey] = useState(props.agent.membership.role_key);
@@ -986,6 +1109,8 @@ function AgentRow(props: {
         keyPrefix: response.result.agent_key_prefix,
         permissions: props.agent.membership.permissions,
         professionKey: currentProfessionKey,
+        profession: props.consoleData.professions.find((profession) => profession.key === currentProfessionKey),
+        skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
       });
       await props.onChanged();
     } catch (error) {
@@ -1002,6 +1127,8 @@ function AgentRow(props: {
       keyPrefix: props.agent.connection.key_prefix ?? "",
       permissions: props.agent.membership.permissions,
       professionKey: currentProfessionKey,
+      profession: props.consoleData.professions.find((profession) => profession.key === currentProfessionKey),
+      skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
     });
   }
 
@@ -1022,6 +1149,8 @@ function AgentRow(props: {
           keyPrefix: response.result.agent_key_prefix ?? "",
           permissions: props.agent.membership.permissions,
           professionKey: currentProfessionKey,
+          profession: props.consoleData.professions.find((profession) => profession.key === currentProfessionKey),
+          skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
         });
       } else {
         props.onNotice(`${props.agent.agent_profile.display_name} 已${labels[action]}`);
@@ -1109,6 +1238,7 @@ function AgentRow(props: {
         <div className="agent-meta"><span>{props.agent.membership.job_title || "Agent"}</span><small>{unit?.name ?? "未分配组织"}</small><small className="connection-detail">{connectionDetail}</small></div>
         <StatusBadge value={displayedStatus} />
         <div className="agent-actions">
+          <button className="button small" type="button" onClick={() => setShowMemories(true)}><Icon name="memory" /> 记忆</button>
           {props.agent.connection.key_prefix ? <button className="button small" onClick={openConnectionGuide}><Icon name="key" /> 接入资料</button> : null}
           {active ? <button className="button small" onClick={() => void rotateKey()} disabled={busy}><Icon name="refresh" /> 轮换 Key</button> : null}
           {provisioning ? <button className="button small primary" onClick={() => void changeStatus("activate")} disabled={busy}>激活并签发 Key</button> : null}
@@ -1152,10 +1282,14 @@ function AgentRow(props: {
             <div><h4>职业与公司角色</h4><p>职业决定工作方法、职业 Skill 和任务权限；公司角色只负责组织治理与项目成员管理。</p></div>
             <Field label="系统职业">
               <select value={professionKey} onChange={(event) => setProfessionKey(event.target.value)} disabled={props.agent.membership.employment_status === "terminated"}>
-                {props.consoleData.professions.map((profession) => <option key={profession.key} value={profession.key}>{profession.label}</option>)}
+                {professionGroups.map(([category, professions]) => (
+                  <optgroup label={category} key={category}>
+                    {professions.map((profession) => <option key={profession.key} value={profession.key}>{skillLanguage === "en" ? profession.label_en : profession.label}</option>)}
+                  </optgroup>
+                ))}
               </select>
               {props.consoleData.professions.find((profession) => profession.key === professionKey) ? (
-                <small>{props.consoleData.professions.find((profession) => profession.key === professionKey)?.description} {props.consoleData.professions.find((profession) => profession.key === professionKey)?.can_create_tasks ? "可创建、拆分和分配任务。" : "只能查看任务并更新自己任务的执行状态。"}</small>
+                <small>{skillLanguage === "en" ? props.consoleData.professions.find((profession) => profession.key === professionKey)?.description_en : props.consoleData.professions.find((profession) => profession.key === professionKey)?.description} {props.consoleData.professions.find((profession) => profession.key === professionKey)?.can_create_tasks ? "可创建、拆分和分配任务。" : "只能查看任务并更新自己任务的执行状态。"}</small>
               ) : null}
             </Field>
             <button className="button primary small" onClick={() => void saveProfession()} disabled={busy || professionKey === currentProfessionKey}>保存职业</button>
@@ -1207,39 +1341,85 @@ function AgentRow(props: {
           </div>
         </div>
       ) : null}
+      {showMemories ? (
+        <Dialog
+          title={`${props.agent.agent_profile.display_name} · Agent 记忆`}
+          description="这里仅展示该 Agent 独立拥有的长期与短期精华记忆。"
+          onClose={() => setShowMemories(false)}
+          extraWide
+        >
+          <MemoriesView
+            consoleData={props.consoleData}
+            token={props.token}
+            fixedAgentId={props.agent.agent_profile.id}
+            embedded
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        </Dialog>
+      ) : null}
     </article>
   );
 }
 
-function SkillsView({ consoleData }: { consoleData: CompanyConsole | null }) {
+function SkillsView(props: {
+  consoleData: CompanyConsole | null;
+  systemProjectTypes: CompanyProjectType[];
+}) {
+  const { consoleData, systemProjectTypes } = props;
+  const { language: uiLanguage } = useUiLanguage();
+  const skillLanguage: RelaySkillLanguage = uiLanguage;
+  const [tab, setTab] = useState<"agent_skills" | "project_rules">("agent_skills");
   const professions = useMemo<CompanyProfession[]>(() => consoleData?.professions ?? Object.entries(RELAY_PROFESSION_SKILLS).map(([key, document]) => ({
     key,
     label: document.title.replace("职业 Skill", ""),
+    label_en: document.title.replace("职业 Skill", ""),
     description: `${document.title.replace("职业 Skill", "")}的岗位工作方法、交付标准和权限边界。`,
+    description_en: `Professional workflow, deliverables, quality gates, and authority boundaries for ${document.title}.`,
+    category_key: "general",
+    category_label: "通用协作",
+    category_label_en: "General Collaboration",
     skill_name: document.name,
+    skill_markdown: document.content,
+    skill_markdown_en: document.content,
     can_create_tasks: key === "project_manager" || key === "product_manager" || key === "technical_manager",
   })), [consoleData?.professions]);
   const agents = useMemo(() => consoleData?.agents ?? [], [consoleData?.agents]);
   const [selectedAgentId, setSelectedAgentId] = useState(agents[0]?.agent_profile.id ?? "");
   const library = useMemo(() => [
     {
-      category: "通用层",
-      description: "所有 Agent 都会使用的公司身份、消息、任务和静默协作协议。",
-      document: RELAY_EMPLOYEE_SKILL,
+      category: skillLanguage === "en" ? "Shared Layer" : "通用层",
+      description: skillLanguage === "en" ? "Company identity, messaging, task, memory, and silence protocol used by every Agent." : "所有 Agent 都会使用的公司身份、消息、任务和静默协作协议。",
+      document: skillLanguage === "en" ? RELAY_EMPLOYEE_SKILL_EN : RELAY_EMPLOYEE_SKILL,
     },
     ...professions.map((profession) => ({
-      category: "职业层",
-      description: profession.description,
-      document: RELAY_PROFESSION_SKILLS[profession.key] ?? RELAY_PROFESSION_SKILLS.general_member,
+      category: skillLanguage === "en" ? profession.category_label_en : profession.category_label,
+      description: skillLanguage === "en" ? profession.description_en : profession.description,
+      document: relayProfessionSkillDocument(profession, skillLanguage),
     })),
     {
-      category: "授权层",
-      description: "仅在 Human 授予人员管理权限时追加，约束招聘、暂停和裁撤动作。",
-      document: RELAY_STAFFING_MANAGER_SKILL,
+      category: skillLanguage === "en" ? "Authorization Layer" : "授权层",
+      description: skillLanguage === "en" ? "Added only when Human grants staffing permissions; governs hiring, suspension, and termination." : "仅在 Human 授予人员管理权限时追加，约束招聘、暂停和裁撤动作。",
+      document: skillLanguage === "en" ? RELAY_STAFFING_MANAGER_SKILL_EN : RELAY_STAFFING_MANAGER_SKILL,
     },
-  ], [professions]);
+  ], [professions, skillLanguage]);
   const [selectedSkillName, setSelectedSkillName] = useState(RELAY_PROFESSION_SKILLS.project_manager.name);
   const [skillPreviewMode, setSkillPreviewMode] = useState<"guide" | "source">("guide");
+  const skillCategories = useMemo(() => [...new Set(library.map((item) => item.category))], [library]);
+  const [skillCategory, setSkillCategory] = useState("all");
+  const visibleLibrary = useMemo(() => skillCategory === "all" ? library : library.filter((item) => item.category === skillCategory), [library, skillCategory]);
+  const skillPagination = usePagination(visibleLibrary, 8, `${skillLanguage}:${skillCategory}:${visibleLibrary.length}`);
+  const projectTypes = useMemo(() => consoleData?.project_types ?? systemProjectTypes, [consoleData?.project_types, systemProjectTypes]);
+  const projectTypeCategories = useMemo(() => Array.from(
+    new Map(projectTypes.map((type) => [type.category_key, skillLanguage === "en" ? type.category_label_en : type.category_label])).entries(),
+  ).map(([key, label]) => ({ key, label })), [projectTypes, skillLanguage]);
+  const [projectTypeCategory, setProjectTypeCategory] = useState("all");
+  const visibleProjectTypes = useMemo(() => projectTypeCategory === "all"
+    ? projectTypes
+    : projectTypes.filter((type) => type.category_key === projectTypeCategory), [projectTypeCategory, projectTypes]);
+  const [selectedProjectTypeKey, setSelectedProjectTypeKey] = useState(projectTypes[0]?.key ?? "");
+  const [projectRulePreviewMode, setProjectRulePreviewMode] = useState<"guide" | "source">("guide");
+  const projectTypePagination = usePagination(visibleProjectTypes, 6, `${projectTypeCategory}:${visibleProjectTypes.length}`);
 
   useEffect(() => {
     if (!agents.some((agent) => agent.agent_profile.id === selectedAgentId)) {
@@ -1248,10 +1428,16 @@ function SkillsView({ consoleData }: { consoleData: CompanyConsole | null }) {
   }, [agents, selectedAgentId]);
 
   useEffect(() => {
-    if (!library.some((item) => item.document.name === selectedSkillName)) {
-      setSelectedSkillName(RELAY_EMPLOYEE_SKILL.name);
+    if (!visibleLibrary.some((item) => item.document.name === selectedSkillName)) {
+      setSelectedSkillName(visibleLibrary[0]?.document.name ?? RELAY_EMPLOYEE_SKILL.name);
     }
-  }, [library, selectedSkillName]);
+  }, [visibleLibrary, selectedSkillName]);
+
+  useEffect(() => {
+    if (!visibleProjectTypes.some((type) => type.key === selectedProjectTypeKey)) {
+      setSelectedProjectTypeKey(visibleProjectTypes[0]?.key ?? "");
+    }
+  }, [visibleProjectTypes, selectedProjectTypeKey]);
 
   const selectedAgent = agents.find((agent) => agent.agent_profile.id === selectedAgentId);
   const selectedProfession = selectedAgent
@@ -1265,41 +1451,148 @@ function SkillsView({ consoleData }: { consoleData: CompanyConsole | null }) {
       mcpServerName: relayAgentConnectionNames(selectedAgent.agent_profile).mcpServer,
     },
     companyAgentProfessionKey(selectedAgent, professions),
+    skillLanguage,
+    selectedProfession ?? undefined,
   ) : [];
   const selectedLibraryItem = library.find((item) => item.document.name === selectedSkillName) ?? library[0];
   const selectedSkillAnalysis = useMemo(
     () => analyzeRelaySkill(selectedLibraryItem.document),
     [selectedLibraryItem.document],
   );
+  const selectedProjectType = visibleProjectTypes.find((type) => type.key === selectedProjectTypeKey) ?? visibleProjectTypes[0];
+  const selectedProjectRuleDocument = useMemo<RelaySkillDocument>(() => ({
+    name: selectedProjectType ? `relay-project-${selectedProjectType.key}` : "relay-project-unavailable",
+    title: selectedProjectType ? skillLanguage === "en" ? `${selectedProjectType.label_en} Rules` : `${selectedProjectType.label}固定规则` : skillLanguage === "en" ? "Project type Rules unavailable" : "项目类型规则暂不可用",
+    content: selectedProjectType ? skillLanguage === "en" ? selectedProjectType.rule_markdown_en : selectedProjectType.rule_markdown : "",
+  }), [selectedProjectType, skillLanguage]);
+  const selectedProjectRuleAnalysis = useMemo(
+    () => analyzeRelaySkill(selectedProjectRuleDocument),
+    [selectedProjectRuleDocument],
+  );
 
   return (
     <div className="content-stack">
-      <section className="skill-center-hero">
-        <div>
-          <span className="pill"><Icon name="book" /> RELAY SKILLS</span>
-          <h2>每个 Agent 都由多层 Skill 共同约束。</h2>
-          <p>通用层定义公司协作协议，职业层定义岗位工作方法，授权层只在 Human 明确授权后追加。MCP 当前开放的工具与权限始终是最终边界。</p>
-        </div>
-        <div className="skill-layer-flow">
-          <span><strong>01</strong>通用协作 Skill</span>
-          <span><strong>02</strong>职业专属 Skill</span>
-          <span><strong>03</strong>可选授权 Skill</span>
-        </div>
-      </section>
+      <nav className="control-center-tabs two-tabs skill-center-tabs" role="tablist" aria-label="Skill 中心">
+        <button
+          className={tab === "agent_skills" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "agent_skills"}
+          onClick={() => setTab("agent_skills")}
+        >
+          <span className="control-center-tab-icon"><Icon name="book" /></span>
+          <span><strong>Agent Skill</strong><small>职业 Skill、组合与授权</small></span>
+        </button>
+        <button
+          className={tab === "project_rules" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "project_rules"}
+          onClick={() => setTab("project_rules")}
+        >
+          <span className="control-center-tab-icon"><Icon name="git" /></span>
+          <span><strong>项目类型 Rule</strong><small>固定项目基线与执行流程</small></span>
+        </button>
+      </nav>
 
-      <section className="metric-row">
+      <div className="skill-center-panel" role="tabpanel">
+
+      {tab === "agent_skills" ? <section className="metric-row">
         <Metric label="Skill 模板" value={String(library.length)} detail="通用、职业和授权模板" />
         <Metric label="系统职业" value={String(professions.length)} detail="职业决定任务权限和工作方法" />
+        <Metric label="项目类型" value={String(projectTypes.length)} detail="每类项目都有不可弱化的固定规则" />
         <Metric label="Agent 组合" value={String(agents.length)} detail="每个 Agent 独立生成绑定版本" />
-        <Metric label="组合顺序" value="通用 → 职业" detail="有特殊授权时再追加授权 Skill" />
-      </section>
+      </section> : null}
 
+      {tab === "project_rules" ? <section className="section-card skill-library-card project-rule-library-card">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">PROJECT TYPE RULES</span>
+            <h2>项目类型规则库</h2>
+          </div>
+          <span className="count-badge">{projectTypes.length}</span>
+        </div>
+        <div className="project-rule-category-filter" role="tablist" aria-label="项目规则分类">
+          <button className={projectTypeCategory === "all" ? "active" : ""} type="button" onClick={() => setProjectTypeCategory("all")}>全部 <span>{projectTypes.length}</span></button>
+          {projectTypeCategories.map((category) => {
+            const count = projectTypes.filter((type) => type.category_key === category.key).length;
+            return <button className={projectTypeCategory === category.key ? "active" : ""} type="button" key={category.key} onClick={() => setProjectTypeCategory(category.key)}>{category.label} <span>{count}</span></button>;
+          })}
+        </div>
+        {selectedProjectType ? (
+          <div className="skill-library-layout">
+            <div className="skill-library-list project-rule-type-list">
+              {projectTypePagination.pageItems.map((type) => {
+                const typeLabel = skillLanguage === "en" ? type.label_en : type.label;
+                const typeDescription = skillLanguage === "en" ? type.description_en : type.description;
+                const typeCategory = skillLanguage === "en" ? type.category_label_en : type.category_label;
+                const document: RelaySkillDocument = { name: `relay-project-${type.key}`, title: skillLanguage === "en" ? `${typeLabel} Rules` : `${typeLabel}固定规则`, content: skillLanguage === "en" ? type.rule_markdown_en : type.rule_markdown };
+                const analysis = analyzeRelaySkill(document);
+                return (
+                  <button className={type.key === selectedProjectType.key ? "active" : ""} key={type.key} onClick={() => setSelectedProjectTypeKey(type.key)}>
+                    <span>{typeCategory}</span>
+                    <strong>{typeLabel}</strong>
+                    <small>{typeDescription}</small>
+                    <div className="skill-list-stats"><b>{analysis.sections.length} 个模块</b><b>{analysis.instructionCount} 条规则</b></div>
+                    <code>{type.key}</code>
+                  </button>
+                );
+              })}
+              <Pagination {...projectTypePagination} onPageChange={projectTypePagination.setPage} compact />
+            </div>
+            <div className="skill-template-preview project-rule-preview">
+              <div className="skill-template-preview-head">
+                <div>
+                  <span>SYSTEM PROJECT SKILL</span>
+                  <strong>{selectedProjectRuleDocument.title}</strong>
+                  <code>{selectedProjectRuleDocument.name}/SKILL.md</code>
+                </div>
+                <div className="skill-preview-actions">
+                  <div className="skill-preview-toggle">
+                    <button className={projectRulePreviewMode === "guide" ? "active" : ""} onClick={() => setProjectRulePreviewMode("guide")}>规则手册</button>
+                    <button className={projectRulePreviewMode === "source" ? "active" : ""} onClick={() => setProjectRulePreviewMode("source")}>Rule 原文</button>
+                  </div>
+                  <button className="button small" onClick={() => void copyText(selectedProjectRuleDocument.content)}><Icon name="copy" /> 复制规则</button>
+                </div>
+              </div>
+              {projectRulePreviewMode === "guide" ? (
+                <div className="skill-guide-preview">
+                  <section className="skill-guide-overview project-rule-overview">
+                    <div>
+                      <span className="eyebrow">MANDATORY PROJECT BASELINE</span>
+                      <h3>{skillLanguage === "en" ? selectedProjectType.label_en : selectedProjectType.label}</h3>
+                      <p>{skillLanguage === "en"
+                        ? `${selectedProjectType.description_en} Rules combine the shared governance baseline, the ${selectedProjectType.category_label_en} discipline baseline, and the ${selectedProjectType.label_en} playbook. Agents and Humans may add stricter constraints only.`
+                        : `${selectedProjectType.description} 规则按“共同治理基线 + ${selectedProjectType.category_label}领域基线 + ${selectedProjectType.label}专项规则”组合，Agent 和 Human 只能追加更严格的项目约束。`}</p>
+                    </div>
+                    <div className="skill-guide-metrics">
+                      <span><small>规则模块</small><strong>{selectedProjectRuleAnalysis.sections.length}</strong></span>
+                      <span><small>执行要求</small><strong>{selectedProjectRuleAnalysis.instructionCount}</strong></span>
+                      <span><small>自动加载</small><strong>YES</strong></span>
+                      <span><small>允许弱化</small><strong>NO</strong></span>
+                    </div>
+                  </section>
+                  <nav className="skill-section-index" aria-label="项目类型规则目录">
+                    {selectedProjectRuleAnalysis.sections.map((section, index) => <span key={`${section.title}-${index}`}><b>{String(index + 1).padStart(2, "0")}</b>{section.title}</span>)}
+                  </nav>
+                  <div className="skill-section-grid project-rule-section-grid">
+                    {selectedProjectRuleAnalysis.sections.map((section, index) => <SkillGuideSection key={`${section.title}-${index}`} section={section} index={index} />)}
+                  </div>
+                </div>
+              ) : <pre>{selectedProjectRuleDocument.content}</pre>}
+            </div>
+          </div>
+        ) : (
+          <div className="empty-inline"><Icon name="book" /><h3>项目类型规则尚未加载</h3><p>选择一个公司后，Relay 会从系统目录加载全部项目类型和固定 Rule。</p></div>
+        )}
+      </section> : null}
+
+      {tab === "agent_skills" ? <>
       <section className="section-card">
         <div className="section-heading">
           <div>
             <span className="eyebrow">AGENT COMPOSITION</span>
             <h2>Agent 实际 Skill 组合</h2>
-            <p>这里展示复制接入资料时，该 Agent 真正会拿到的绑定、权限裁剪后版本。</p>
           </div>
           {agents.length ? (
             <select className="skill-agent-select" value={selectedAgentId} onChange={(event) => setSelectedAgentId(event.target.value)}>
@@ -1331,13 +1624,16 @@ function SkillsView({ consoleData }: { consoleData: CompanyConsole | null }) {
           <div>
             <span className="eyebrow">SKILL LIBRARY</span>
             <h2>Skill 模板库</h2>
-            <p>选择模板查看完整原文；Agent 实际版本还会加入账号绑定并按权限裁剪。</p>
           </div>
           <span className="count-badge">{library.length}</span>
         </div>
+        <div className="project-rule-category-filter profession-skill-category-filter" role="tablist" aria-label="Profession Skill categories">
+          <button className={skillCategory === "all" ? "active" : ""} type="button" onClick={() => setSkillCategory("all")}>{skillLanguage === "en" ? "All" : "全部"} <span>{library.length}</span></button>
+          {skillCategories.map((category) => <button className={skillCategory === category ? "active" : ""} type="button" key={category} onClick={() => setSkillCategory(category)}>{category} <span>{library.filter((item) => item.category === category).length}</span></button>)}
+        </div>
         <div className="skill-library-layout">
           <div className="skill-library-list">
-            {library.map((item) => {
+            {skillPagination.pageItems.map((item) => {
               const analysis = analyzeRelaySkill(item.document);
               return (
                 <button className={item.document.name === selectedLibraryItem.document.name ? "active" : ""} key={item.document.name} onClick={() => setSelectedSkillName(item.document.name)}>
@@ -1349,6 +1645,7 @@ function SkillsView({ consoleData }: { consoleData: CompanyConsole | null }) {
                 </button>
               );
             })}
+            <Pagination {...skillPagination} onPageChange={skillPagination.setPage} compact />
           </div>
           <div className="skill-template-preview">
             <div className="skill-template-preview-head">
@@ -1392,6 +1689,8 @@ function SkillsView({ consoleData }: { consoleData: CompanyConsole | null }) {
           </div>
         </div>
       </section>
+      </> : null}
+      </div>
     </div>
   );
 }
@@ -1419,9 +1718,478 @@ function SkillGuideSection({ section, index }: { section: RelaySkillSection; ind
   );
 }
 
+function ChatCenter(props: {
+  consoleData: CompanyConsole;
+  humanUser: HumanUser;
+  token: string;
+  realtimeEvent: CompanyRealtimeEvent | null;
+  approvals: AgentToolApproval[];
+  onReview: (approvalId: string, decision: "approve" | "reject", reviewNote: string) => Promise<void>;
+  onChanged: () => Promise<void>;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [tab, setTab] = useState<"messages" | "approvals">("messages");
+  const pendingApprovalCount = props.approvals.filter((approval) => approval.status === "pending").length;
+
+  return (
+    <div className="control-center chat-center">
+      <nav className="control-center-tabs two-tabs" role="tablist" aria-label="聊天">
+        <button className={tab === "messages" ? "active" : ""} type="button" role="tab" aria-selected={tab === "messages"} onClick={() => setTab("messages")}>
+          <span className="control-center-tab-icon"><Icon name="message" /></span>
+          <span><strong>聊天</strong><small>Human 与 Agent</small></span>
+        </button>
+        <button className={tab === "approvals" ? "active" : ""} type="button" role="tab" aria-selected={tab === "approvals"} onClick={() => setTab("approvals")}>
+          <span className="control-center-tab-icon"><Icon name="shield" /></span>
+          <span><strong>审批</strong><small>权限升级请求</small></span>
+          {pendingApprovalCount ? <span className="control-center-tab-badge">{pendingApprovalCount}</span> : null}
+        </button>
+      </nav>
+      <div className="control-center-panel" role="tabpanel">
+        {tab === "messages" ? (
+          <MessagesView
+            consoleData={props.consoleData}
+            humanUser={props.humanUser}
+            token={props.token}
+            realtimeEvent={props.realtimeEvent}
+            onChanged={props.onChanged}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+        {tab === "approvals" ? (
+          <ApprovalsView
+            approvals={props.approvals}
+            agents={props.consoleData.agents}
+            onReview={props.onReview}
+            onError={props.onError}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function CodexControlCenter(props: {
+  consoleData: CompanyConsole;
+  token: string;
+  realtimeEvent: CompanyRealtimeEvent | null;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [tab, setTab] = useState<"runners" | "settings" | "mcp" | "plugins" | "environment">("runners");
+
+  return (
+    <div className="control-center codex-control-center">
+      <nav className="control-center-tabs" role="tablist" aria-label="Codex 控制台">
+        <button
+          className={tab === "runners" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "runners"}
+          onClick={() => setTab("runners")}
+        >
+          <span className="control-center-tab-icon"><Icon name="terminal" /></span>
+          <span><strong>运行器</strong><small>配置与会话</small></span>
+        </button>
+        <button
+          className={tab === "settings" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "settings"}
+          onClick={() => setTab("settings")}
+        >
+          <span className="control-center-tab-icon"><Icon name="settings" /></span>
+          <span><strong>CLI 设置</strong><small>默认值与覆盖</small></span>
+        </button>
+        <button
+          className={tab === "mcp" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "mcp"}
+          onClick={() => setTab("mcp")}
+        >
+          <span className="control-center-tab-icon"><Icon name="network" /></span>
+          <span><strong>MCP</strong><small>服务与连接</small></span>
+        </button>
+        <button
+          className={tab === "plugins" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "plugins"}
+          onClick={() => setTab("plugins")}
+        >
+          <span className="control-center-tab-icon"><Icon name="plugin" /></span>
+          <span><strong>插件</strong><small>CLI 能力目录</small></span>
+        </button>
+        <button
+          className={tab === "environment" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "environment"}
+          onClick={() => setTab("environment")}
+        >
+          <span className="control-center-tab-icon"><Icon name="key" /></span>
+          <span><strong>CLI 与认证</strong><small>安装与账号环境</small></span>
+        </button>
+      </nav>
+
+      <div className="control-center-panel" role="tabpanel">
+        {tab === "runners" ? (
+          <CodexRunnersView
+            consoleData={props.consoleData}
+            token={props.token}
+            realtimeEvent={props.realtimeEvent}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+        {tab === "plugins" ? (
+          <CodexPluginsView
+            companyId={props.consoleData.company.id}
+            token={props.token}
+            realtimeEvent={props.realtimeEvent}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+        {tab === "settings" ? (
+          <CodexCliSettingsView
+            companyId={props.consoleData.company.id}
+            token={props.token}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+        {tab === "mcp" ? (
+          <CodexMcpView
+            companyId={props.consoleData.company.id}
+            token={props.token}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+        {tab === "environment" ? (
+          <CodexCliAuthView
+            companyId={props.consoleData.company.id}
+            token={props.token}
+            onError={props.onError}
+            onNotice={props.onNotice}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function CodexMcpView(props: {
+  companyId: string;
+  token: string;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [environment, setEnvironment] = useState<CodexEnvironmentView | null>(null);
+  const [targetSelector, setTargetSelector] = useState("default");
+  const [creating, setCreating] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState<"streamable_http" | "stdio">("streamable_http");
+  const [url, setUrl] = useState("");
+  const [command, setCommand] = useState("");
+  const [argsText, setArgsText] = useState("");
+  const [bearerTokenEnvVar, setBearerTokenEnvVar] = useState("");
+
+  async function loadEnvironment(silent = false) {
+    if (!silent) setLoading(true);
+    try {
+      const response = await api<CodexEnvironmentView>(
+        `/api/v1/companies/${props.companyId}/codex-environments`,
+        {},
+        props.token,
+      );
+      setEnvironment(response);
+      const selectors = ["default", ...response.profiles.filter((profile) => profile.status === "active").map((profile) => profile.selector)];
+      setTargetSelector((current) => selectors.includes(current) ? current : "default");
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+
+  useEffect(() => { void loadEnvironment(); }, [props.companyId, props.token]);
+  const hasPendingOperation = environment?.mcp_environments.some((snapshot) => !["idle", "failed"].includes(snapshot.operation_status));
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadEnvironment(true), hasPendingOperation ? 2_000 : 30_000);
+    return () => window.clearTimeout(timer);
+  }, [hasPendingOperation, environment?.runtime.updated_at, props.companyId, props.token]);
+
+  const snapshot = environment?.mcp_environments.find((item) => item.selector === targetSelector) ?? null;
+  const profile = environment?.profiles.find((item) => item.selector === targetSelector) ?? null;
+  const servers = snapshot?.servers ?? [];
+  const serverPagination = usePagination(servers, 9, targetSelector);
+  const operationBusy = Boolean(snapshot && !["idle", "failed"].includes(snapshot.operation_status));
+
+  function resetForm() {
+    setName("");
+    setUrl("");
+    setCommand("");
+    setArgsText("");
+    setBearerTokenEnvVar("");
+  }
+
+  async function refresh() {
+    setBusy("refresh");
+    try {
+      await api(
+        `/api/v1/companies/${props.companyId}/codex-mcp-servers/refresh`,
+        { method: "POST", body: JSON.stringify({ target_selector: targetSelector }) },
+        props.token,
+      );
+      props.onNotice("MCP 刷新请求已交给宿主机 Trigger");
+      await loadEnvironment(true);
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function addServer(event: FormEvent) {
+    event.preventDefault();
+    setBusy("add");
+    try {
+      await api(
+        `/api/v1/companies/${props.companyId}/codex-mcp-servers`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            target_selector: targetSelector,
+            name,
+            transport,
+            url: transport === "streamable_http" ? url : null,
+            command: transport === "stdio" ? command : null,
+            args: transport === "stdio" ? argsText.split("\n").map((item) => item.trim()).filter(Boolean) : [],
+            bearer_token_env_var: transport === "streamable_http" && bearerTokenEnvVar.trim() ? bearerTokenEnvVar.trim() : null,
+          }),
+        },
+        props.token,
+      );
+      resetForm();
+      setCreating(false);
+      props.onNotice("MCP 配置已排队，Trigger 将写入目标 Codex CLI 环境");
+      await loadEnvironment(true);
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeServer(server: CodexMcpServer) {
+    setBusy(`remove:${server.name}`);
+    try {
+      await api(
+        `/api/v1/companies/${props.companyId}/codex-mcp-servers/${encodeURIComponent(targetSelector)}/${encodeURIComponent(server.name)}`,
+        { method: "DELETE" },
+        props.token,
+      );
+      props.onNotice(`已提交删除 MCP「${server.name}」的请求`);
+      await loadEnvironment(true);
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="content-stack codex-mcp-page">
+      <section className="section-card">
+        <div className="section-heading mcp-catalog-heading">
+          <div><span className="eyebrow">MCP ENVIRONMENT</span><h2>已配置的 MCP</h2><p>{snapshot?.last_checked_at ? `由 Trigger 调用 codex mcp list 发现 · ${formatTime(snapshot.last_checked_at)}` : "等待宿主机 Trigger 上报 MCP 列表。"}</p></div>
+          <div className="section-heading-actions">
+            <select value={targetSelector} onChange={(event) => setTargetSelector(event.target.value)}>
+              <option value="default">宿主机默认 Codex</option>
+              {environment?.profiles.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.selector}>{item.name} · 独立 CODEX_HOME</option>)}
+            </select>
+            <button className="button small" onClick={() => void refresh()} disabled={Boolean(busy) || operationBusy || !environment?.runtime.installed}><Icon name="refresh" /> {busy === "refresh" ? "提交中…" : "刷新"}</button>
+            <button className="button primary small" onClick={() => setCreating((value) => !value)} disabled={operationBusy || !environment?.runtime.installed}><Icon name="plus" /> 添加 MCP</button>
+          </div>
+        </div>
+
+        <div className="mcp-environment-summary">
+          <span><small>目标环境</small><strong>{targetSelector === "default" ? "宿主机默认" : profile?.name ?? targetSelector}</strong></span>
+          <span><small>已发现</small><strong>{servers.length}</strong></span>
+          <span><small>用户配置</small><strong>{servers.filter((server) => server.configured_by_user).length}</strong></span>
+          <span><small>插件提供</small><strong>{servers.filter((server) => !server.configured_by_user).length}</strong></span>
+          <span><small>当前状态</small><strong>{codexMcpOperationLabel(snapshot?.operation_status ?? "idle")}</strong></span>
+        </div>
+
+        {snapshot?.last_error ? <div className="mcp-error-banner"><Icon name="alert" /><span><strong>MCP 操作失败</strong><small>{snapshot.last_error}</small></span></div> : null}
+
+        {creating ? (
+          <form className="mcp-create-form" onSubmit={addServer}>
+            <div className="mcp-create-form-head"><div><strong>添加到 {targetSelector === "default" ? "宿主机默认 Codex" : profile?.name ?? targetSelector}</strong><small>配置由 Trigger 通过官方 codex mcp add 命令写入。</small></div><button type="button" className="icon-button" onClick={() => { setCreating(false); resetForm(); }}><Icon name="close" /></button></div>
+            <div className="mcp-create-grid">
+              <Field label="MCP 名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 openaiDeveloperDocs" pattern="[A-Za-z0-9_-]+" required maxLength={80} /></Field>
+              <Field label="连接方式"><select value={transport} onChange={(event) => setTransport(event.target.value as "streamable_http" | "stdio")}><option value="streamable_http">Streamable HTTP</option><option value="stdio">本地 stdio</option></select></Field>
+              {transport === "streamable_http" ? <><Field label="MCP URL"><input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/mcp" required /></Field><Field label="Bearer Token 环境变量（可选）"><input value={bearerTokenEnvVar} onChange={(event) => setBearerTokenEnvVar(event.target.value)} placeholder="例如 FIGMA_OAUTH_TOKEN" pattern="[A-Za-z_][A-Za-z0-9_]*" /></Field></> : <><Field label="启动命令"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="例如 npx" required /></Field><Field label="参数（每行一个）"><textarea value={argsText} onChange={(event) => setArgsText(event.target.value)} placeholder={"-y\n@upstash/context7-mcp"} rows={4} /></Field></>}
+            </div>
+            <p className="mcp-security-note"><Icon name="shield" /> 不要把 Token 直接写进 URL、命令或参数。HTTP Token 只填写环境变量名称，并在 Trigger 环境及 `AGENT_TRIGGER_CODEX_ENV_ALLOWLIST` 中提供。</p>
+            <div className="mcp-create-actions"><button type="button" className="button small" onClick={() => { setCreating(false); resetForm(); }} disabled={Boolean(busy)}>取消</button><button className="button primary small" disabled={Boolean(busy) || servers.some((server) => server.name === name)}>{busy === "add" ? "正在提交…" : servers.some((server) => server.name === name) ? "名称已存在" : "保存到 Codex CLI"}</button></div>
+          </form>
+        ) : null}
+
+        {loading ? <LoadingState /> : !snapshot ? <div className="empty-inline compact-empty"><Icon name="network" /><h3>等待 MCP 发现</h3><p>Trigger 启动后会自动读取现有 Codex MCP 配置。</p></div> : servers.length ? (
+          <div className="mcp-server-grid">
+            {serverPagination.pageItems.map((server) => <article className={`mcp-server-card ${server.enabled ? "enabled" : "disabled"}`} key={server.name}><div className="mcp-server-card-head"><span className="mcp-server-icon"><Icon name="network" /></span><div><strong>{server.name}</strong><small>{server.transport === "streamable_http" ? "Streamable HTTP" : server.transport === "stdio" ? "本地 stdio" : server.transport}</small></div><span className={server.enabled ? "plugin-enabled" : "plugin-disabled"}>{server.enabled ? "已启用" : "已停用"}</span></div><div className="mcp-server-endpoint">{server.address ? <code>{server.address}</code> : <code>{server.command ?? "隐藏命令"}{server.argument_count ? ` · ${server.argument_count} 个参数` : ""}</code>}</div><div className="mcp-server-meta"><span>{server.configured_by_user ? "用户配置" : "插件提供"}</span><span>{codexMcpAuthLabel(server.auth_status)}</span>{server.bearer_token_env_var ? <span>Token: {server.bearer_token_env_var}</span> : null}</div>{server.disabled_reason ? <p>{server.disabled_reason}</p> : null}<div className="mcp-server-actions">{server.configured_by_user ? <button className="button small danger" onClick={() => void removeServer(server)} disabled={Boolean(busy) || operationBusy}>{busy === `remove:${server.name}` ? "提交中…" : "删除"}</button> : <small>随插件安装，不能在此删除</small>}</div></article>)}
+            <Pagination {...serverPagination} onPageChange={serverPagination.setPage} />
+          </div>
+        ) : <div className="empty-inline compact-empty"><Icon name="network" /><h3>当前环境还没有 MCP</h3><p>点击“添加 MCP”，配置 HTTP 服务或本地 stdio 服务。</p></div>}
+      </section>
+    </div>
+  );
+}
+
+function codexMcpOperationLabel(status: CodexMcpEnvironmentSnapshot["operation_status"]) {
+  if (["refresh_pending", "refreshing"].includes(status)) return "正在刷新";
+  if (["add_pending", "adding"].includes(status)) return "正在添加";
+  if (["remove_pending", "removing"].includes(status)) return "正在删除";
+  if (status === "failed") return "需要处理";
+  return "已同步";
+}
+
+function codexMcpAuthLabel(status: string | null) {
+  if (status === "authenticated" || status === "logged_in") return "已认证";
+  if (status === "not_logged_in") return "等待 OAuth 登录";
+  if (status === "unsupported") return "无需 OAuth";
+  return status || "认证状态未知";
+}
+
+function CodexPluginsView(props: {
+  companyId: string;
+  token: string;
+  realtimeEvent: CompanyRealtimeEvent | null;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [catalogs, setCatalogs] = useState<CodexPluginCatalog[]>([]);
+  const [operations, setOperations] = useState<CodexPluginOperation[]>([]);
+  const [runnerId, setRunnerId] = useState("");
+  const [tab, setTab] = useState<"installed" | "available">("installed");
+  const [query, setQuery] = useState("");
+  const [marketplace, setMarketplace] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busyKey, setBusyKey] = useState("");
+
+  async function loadPlugins(silent = false) {
+    if (!silent) setLoading(true);
+    try {
+      const response = await api<{ catalogs: CodexPluginCatalog[]; operations: CodexPluginOperation[] }>(
+        `/api/v1/companies/${props.companyId}/codex-plugins?operation_limit=80`,
+        {},
+        props.token,
+      );
+      setCatalogs(response.catalogs);
+      setOperations(response.operations);
+      setRunnerId((current) => response.catalogs.some((catalog) => catalog.runner_id === current)
+        ? current
+        : response.catalogs[0]?.runner_id ?? "");
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+
+  useEffect(() => { void loadPlugins(); }, [props.companyId, props.token]);
+  useEffect(() => {
+    if (props.realtimeEvent?.event_type.startsWith("codex.plugin.")) {
+      void loadPlugins(true);
+    }
+  }, [props.realtimeEvent?.sequence_id]);
+
+  async function requestOperation(operation: CodexPluginOperation["operation"], pluginId: string | null) {
+    if (!runnerId) return;
+    const key = `${operation}:${pluginId ?? "catalog"}`;
+    setBusyKey(key);
+    try {
+      await api(
+        `/api/v1/companies/${props.companyId}/codex-plugins/operations`,
+        { method: "POST", body: JSON.stringify({ target_runner_id: runnerId, operation, plugin_id: pluginId }) },
+        props.token,
+      );
+      props.onNotice(operation === "install" ? "安装请求已交给宿主机 Trigger" : operation === "remove" ? "卸载请求已交给宿主机 Trigger" : "插件目录刷新请求已提交");
+      await loadPlugins(true);
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  const catalog = catalogs.find((item) => item.runner_id === runnerId) ?? null;
+  const plugins = (tab === "installed" ? catalog?.installed : catalog?.available) ?? [];
+  const marketplaces = Array.from(new Set(plugins.map((plugin) => plugin.marketplaceName))).sort();
+  const visible = plugins.filter((plugin) => {
+    const matchesQuery = !query.trim() || `${plugin.name} ${plugin.pluginId} ${plugin.marketplaceName}`.toLowerCase().includes(query.trim().toLowerCase());
+    return matchesQuery && (!marketplace || plugin.marketplaceName === marketplace);
+  });
+  const pluginPagination = usePagination(visible, 12, `${runnerId}:${tab}:${query}:${marketplace}`);
+  const visibleOperations = operations.filter((operation) => operation.target_runner_id === runnerId);
+  const operationPagination = usePagination(visibleOperations, 8, runnerId);
+  const activeOperationKeys = new Set(operations
+    .filter((operation) => operation.target_runner_id === runnerId && ["queued", "running"].includes(operation.status))
+    .map((operation) => `${operation.operation}:${operation.plugin_id ?? "catalog"}`));
+
+  return (
+    <div className="content-stack codex-plugin-page">
+      <section className="section-card">
+        <div className="section-heading plugin-catalog-heading">
+          <div><span className="eyebrow">PLUGIN CATALOG</span><h2>插件目录</h2><p>{catalog ? `${catalog.hostname} · ${catalog.codex_version ?? "Codex CLI"} · ${formatTime(catalog.discovered_at)}` : "等待宿主机 Trigger 上报 Codex CLI 插件目录。"}</p></div>
+          <div className="section-heading-actions">
+            {catalogs.length > 1 ? <select value={runnerId} onChange={(event) => setRunnerId(event.target.value)}>{catalogs.map((item) => <option key={item.runner_id} value={item.runner_id}>{item.hostname} · {item.runner_id}</option>)}</select> : null}
+            <button className="button small" onClick={() => void requestOperation("refresh", null)} disabled={!runnerId || Boolean(busyKey) || activeOperationKeys.has("refresh:catalog")}><Icon name="refresh" /> 刷新目录</button>
+          </div>
+        </div>
+        {loading ? <LoadingState /> : !catalog ? (
+          <div className="empty-inline compact-empty"><Icon name="plugin" /><h3>还没有发现宿主机插件</h3><p>请确认本地 ai-chat-agent-trigger 正在运行，并且与终端使用同一个 Codex CLI 用户环境。</p></div>
+        ) : (
+          <>
+            <div className="plugin-summary">
+              <span><small>已安装</small><strong>{catalog.installed.length}</strong></span>
+              <span><small>可安装</small><strong>{catalog.available.length}</strong></span>
+              <span><small>Marketplace</small><strong>{catalog.marketplaces.length}</strong></span>
+              <span><small>能力指纹</small><code>{catalog.fingerprint.slice(0, 12)}</code></span>
+            </div>
+            <div className="plugin-toolbar">
+              <div className="project-detail-tabs"><button className={tab === "installed" ? "active" : ""} onClick={() => setTab("installed")}>已安装 {catalog.installed.length}</button><button className={tab === "available" ? "active" : ""} onClick={() => setTab("available")}>可安装 {catalog.available.length}</button></div>
+              <div className="plugin-filters"><label><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索插件" /></label><select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}><option value="">全部来源</option>{marketplaces.map((name) => <option key={name} value={name}>{name}</option>)}</select></div>
+            </div>
+            {visible.length ? <div className="plugin-grid">{pluginPagination.pageItems.map((plugin) => {
+              const operation = tab === "installed" ? "remove" : "install";
+              const operationKey = `${operation}:${plugin.pluginId}`;
+              const pending = activeOperationKeys.has(operationKey);
+              return <article className="plugin-card" key={plugin.pluginId}><div className="plugin-card-icon"><Icon name="plugin" /></div><div className="plugin-card-main"><div><strong>{plugin.name}</strong><span className={plugin.enabled ? "plugin-enabled" : "plugin-disabled"}>{plugin.enabled ? "已启用" : "未启用"}</span></div><code>{plugin.pluginId}</code><p><span>{plugin.marketplaceName}</span><span>v{plugin.version}</span><span>{plugin.authPolicy === "ON_INSTALL" ? "安装时认证" : plugin.authPolicy === "ON_USE" ? "使用时认证" : "无额外认证"}</span></p></div><button className={`button small ${tab === "available" ? "primary" : ""}`} onClick={() => void requestOperation(operation, plugin.pluginId)} disabled={Boolean(busyKey) || pending}>{pending || busyKey === operationKey ? "处理中…" : tab === "installed" ? "卸载" : "安装"}</button></article>;
+            })}<Pagination {...pluginPagination} onPageChange={pluginPagination.setPage} /></div> : <div className="empty-inline compact-empty"><Icon name="search" /><h3>没有匹配的插件</h3><p>换一个关键词或来源筛选。</p></div>}
+          </>
+        )}
+      </section>
+
+      <section className="section-card">
+        <div className="section-heading"><div><span className="eyebrow">OPERATIONS</span><h2>安装任务</h2><p>失败会自动重试最多 3 次；最终失败会保留宿主机 Codex CLI 返回的错误。</p></div><span className="count-badge">{operations.length}</span></div>
+        {visibleOperations.length ? <div className="plugin-operation-list">{operationPagination.pageItems.map((operation) => <div key={operation.id}><span className={`status-badge ${operation.status}`}><span className="status-dot" />{codexPluginOperationStatusLabel(operation.status)}</span><strong>{operation.operation === "install" ? "安装" : operation.operation === "remove" ? "卸载" : "刷新目录"}</strong><code>{operation.plugin_id ?? operation.target_runner_id}</code><small>尝试 {operation.attempt_count}/3 · {formatTime(operation.requested_at)}</small><p>{operation.error_message ?? (operation.status === "succeeded" ? "操作完成，下一次 Agent 会话将加载最新能力。" : "等待宿主机 Trigger 处理。")}</p></div>)}<Pagination {...operationPagination} onPageChange={operationPagination.setPage} /></div> : <div className="empty-inline compact-empty"><Icon name="plugin" /><h3>还没有安装任务</h3><p>从可安装列表选择插件即可。</p></div>}
+      </section>
+    </div>
+  );
+}
+
 function CodexRunnersView(props: {
   consoleData: CompanyConsole;
   token: string;
+  realtimeEvent: CompanyRealtimeEvent | null;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
 }) {
@@ -1430,6 +2198,8 @@ function CodexRunnersView(props: {
   const configuredProjects = props.consoleData.projects.filter((project) => project.git);
   const [profiles, setProfiles] = useState<CodexRunnerProfileView[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(true);
+  const [environment, setEnvironment] = useState<CodexEnvironmentView | null>(null);
+  const runnerPagination = usePagination(runnableAgents, 6, props.consoleData.company.id);
 
   async function loadProfiles() {
     try {
@@ -1446,10 +2216,31 @@ function CodexRunnersView(props: {
     }
   }
 
+  async function loadEnvironment() {
+    try {
+      const response = await api<CodexEnvironmentView>(
+        `/api/v1/companies/${props.consoleData.company.id}/codex-environments`,
+        {},
+        props.token,
+      );
+      setEnvironment(response);
+    } catch (error) {
+      props.onError(error);
+    }
+  }
+
   useEffect(() => {
     setProfilesLoading(true);
     void loadProfiles();
+    void loadEnvironment();
   }, [props.consoleData.company.id, props.token]);
+
+  useEffect(() => {
+    const hasPendingWork = environment?.runtime.operation_status !== "idle"
+      || environment?.profiles.some((profile) => ["pending", "deleting"].includes(profile.status));
+    const timer = window.setTimeout(() => void loadEnvironment(), hasPendingWork ? 2_000 : 60_000);
+    return () => window.clearTimeout(timer);
+  }, [environment, props.consoleData.company.id, props.token]);
 
   if (!canManage) {
     return (
@@ -1467,22 +2258,9 @@ function CodexRunnersView(props: {
 
   return (
     <div className="content-stack">
-      <section className="runner-hero">
-        <div>
-          <span className="pill"><span className="status-dot online" /> LOCAL CODEX</span>
-          <h2>Relay 只做触发，工作交给 Codex。</h2>
-          <p>私聊只唤醒目标 Agent，群聊唤醒群内 Agent；无消息时才按兜底周期检查。Codex 始终启动或恢复同一个固定会话，审批后原 turn 原地继续。</p>
-        </div>
-        <div className="runner-flow" aria-label="Codex 运行流程">
-          <span><strong>01</strong>检查消息</span>
-          <span><strong>02</strong>准备 Agent worktree</span>
-          <span><strong>03</strong><code>thread/resume</code></span>
-        </div>
-      </section>
-
       <section className="metric-row runner-metrics">
         <Metric label="可运行 Agent" value={String(runnableAgents.length)} detail="每个 Agent 独立会话" />
-        <Metric label="运行配置" value={String(profiles.length)} detail={profiles.some((item) => item.profile.is_default) ? "已设置通用默认" : "请创建默认配置"} />
+        <Metric label="运行配置" value={String(profiles.length)} detail={profiles.some((item) => item.profile.is_default) ? "已设置默认配置" : "请创建默认配置"} />
         <Metric label="已配置 Git" value={String(configuredProjects.length)} detail="具备宿主机本地目录" />
         <Metric label="执行方式" value="Codex" detail="Relay 不直接调用模型 API" />
       </section>
@@ -1492,6 +2270,7 @@ function CodexRunnersView(props: {
         profiles={profiles}
         loading={profilesLoading}
         token={props.token}
+        authProfiles={environment?.profiles ?? []}
         onChanged={loadProfiles}
         onError={props.onError}
         onNotice={props.onNotice}
@@ -1502,13 +2281,12 @@ function CodexRunnersView(props: {
           <div>
             <span className="eyebrow">AGENT RUNNERS</span>
             <h2>Agent 运行器</h2>
-            <p>每个 Agent 只选择一个公司级运行配置；固定 Codex 会话和运行历史仍然彼此独立。</p>
           </div>
           <span className="count-badge">{runnableAgents.length}</span>
         </div>
         {runnableAgents.length ? (
           <div className="codex-runner-list">
-            {runnableAgents.map((agent) => (
+            {runnerPagination.pageItems.map((agent) => (
               <article className="codex-runner-agent" key={agent.agent_profile.id}>
                 <div className="codex-runner-agent-head">
                   <span className="agent-avatar">{agent.agent_profile.display_name.slice(0, 1).toUpperCase()}</span>
@@ -1525,12 +2303,14 @@ function CodexRunnersView(props: {
                   active
                   profiles={profiles}
                   token={props.token}
+                  realtimeEvent={props.realtimeEvent}
                   onError={props.onError}
                   onNotice={props.onNotice}
                   onAssigned={loadProfiles}
                 />
               </article>
             ))}
+            <Pagination {...runnerPagination} onPageChange={runnerPagination.setPage} />
           </div>
         ) : (
           <div className="empty-inline">
@@ -1544,7 +2324,7 @@ function CodexRunnersView(props: {
   );
 }
 
-type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 type LocalCodexModel = {
   id: string;
@@ -1556,9 +2336,61 @@ type LocalCodexModel = {
   }>;
 };
 
-function CodexRunnerProfilesPanel(props: {
+function CodexCliAuthView(props: {
   companyId: string;
-  profiles: CodexRunnerProfileView[];
+  token: string;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [environment, setEnvironment] = useState<CodexEnvironmentView | null>(null);
+  const [runnerProfiles, setRunnerProfiles] = useState<CodexRunnerProfileView[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  async function loadEnvironment(silent = false) {
+    if (!silent) setLoading(true);
+    try {
+      const [environmentResponse, runnerProfileResponse] = await Promise.all([
+        api<CodexEnvironmentView>(`/api/v1/companies/${props.companyId}/codex-environments`, {}, props.token),
+        api<{ profiles: CodexRunnerProfileView[] }>(`/api/v1/companies/${props.companyId}/codex-runner-profiles`, {}, props.token),
+      ]);
+      setEnvironment(environmentResponse);
+      setRunnerProfiles(runnerProfileResponse.profiles);
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+
+  useEffect(() => { void loadEnvironment(); }, [props.companyId, props.token]);
+
+  const hasPendingWork = environment?.runtime.operation_status !== "idle"
+    || environment?.profiles.some((profile) => ["pending", "deleting"].includes(profile.status));
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadEnvironment(true), hasPendingWork ? 2_000 : 60_000);
+    return () => window.clearTimeout(timer);
+  }, [hasPendingWork, environment?.runtime.updated_at, props.companyId, props.token]);
+
+  return (
+    <div className="content-stack codex-cli-auth-page">
+      <CodexEnvironmentPanel
+        companyId={props.companyId}
+        environment={environment}
+        runnerProfiles={runnerProfiles}
+        loading={loading}
+        token={props.token}
+        onChanged={() => loadEnvironment(true)}
+        onError={props.onError}
+        onNotice={props.onNotice}
+      />
+    </div>
+  );
+}
+
+function CodexEnvironmentPanel(props: {
+  companyId: string;
+  environment: CodexEnvironmentView | null;
+  runnerProfiles: CodexRunnerProfileView[];
   loading: boolean;
   token: string;
   onChanged: () => Promise<void>;
@@ -1566,29 +2398,393 @@ function CodexRunnerProfilesPanel(props: {
   onNotice: (notice: string) => void;
 }) {
   const [creating, setCreating] = useState(false);
-  const [models, setModels] = useState<LocalCodexModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(true);
-  const [modelsError, setModelsError] = useState("");
+  const [name, setName] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(CODEX_DEFAULT_OPENAI_BASE_URL);
+  const [busy, setBusy] = useState("");
+  const [showDefaultDetails, setShowDefaultDetails] = useState(false);
+  const runtime = props.environment?.runtime;
+  const configuredAuthSelectors = Array.from(new Set(props.runnerProfiles.map((item) => item.profile.codex_profile)));
+  const currentAuthSelector = configuredAuthSelectors.length === 1 ? configuredAuthSelectors[0] : null;
+  const hasMixedAuthSelectors = configuredAuthSelectors.length > 1;
 
-  async function loadModels() {
-    setModelsLoading(true);
-    setModelsError("");
+  function authUsage(selector: string) {
+    const profiles = props.runnerProfiles.filter((item) => item.profile.codex_profile === selector);
+    return {
+      runnerProfileCount: profiles.length,
+      assignedAgentCount: profiles.reduce((total, item) => total + item.assigned_agent_count, 0),
+      isCurrentDefault: currentAuthSelector === selector,
+    };
+  }
+
+  async function selectDefaultAuth(selector: string) {
+    if (currentAuthSelector === selector) return;
+    setBusy(`select:${selector}`);
     try {
-      const response = await api<{ models: LocalCodexModel[] }>(
-        "/api/v1/local-codex/models?codex_profile=default",
-        {},
-        props.token,
-      );
-      setModels(response.models);
+      if (props.runnerProfiles.length) {
+        await Promise.all(props.runnerProfiles.map(({ profile }) => api(
+          `/api/v1/companies/${props.companyId}/codex-runner-profiles/${profile.id}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              name: profile.name,
+              interval_seconds: profile.interval_seconds,
+              codex_profile: selector,
+              model: profile.model,
+              reasoning_effort: profile.reasoning_effort,
+              reasoning_summary: profile.reasoning_summary,
+              verbosity: profile.verbosity,
+              personality: profile.personality,
+              service_tier: profile.service_tier,
+              sandbox_mode: profile.sandbox_mode,
+              approval_policy: profile.approval_policy,
+              network_access: profile.network_access,
+              web_search: profile.web_search,
+              feature_multi_agent: profile.feature_multi_agent,
+              feature_remote_plugin: profile.feature_remote_plugin,
+              feature_hooks: profile.feature_hooks,
+              feature_goals: profile.feature_goals,
+              feature_shell_tool: profile.feature_shell_tool,
+              max_run_seconds: profile.max_run_seconds,
+              is_default: profile.is_default,
+            }),
+          },
+          props.token,
+        )));
+      } else {
+        await api(`/api/v1/companies/${props.companyId}/codex-runner-profiles`, {
+          method: "POST",
+          body: JSON.stringify({
+            name: "默认运行配置",
+            interval_seconds: 3600,
+            codex_profile: selector,
+            model: null,
+            reasoning_effort: null,
+            reasoning_summary: null,
+            verbosity: null,
+            personality: null,
+            service_tier: null,
+            sandbox_mode: "inherit",
+            approval_policy: "inherit",
+            network_access: null,
+            web_search: null,
+            feature_multi_agent: null,
+            feature_remote_plugin: null,
+            feature_hooks: null,
+            feature_goals: null,
+            feature_shell_tool: null,
+            max_run_seconds: 3600,
+            is_default: true,
+          }),
+        }, props.token);
+      }
+      props.onNotice("默认认证已更新，所有运行器将在 Agent 下次唤醒时生效");
+      await props.onChanged();
     } catch (error) {
-      setModels([]);
-      setModelsError(error instanceof Error ? error.message : "无法读取本地 Codex 模型列表");
+      props.onError(error);
     } finally {
-      setModelsLoading(false);
+      setBusy("");
     }
   }
 
-  useEffect(() => { void loadModels(); }, [props.token]);
+  async function requestCliAction(action: "install" | "update") {
+    if (action === "update" && !window.confirm("确认更新宿主机上的 Codex CLI？Relay 会等待当前 Agent 运行结束后再执行。")) return;
+    setBusy(action);
+    try {
+      await api(`/api/v1/companies/${props.companyId}/codex-cli/${action}`, { method: "POST" }, props.token);
+      props.onNotice(action === "install" ? "已提交 Codex CLI 安装请求" : "已提交 Codex CLI 更新请求");
+      await props.onChanged();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function createProfile(event: FormEvent) {
+    event.preventDefault();
+    setBusy("create");
+    try {
+      await api(
+        `/api/v1/companies/${props.companyId}/codex-auth-profiles`,
+        { method: "POST", body: JSON.stringify({ name, api_key: apiKey, base_url: baseUrl }) },
+        props.token,
+      );
+      setName("");
+      setApiKey("");
+      setBaseUrl(CODEX_DEFAULT_OPENAI_BASE_URL);
+      setCreating(false);
+      props.onNotice("认证配置已提交，Trigger 正在写入独立 Codex 登录环境");
+      await props.onChanged();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <section className="section-card codex-environment-panel">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">CODEX CLI & AUTH</span>
+          <h2>Codex CLI 与认证环境</h2>
+          <p>宿主机已有的 Codex 默认登录会直接显示并可复用；额外认证配置使用独立 CODEX_HOME，可分别设置 API Key 与 OpenAI 兼容 Base URL。</p>
+        </div>
+        <button className="button primary small" onClick={() => setCreating(true)} disabled={creating || !runtime?.installed}><Icon name="plus" /> 新建认证配置</button>
+      </div>
+
+      {props.loading && !runtime ? <small>正在读取宿主机 Codex 状态…</small> : runtime ? (
+        <>
+          <div className={`codex-cli-runtime ${runtime.update_available ? "has-update" : ""}`}>
+            <div className="codex-cli-runtime-icon"><Icon name="terminal" /></div>
+            <div className="codex-cli-runtime-main">
+              <div><strong>{runtime.installed ? runtime.installed_version || "Codex CLI 已安装" : "尚未安装 Codex CLI"}</strong><StatusBadge value={runtime.operation_status} /></div>
+              <small>{runtime.installed ? `${codexRuntimeSourceLabel(runtime.source)} · ${runtime.executable_path || "宿主机命令"}` : runtime.installation_supported ? `Trigger 将使用 ${codexInstallerLabel(runtime.installer_kind)} 安装到 Relay 托管目录。` : "当前 Trigger 宿主机不支持自动安装。"}</small>
+              {runtime.last_error ? <span className="codex-runtime-error">{runtime.last_error}</span> : null}
+              {runtime.update_check_error ? <small>当前无法联网检查更新，现有版本仍可继续使用。</small> : null}
+            </div>
+            <div className="codex-cli-version-facts">
+              <span><small>当前版本</small><strong>{runtime.installed_version?.split(" ").slice(-1)[0] || "—"}</strong></span>
+              <span><small>最新版本</small><strong>{runtime.latest_version || (runtime.update_check_error ? "离线" : "检查中")}</strong></span>
+            </div>
+            <div className="codex-cli-runtime-actions">
+              {!runtime.installed ? <button className="button primary small" onClick={() => void requestCliAction("install")} disabled={!runtime.installation_supported || Boolean(busy) || runtime.operation_status !== "idle" && runtime.operation_status !== "failed"}><Icon name="download" /> {busy === "install" ? "提交中…" : "安装 Codex CLI"}</button> : null}
+              {runtime.update_available ? <button className="button primary small" onClick={() => void requestCliAction("update")} disabled={Boolean(busy) || runtime.operation_status !== "idle"}><Icon name="refresh" /> {busy === "update" ? "提交中…" : `更新到 ${runtime.latest_version}`}</button> : null}
+              {runtime.installed && !runtime.update_available ? <span className="codex-up-to-date">已是可检测到的最新版本</span> : null}
+            </div>
+          </div>
+          <div className="codex-platform-support" aria-label="Codex CLI 支持平台">
+            <div><small>当前 Trigger</small><strong>{codexHostPlatformLabel(runtime.host_os)} · {runtime.host_arch || "未知架构"}</strong><span>{codexInstallerLabel(runtime.installer_kind)}</span></div>
+            <div className={runtime.host_os === "macos" ? "current" : ""}><Icon name="terminal" /><span><strong>macOS</strong><small>官方 install.sh</small></span></div>
+            <div className={runtime.host_os === "linux" ? "current" : ""}><Icon name="terminal" /><span><strong>Linux</strong><small>官方 install.sh</small></span></div>
+            <div className={runtime.host_os === "windows" ? "current" : ""}><Icon name="terminal" /><span><strong>Windows</strong><small>官方 install.ps1</small></span></div>
+          </div>
+        </>
+      ) : null}
+
+      {creating ? (
+        <form className="codex-auth-form" onSubmit={createProfile}>
+          <Field label="配置名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：团队生产账号" required maxLength={80} /></Field>
+          <Field label="Base URL"><input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={CODEX_DEFAULT_OPENAI_BASE_URL} required /></Field>
+          <Field label="OpenAI API Key"><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="只临时交给本机 Trigger" required /></Field>
+          <div className="codex-auth-form-actions"><button type="button" className="button small" onClick={() => { setCreating(false); setApiKey(""); setBaseUrl(CODEX_DEFAULT_OPENAI_BASE_URL); }} disabled={Boolean(busy)}>取消</button><button className="button primary small" disabled={Boolean(busy)}>{busy === "create" ? "正在提交…" : "创建并登录"}</button></div>
+        </form>
+      ) : null}
+
+      <div className="codex-auth-current-summary">
+        <span className="runner-profile-icon"><Icon name="key" /></span>
+        <div><small>当前默认认证</small><strong>{currentAuthSelector ? codexAuthSelectorName(currentAuthSelector, runtime, props.environment?.profiles ?? []) : hasMixedAuthSelectors ? "多个认证环境" : "尚未设置"}</strong><code>{currentAuthSelector ?? (hasMixedAuthSelectors ? "不同运行器正在使用不同认证" : "设置后将应用到所有运行器")}</code></div>
+        {currentAuthSelector ? <span className="default-badge">{props.runnerProfiles.length} 个运行器</span> : <span className="status-badge pending"><span className="status-dot" />{hasMixedAuthSelectors ? "未统一" : "未配置"}</span>}
+      </div>
+
+      <div className="codex-auth-profile-list">
+        {runtime?.default_auth ? (
+          <article className={`codex-auth-profile host-default ${runtime.default_auth.status === "active" ? "active" : runtime.default_auth.status === "logged_out" ? "failed" : "pending"} ${currentAuthSelector === "default" ? "current" : ""}`}>
+            <div className="codex-auth-profile-main"><span className="runner-profile-icon"><Icon name="terminal" /></span><div><strong>{runtime.default_auth.name}</strong><small>default · Trigger 宿主机现有 Codex 配置</small></div></div>
+            <CodexAuthUsageState usage={authUsage("default")} detail={runtime.default_auth.last_error ?? codexDefaultAuthStatusLabel(runtime.default_auth)} />
+            <div className="runner-profile-actions"><button className="button small" onClick={() => setShowDefaultDetails(true)}>查看配置</button><button className={`button small ${currentAuthSelector === "default" ? "selected-action" : ""}`} onClick={() => void selectDefaultAuth("default")} disabled={currentAuthSelector === "default" || runtime.default_auth.status !== "active" || Boolean(busy)}>{currentAuthSelector === "default" ? "当前默认" : busy === "select:default" ? "切换中…" : "设为默认"}</button></div>
+          </article>
+        ) : null}
+        {props.environment?.profiles.map((profile) => (
+          <CodexAuthProfileCard key={profile.id} companyId={props.companyId} profile={profile} usage={authUsage(profile.selector)} selecting={busy === `select:${profile.selector}`} token={props.token} onSelectDefault={() => selectDefaultAuth(profile.selector)} onChanged={props.onChanged} onError={props.onError} onNotice={props.onNotice} />
+        ))}
+        {!props.environment?.profiles.length ? <div className="codex-auth-profile-note"><Icon name="shield" /><span><strong>当前只有宿主机默认环境</strong><small>它已经可以供运行配置选择；需要隔离多个账号时再新建认证配置。</small></span></div> : null}
+      </div>
+      {showDefaultDetails && runtime?.default_auth ? <CodexDefaultAuthDialog auth={runtime.default_auth} runtime={runtime} onClose={() => setShowDefaultDetails(false)} /> : null}
+    </section>
+  );
+}
+
+function CodexDefaultAuthDialog(props: { auth: CodexDefaultAuthEnvironment; runtime: CodexCliRuntime; onClose: () => void }) {
+  const { language } = useUiLanguage();
+  const config = props.auth.config;
+  const safeSummary = [
+    `认证环境: ${props.auth.name} (${props.auth.selector})`,
+    `状态: ${codexDefaultAuthStatusLabel(props.auth)}`,
+    `登录方式: ${codexDefaultAuthMethodLabel(props.auth.method)}`,
+    `凭证标识: ${config.credential_hint ?? "未提供"}`,
+    `OpenAI Base URL: ${config.openai_base_url ?? CODEX_DEFAULT_OPENAI_BASE_URL}`,
+    `Codex Home: ${config.codex_home ?? "未发现"}`,
+    `配置文件: ${config.config_path ?? "未发现"}`,
+    `认证文件: ${config.auth_path ?? "未发现"}`,
+    `模型 Provider: ${config.model_provider ?? "Codex 默认"}`,
+    `默认模型: ${config.model ?? "Codex 默认"}`,
+    `思考等级: ${config.reasoning_effort ?? "模型默认"}`,
+    `MCP: ${config.mcp_servers.join(", ") || "无"}`,
+    `命名 Profile: ${config.named_profiles.join(", ") || "无"}`,
+  ].join("\n");
+  return (
+    <Dialog title="宿主机默认 Codex 配置" description="由本机 Trigger 读取安全摘要。认证信息只展示脱敏标识，不会把明文 API Key 返回给浏览器。" onClose={props.onClose} wide>
+      <div className="codex-default-config-dialog">
+        <div className="codex-default-config-status">
+          <span className="runner-profile-icon"><Icon name="terminal" /></span>
+          <div><span className="eyebrow">HOST DEFAULT ENVIRONMENT</span><strong>{props.runtime.installed_version ?? "Codex CLI"}</strong><small>{props.runtime.executable_path ?? "宿主机 Codex 命令"}</small></div>
+          <StatusBadge value={props.auth.status === "active" ? "active" : props.auth.status === "logged_out" ? "failed" : "pending"} />
+        </div>
+        <div className="codex-default-config-grid">
+          <span><small>登录方式</small><strong>{codexDefaultAuthMethodLabel(props.auth.method)}</strong></span>
+          <span><small>脱敏凭证</small><code>{config.credential_hint ?? "不可用"}</code></span>
+          <span><small>默认模型</small><strong>{config.model ?? "Codex 默认"}</strong></span>
+          <span><small>思考等级</small><strong>{config.reasoning_effort ? codexReasoningEffortLabel(config.reasoning_effort as CodexReasoningEffort, language) : "模型默认"}</strong></span>
+          <span><small>模型 Provider</small><strong>{config.model_provider ?? "默认"}</strong></span>
+          <span><small>Base URL</small><code>{config.openai_base_url ?? CODEX_DEFAULT_OPENAI_BASE_URL}</code></span>
+          <span><small>Sandbox</small><strong>{config.sandbox_mode ?? "运行配置决定"}</strong></span>
+          <span><small>审批策略</small><strong>{config.approval_policy ?? "运行配置决定"}</strong></span>
+          <span><small>最近检查</small><strong>{props.auth.last_checked_at ? formatTime(props.auth.last_checked_at) : "等待 Trigger"}</strong></span>
+        </div>
+        <section className="codex-default-config-section"><div><span className="eyebrow">LOCAL FILES</span><h3>本地配置位置</h3></div><dl><dt>CODEX_HOME</dt><dd><code>{config.codex_home ?? "未发现"}</code></dd><dt>config.toml</dt><dd><code>{config.config_path ?? "未发现"}</code><b>{config.config_exists ? "存在" : "不存在"}</b></dd><dt>auth.json</dt><dd><code>{config.auth_path ?? "未发现"}</code><b>{config.auth_exists ? "存在" : "不存在"}</b></dd></dl></section>
+        <section className="codex-default-config-section"><div><span className="eyebrow">CAPABILITIES</span><h3>已发现配置</h3></div><div className="codex-default-config-counts"><span><small>MCP Server</small><strong>{config.mcp_servers.length}</strong></span><span><small>命名 Profile</small><strong>{config.named_profiles.length}</strong></span><span><small>可信项目</small><strong>{config.trusted_project_count}</strong></span><span><small>插件配置</small><strong>{config.plugin_count}</strong></span></div>{config.mcp_servers.length ? <div className="codex-default-config-tags">{config.mcp_servers.map((name) => <code key={name}>{name}</code>)}</div> : null}{config.named_profiles.length ? <div className="codex-default-config-tags"><small>Profiles</small>{config.named_profiles.map((name) => <code key={name}>{name}</code>)}</div> : null}</section>
+        <div className="credential-warning codex-default-config-warning"><Icon name="shield" /><p><strong>明文凭证不会通过 Relay 页面展示</strong><span>Relay 只保存脱敏提示和非敏感配置摘要；实际认证仍由宿主机 Codex 自己维护。</span></p></div>
+        <div className="dialog-actions"><button className="button" onClick={() => void copyText(safeSummary)}><Icon name="copy" /> 复制安全摘要</button><button className="button primary" onClick={props.onClose}>关闭</button></div>
+      </div>
+    </Dialog>
+  );
+}
+
+type CodexAuthUsage = {
+  runnerProfileCount: number;
+  assignedAgentCount: number;
+  isCurrentDefault: boolean;
+};
+
+function CodexAuthUsageState(props: { usage: CodexAuthUsage; detail: string }) {
+  const usageLabel = props.usage.isCurrentDefault
+    ? "默认"
+    : props.usage.runnerProfileCount
+      ? "使用中"
+      : "未使用";
+  return (
+    <div className="codex-auth-profile-state">
+      <span className={`auth-usage-badge ${props.usage.isCurrentDefault ? "current" : props.usage.runnerProfileCount ? "used" : "unused"}`}><span className="status-dot" />{usageLabel}</span>
+      <span className="auth-usage-copy"><small>{props.detail}</small><b>{props.usage.runnerProfileCount ? `${props.usage.runnerProfileCount} 个运行配置 · ${props.usage.assignedAgentCount} 个 Agent` : "没有运行配置选择它"}</b></span>
+    </div>
+  );
+}
+
+function CodexAuthProfileCard(props: {
+  companyId: string;
+  profile: CodexAuthProfile;
+  usage: CodexAuthUsage;
+  selecting: boolean;
+  token: string;
+  onSelectDefault: () => Promise<void>;
+  onChanged: () => Promise<void>;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(props.profile.name);
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(props.profile.base_url ?? CODEX_DEFAULT_OPENAI_BASE_URL);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => setName(props.profile.name), [props.profile.name]);
+  useEffect(() => setBaseUrl(props.profile.base_url ?? CODEX_DEFAULT_OPENAI_BASE_URL), [props.profile.base_url]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await api(
+        `/api/v1/companies/${props.companyId}/codex-auth-profiles/${props.profile.id}`,
+        { method: "PUT", body: JSON.stringify({ name, api_key: apiKey || null, base_url: baseUrl }) },
+        props.token,
+      );
+      setApiKey("");
+      setEditing(false);
+      props.onNotice(apiKey ? "API Key 与 Base URL 更新已提交，Trigger 将重新验证登录" : "认证配置已更新，Trigger 将同步 Base URL");
+      await props.onChanged();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (props.usage.runnerProfileCount) return;
+    if (!window.confirm(`删除认证配置「${props.profile.name}」及其独立 Codex 登录环境？`)) return;
+    setBusy(true);
+    try {
+      await api(`/api/v1/companies/${props.companyId}/codex-auth-profiles/${props.profile.id}`, { method: "DELETE" }, props.token);
+      props.onNotice("认证配置删除已提交");
+      await props.onChanged();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <article className={`codex-auth-profile ${props.profile.status} ${props.usage.isCurrentDefault ? "current" : props.usage.runnerProfileCount ? "in-use" : ""}`}>
+      <div className="codex-auth-profile-main"><span className="runner-profile-icon"><Icon name="key" /></span><div><strong>{props.profile.name}</strong><small>{props.profile.selector}</small><code>{props.profile.base_url ?? CODEX_DEFAULT_OPENAI_BASE_URL}</code></div></div>
+      <CodexAuthUsageState usage={props.usage} detail={props.profile.last_error ?? codexAuthStatusLabel(props.profile.status)} />
+      <div className="runner-profile-actions"><button className={`button small ${props.usage.isCurrentDefault ? "selected-action" : ""}`} onClick={() => void props.onSelectDefault()} disabled={props.usage.isCurrentDefault || props.profile.status !== "active" || busy || props.selecting}>{props.usage.isCurrentDefault ? "当前默认" : props.selecting ? "切换中…" : "设为默认"}</button><button className="button small" onClick={() => setEditing((value) => !value)} disabled={busy || props.profile.status === "deleting"}>编辑</button><button className="icon-button danger" onClick={() => void remove()} disabled={busy || props.profile.status === "deleting" || Boolean(props.usage.runnerProfileCount)} title={props.usage.runnerProfileCount ? "请先让运行配置改用其他认证环境" : "删除认证配置"}><Icon name="trash" /></button></div>
+      {editing ? <form className="codex-auth-profile-edit" onSubmit={save}><Field label="配置名称"><input value={name} onChange={(event) => setName(event.target.value)} required maxLength={80} /></Field><Field label="Base URL"><input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required /></Field><Field label="新 API Key（可留空）"><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="填写后重新登录" /></Field><div className="codex-auth-form-actions"><button type="button" className="button small" onClick={() => { setEditing(false); setApiKey(""); setBaseUrl(props.profile.base_url ?? CODEX_DEFAULT_OPENAI_BASE_URL); }}>取消</button><button className="button primary small" disabled={busy}>保存</button></div></form> : null}
+    </article>
+  );
+}
+
+function codexRuntimeSourceLabel(source: string) {
+  if (source === "managed") return "Relay 托管安装";
+  if (source === "system") return "宿主机 PATH";
+  if (source === "explicit") return "自定义可执行文件";
+  return "未检测到";
+}
+
+function codexHostPlatformLabel(hostOs: string) {
+  if (hostOs === "macos") return "macOS";
+  if (hostOs === "linux") return "Linux";
+  if (hostOs === "windows") return "Windows";
+  return hostOs || "未知系统";
+}
+
+function codexInstallerLabel(installer: CodexCliRuntime["installer_kind"]) {
+  if (installer === "powershell") return "PowerShell 安装器";
+  if (installer === "posix_shell") return "Shell 安装器";
+  return "无可用安装器";
+}
+
+function codexAuthStatusLabel(status: CodexAuthProfile["status"]) {
+  if (status === "active") return "登录有效，可供运行配置选择";
+  if (status === "pending") return "等待本机 Trigger 验证";
+  if (status === "deleting") return "等待本机 Trigger 清理";
+  return "验证失败，可编辑并重新提交 API Key";
+}
+
+function codexAuthSelectorName(selector: string, runtime: CodexCliRuntime | undefined, profiles: CodexAuthProfile[]) {
+  if (selector === "default") return runtime?.default_auth.name ?? "宿主机默认登录";
+  return profiles.find((profile) => profile.selector === selector)?.name ?? selector;
+}
+
+function codexDefaultAuthMethodLabel(method: CodexDefaultAuthEnvironment["method"]) {
+  if (method === "api_key") return "API Key 登录";
+  if (method === "chatgpt") return "ChatGPT 登录";
+  return "已配置登录";
+}
+
+function codexDefaultAuthStatusLabel(auth: CodexDefaultAuthEnvironment) {
+  if (auth.status === "active") return `登录有效，可供运行配置选择${auth.last_checked_at ? ` · ${formatTime(auth.last_checked_at)}` : ""}`;
+  if (auth.status === "logged_out") return "未检测到登录，请在 Trigger 宿主机运行 codex login";
+  return "等待本机 Trigger 检查现有 Codex 登录";
+}
+
+function CodexRunnerProfilesPanel(props: {
+  companyId: string;
+  profiles: CodexRunnerProfileView[];
+  loading: boolean;
+  authProfiles: CodexAuthProfile[];
+  token: string;
+  onChanged: () => Promise<void>;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+}) {
+  const [creating, setCreating] = useState(false);
+  const profilePagination = usePagination(props.profiles, 6, props.companyId);
+  const defaultAuthSelector = props.profiles.find((item) => item.profile.is_default)?.profile.codex_profile
+    ?? props.profiles[0]?.profile.codex_profile
+    ?? "default";
 
   return (
     <section className="section-card">
@@ -1596,20 +2792,17 @@ function CodexRunnerProfilesPanel(props: {
         <div>
           <span className="eyebrow">RUNNER PROFILES</span>
           <h2>运行配置</h2>
-          <p>先建立可复用配置，再由 Agent 选择。首个配置会自动成为通用默认，新 Agent 激活时自动使用。</p>
         </div>
         <div className="section-heading-actions">
-          <button className="button small" onClick={() => void loadModels()} disabled={modelsLoading}><Icon name="refresh" /> {modelsLoading ? "读取模型中…" : "刷新本地模型"}</button>
           <button className="button primary small" onClick={() => setCreating(true)} disabled={creating}><Icon name="plus" /> 新建配置</button>
         </div>
       </div>
-      {modelsError ? <div className="local-model-warning"><Icon name="alert" /><span><strong>本地 Codex 模型目录不可用</strong><small>{modelsError}</small></span></div> : null}
       {creating ? (
         <CodexRunnerProfileEditor
           companyId={props.companyId}
           profileView={null}
-          models={models}
-          modelsLoading={modelsLoading}
+          authProfiles={props.authProfiles}
+          initialCodexProfile={defaultAuthSelector}
           token={props.token}
           onSaved={async () => { setCreating(false); await props.onChanged(); }}
           onCancel={() => setCreating(false)}
@@ -1619,13 +2812,13 @@ function CodexRunnerProfilesPanel(props: {
       ) : null}
       {props.loading ? <small>正在读取运行配置…</small> : props.profiles.length ? (
         <div className="runner-profile-list">
-          {props.profiles.map((profile) => (
+          {profilePagination.pageItems.map((profile) => (
             <CodexRunnerProfileEditor
               key={profile.profile.id}
               companyId={props.companyId}
               profileView={profile}
-              models={models}
-              modelsLoading={modelsLoading}
+              authProfiles={props.authProfiles}
+              initialCodexProfile={defaultAuthSelector}
               token={props.token}
               onSaved={props.onChanged}
               onCancel={() => undefined}
@@ -1633,9 +2826,10 @@ function CodexRunnerProfilesPanel(props: {
               onNotice={props.onNotice}
             />
           ))}
+          <Pagination {...profilePagination} onPageChange={profilePagination.setPage} />
         </div>
       ) : !creating ? (
-        <div className="empty-inline compact-empty"><Icon name="terminal" /><h3>还没有运行配置</h3><p>创建第一个配置后，它会自动成为公司通用默认配置。</p></div>
+        <div className="empty-inline compact-empty"><Icon name="terminal" /><h3>还没有运行配置</h3><p>创建第一个配置后，它会自动成为默认配置。</p></div>
       ) : null}
     </section>
   );
@@ -1644,26 +2838,63 @@ function CodexRunnerProfilesPanel(props: {
 function CodexRunnerProfileEditor(props: {
   companyId: string;
   profileView: CodexRunnerProfileView | null;
-  models: LocalCodexModel[];
-  modelsLoading: boolean;
+  authProfiles: CodexAuthProfile[];
+  initialCodexProfile: string;
   token: string;
   onSaved: () => Promise<void>;
   onCancel: () => void;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
 }) {
+  const { language } = useUiLanguage();
   const profile = props.profileView?.profile;
   const [editing, setEditing] = useState(!profile);
   const [name, setName] = useState(profile?.name ?? "");
   const [intervalSeconds, setIntervalSeconds] = useState(profile?.interval_seconds ?? 30);
-  const [codexProfile, setCodexProfile] = useState(profile?.codex_profile ?? "default");
+  const [codexProfile, setCodexProfile] = useState(profile?.codex_profile ?? props.initialCodexProfile);
   const [model, setModel] = useState(profile?.model ?? "");
   const [reasoningEffort, setReasoningEffort] = useState<CodexReasoningEffort | "">(profile?.reasoning_effort ?? "");
-  const [sandboxMode, setSandboxMode] = useState<"read_only" | "workspace_write">(profile?.sandbox_mode ?? "workspace_write");
-  const [approvalPolicy, setApprovalPolicy] = useState<"never" | "on-request">(profile?.approval_policy ?? "never");
-  const [maxRunSeconds, setMaxRunSeconds] = useState(profile?.max_run_seconds ?? 1800);
+  const [reasoningSummary, setReasoningSummary] = useState<CodexReasoningSummary | "">(profile?.reasoning_summary ?? "");
+  const [verbosity, setVerbosity] = useState<CodexVerbosity | "">(profile?.verbosity ?? "");
+  const [personality, setPersonality] = useState<CodexPersonality | "">(profile?.personality ?? "");
+  const [serviceTier, setServiceTier] = useState<"fast" | "">(profile?.service_tier ?? "");
+  const [sandboxMode, setSandboxMode] = useState<CodexSandboxMode>(profile?.sandbox_mode ?? "inherit");
+  const [approvalPolicy, setApprovalPolicy] = useState<CodexApprovalPolicy>(profile?.approval_policy ?? "inherit");
+  const [networkAccess, setNetworkAccess] = useState<"inherit" | "true" | "false">(profile?.network_access == null ? "inherit" : String(profile.network_access) as "true" | "false");
+  const [webSearch, setWebSearch] = useState<CodexWebSearch | "">(profile?.web_search ?? "");
+  const [featureMultiAgent, setFeatureMultiAgent] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_multi_agent));
+  const [featureRemotePlugin, setFeatureRemotePlugin] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_remote_plugin));
+  const [featureHooks, setFeatureHooks] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_hooks));
+  const [featureGoals, setFeatureGoals] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_goals));
+  const [featureShellTool, setFeatureShellTool] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_shell_tool));
+  const [maxRunSeconds, setMaxRunSeconds] = useState(profile?.max_run_seconds ?? 3600);
   const [isDefault, setIsDefault] = useState(profile?.is_default ?? false);
   const [busy, setBusy] = useState(false);
+  const [models, setModels] = useState<LocalCodexModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+
+  async function loadModels(profileSelector = codexProfile) {
+    setModelsLoading(true);
+    setModelsError("");
+    try {
+      const response = await api<{ models: LocalCodexModel[] }>(
+        `/api/v1/local-codex/models?codex_profile=${encodeURIComponent(profileSelector || "default")}`,
+        {},
+        props.token,
+      );
+      setModels(response.models);
+    } catch (error) {
+      setModels([]);
+      setModelsError(error instanceof Error ? error.message : "无法读取这个 Codex 环境的模型列表");
+    } finally {
+      setModelsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (editing) void loadModels(codexProfile);
+  }, [editing, codexProfile, props.token]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -1673,7 +2904,20 @@ function CodexRunnerProfileEditor(props: {
         profile ? `/api/v1/companies/${props.companyId}/codex-runner-profiles/${profile.id}` : `/api/v1/companies/${props.companyId}/codex-runner-profiles`,
         {
           method: profile ? "PUT" : "POST",
-          body: JSON.stringify({ name, interval_seconds: intervalSeconds, codex_profile: codexProfile || "default", model: model || null, reasoning_effort: reasoningEffort || null, sandbox_mode: sandboxMode, approval_policy: approvalPolicy, max_run_seconds: maxRunSeconds, is_default: isDefault }),
+          body: JSON.stringify({
+            name, interval_seconds: intervalSeconds, codex_profile: codexProfile || "default",
+            model: model || null, reasoning_effort: reasoningEffort || null,
+            reasoning_summary: reasoningSummary || null, verbosity: verbosity || null,
+            personality: personality || null, service_tier: serviceTier || null,
+            sandbox_mode: sandboxMode, approval_policy: approvalPolicy,
+            network_access: codexBooleanOverrideValue(networkAccess), web_search: webSearch || null,
+            feature_multi_agent: codexBooleanOverrideValue(featureMultiAgent),
+            feature_remote_plugin: codexBooleanOverrideValue(featureRemotePlugin),
+            feature_hooks: codexBooleanOverrideValue(featureHooks),
+            feature_goals: codexBooleanOverrideValue(featureGoals),
+            feature_shell_tool: codexBooleanOverrideValue(featureShellTool),
+            max_run_seconds: maxRunSeconds, is_default: isDefault,
+          }),
         },
         props.token,
       );
@@ -1707,41 +2951,247 @@ function CodexRunnerProfileEditor(props: {
         <div className="runner-profile-main"><span className="runner-profile-icon"><Icon name="terminal" /></span><div><strong>{profile.name}</strong><small>{profile.model || "Codex 默认模型"} · Profile: {profile.codex_profile}</small></div></div>
         <div className="runner-profile-facts">
           <span><small>兜底检查</small><strong>{formatInterval(profile.interval_seconds)}</strong></span>
-          <span><small>思考等级</small><strong>{codexReasoningEffortLabel(profile.reasoning_effort)}</strong></span>
-          <span><small>Sandbox</small><strong>{profile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
-          <span><small>审批</small><strong>{profile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
-          <span><small>运行上限</small><strong>{profile.max_run_seconds} 秒</strong></span>
-          <span><small>已绑定</small><strong>{props.profileView?.assigned_agent_count ?? 0} Agent</strong></span>
+          <span><small>思考等级</small><strong>{codexReasoningEffortLabel(profile.reasoning_effort, language)}</strong></span>
+          <span><small>Sandbox</small><strong>{profile.sandbox_mode === "inherit" ? "继承公司" : profile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
+          <span><small>审批</small><strong>{profile.approval_policy === "inherit" ? "继承公司" : profile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+          <span><small>运行上限</small><strong>{formatRunSeconds(profile.max_run_seconds, language)}</strong></span>
+          <span><small>已绑定</small><strong>{formatAgentCount(props.profileView?.assigned_agent_count ?? 0, language)}</strong></span>
         </div>
-        <div className="runner-profile-actions">{profile.is_default ? <span className="default-badge">通用默认</span> : null}<button className="button small" onClick={() => setEditing(true)}>编辑</button><button className="icon-button danger" title={props.profileView?.assigned_agent_count ? "请先让 Agent 改选其他配置" : "删除配置"} onClick={() => void remove()} disabled={busy || Boolean(props.profileView?.assigned_agent_count)}><Icon name="trash" /></button></div>
+        <div className="runner-profile-actions">{profile.is_default ? <span className="default-badge">默认</span> : null}<button className="button small" onClick={() => setEditing(true)}>编辑</button><button className="icon-button danger" title={props.profileView?.assigned_agent_count ? "请先让 Agent 改选其他配置" : "删除配置"} onClick={() => void remove()} disabled={busy || Boolean(props.profileView?.assigned_agent_count)}><Icon name="trash" /></button></div>
       </article>
     );
   }
 
-  const currentModelMissing = Boolean(model && !props.models.some((item) => item.id === model));
-  const selectedModel = props.models.find((item) => item.id === model) ?? null;
-  const reasoningOptions = (selectedModel?.reasoning_efforts ?? props.models.flatMap((item) => item.reasoning_efforts))
+  const currentModelMissing = Boolean(model && !models.some((item) => item.id === model));
+  const selectedModel = models.find((item) => item.id === model) ?? null;
+  const reasoningOptions = (selectedModel?.reasoning_efforts ?? models.flatMap((item) => item.reasoning_efforts))
     .filter((item, index, items) => items.findIndex((candidate) => candidate.effort === item.effort) === index);
   const currentReasoningMissing = Boolean(reasoningEffort && !reasoningOptions.some((item) => item.effort === reasoningEffort));
   const defaultReasoningLabel = selectedModel?.default_reasoning_effort
-    ? codexReasoningEffortLabel(selectedModel.default_reasoning_effort)
+    ? codexReasoningEffortLabel(selectedModel.default_reasoning_effort, language)
     : "Codex 默认";
   return (
     <form className="runner-profile-form" onSubmit={save}>
-      <div className="runner-profile-form-head"><div><span className="eyebrow">{profile ? "EDIT PROFILE" : "NEW PROFILE"}</span><h3>{profile ? `编辑 ${profile.name}` : "新建运行配置"}</h3></div><label className="check-row"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} disabled={profile?.is_default} />设为通用默认</label></div>
+      <div className="runner-profile-form-head"><div><span className="eyebrow">{profile ? "EDIT PROFILE" : "NEW PROFILE"}</span><h3>{profile ? `编辑 ${profile.name}` : "新建运行配置"}</h3></div><label className="check-row"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} disabled={profile?.is_default} />设为默认</label></div>
       <div className="runner-profile-fields">
         <Field label="配置名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：开发模式" required /></Field>
         <Field label="兜底检查周期（秒）"><input type="number" min={10} max={604800} value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} /><small>Human 消息会即时唤醒；这里最多可设置为 7 天，只作为无消息时的兜底。</small></Field>
-        <Field label="本地 Codex 配置 Profile"><input value={codexProfile} onChange={(event) => setCodexProfile(event.target.value)} placeholder="default" required /></Field>
-        <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = props.models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={props.modelsLoading}><option value="">使用 Codex 默认模型</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{props.models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select></Field>
-        <Field label="思考等级"><select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as CodexReasoningEffort | "")} disabled={props.modelsLoading}><option value="">跟随模型默认（{defaultReasoningLabel}）</option>{currentReasoningMissing ? <option value={reasoningEffort}>{reasoningEffort}（当前配置）</option> : null}{reasoningOptions.map((item) => <option key={item.effort} value={item.effort}>{codexReasoningEffortLabel(item.effort)} · {item.effort}</option>)}</select><small>{reasoningEffort ? reasoningOptions.find((item) => item.effort === reasoningEffort)?.description || "固定使用这个思考等级。" : "使用本地 Codex 为当前模型推荐的默认等级。"}</small></Field>
-        <Field label="Sandbox"><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value as "read_only" | "workspace_write")}><option value="workspace_write">workspace-write（允许改代码）</option><option value="read_only">read-only（只读）</option></select></Field>
-        <Field label="审批策略"><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as "never" | "on-request")}><option value="never">never（无人值守）</option><option value="on-request">on-request（Human 审批）</option></select><small>{approvalPolicy === "on-request" ? "Codex 越权时暂停，并在审批中心等待处理。" : "Codex 不弹审批；被 Sandbox 拒绝的操作会直接失败。"}</small></Field>
+        <Field label="Codex 认证环境"><select value={codexProfile} onChange={(event) => { setCodexProfile(event.target.value); setModel(""); setReasoningEffort(""); }} required><option value="default">宿主机默认登录</option>{codexProfile.startsWith("relay_") && !props.authProfiles.some((item) => item.selector === codexProfile) ? <option value={codexProfile}>{codexProfile}（当前不可用）</option> : null}{props.authProfiles.map((item) => <option key={item.id} value={item.selector} disabled={item.status !== "active"}>{item.name}{item.status === "active" ? "" : `（${codexAuthStatusLabel(item.status)}）`}</option>)}</select><small>每个托管认证配置都有独立登录态、会话与本地配置。</small></Field>
+        <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={modelsLoading}><option value="">使用 Codex 默认模型</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select>{modelsError ? <small className="codex-runtime-error">{modelsError}</small> : <small>{modelsLoading ? "正在从对应 Codex 环境读取模型…" : "模型列表由本机 Trigger 发现。"}</small>}</Field>
+        <Field label="思考等级"><select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as CodexReasoningEffort | "")} disabled={modelsLoading}><option value="">继承公司 / 模型默认（{defaultReasoningLabel}）</option>{currentReasoningMissing ? <option value={reasoningEffort}>{reasoningEffort}（当前配置）</option> : null}{reasoningOptions.map((item) => <option key={item.effort} value={item.effort}>{codexReasoningEffortLabel(item.effort, language)} · {item.effort}</option>)}</select></Field>
+        <Field label="推理摘要"><select value={reasoningSummary} onChange={(event) => setReasoningSummary(event.target.value as CodexReasoningSummary | "")}><option value="">继承公司默认</option><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
+        <Field label="输出详细度"><select value={verbosity} onChange={(event) => setVerbosity(event.target.value as CodexVerbosity | "")}><option value="">继承公司默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
+        <Field label="Personality"><select value={personality} onChange={(event) => setPersonality(event.target.value as CodexPersonality | "")}><option value="">继承公司默认</option><option value="none">none</option><option value="friendly">friendly</option><option value="pragmatic">pragmatic</option></select></Field>
+        <Field label="Fast 模式"><select value={serviceTier} onChange={(event) => setServiceTier(event.target.value as "fast" | "")}><option value="">继承公司默认</option><option value="fast">开启 fast</option></select></Field>
+        <Field label="Sandbox"><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value as CodexSandboxMode)}><option value="inherit">继承公司默认</option><option value="workspace_write">workspace-write</option><option value="read_only">read-only</option></select></Field>
+        <Field label="审批策略"><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as CodexApprovalPolicy)}><option value="inherit">继承公司默认</option><option value="never">never</option><option value="on-request">on-request</option></select></Field>
+        <Field label="工作区网络"><CodexBooleanOverrideSelect value={networkAccess} onChange={setNetworkAccess} /></Field>
+        <Field label="Web Search"><select value={webSearch} onChange={(event) => setWebSearch(event.target.value as CodexWebSearch | "")}><option value="">继承公司默认</option><option value="disabled">关闭</option><option value="cached">缓存</option><option value="indexed">索引</option><option value="live">实时</option></select></Field>
+        <Field label="多 Agent"><CodexBooleanOverrideSelect value={featureMultiAgent} onChange={setFeatureMultiAgent} /></Field>
+        <Field label="插件"><CodexBooleanOverrideSelect value={featureRemotePlugin} onChange={setFeatureRemotePlugin} /></Field>
+        <Field label="Hooks"><CodexBooleanOverrideSelect value={featureHooks} onChange={setFeatureHooks} /></Field>
+        <Field label="Goals"><CodexBooleanOverrideSelect value={featureGoals} onChange={setFeatureGoals} /></Field>
+        <Field label="Shell"><CodexBooleanOverrideSelect value={featureShellTool} onChange={setFeatureShellTool} /></Field>
         <Field label="单次最长运行（秒）"><input type="number" min={60} max={7200} value={maxRunSeconds} onChange={(event) => setMaxRunSeconds(Number(event.target.value))} /></Field>
       </div>
       <div className="runner-profile-form-actions"><button className="button small" type="button" onClick={() => { setEditing(false); props.onCancel(); }} disabled={busy}>取消</button><button className="button primary small" disabled={busy}>{busy ? "正在保存…" : "保存运行配置"}</button></div>
     </form>
   );
+}
+
+type CodexBooleanOverride = "inherit" | "true" | "false";
+
+function codexBooleanOverride(value: boolean | null | undefined): CodexBooleanOverride {
+  return value == null ? "inherit" : value ? "true" : "false";
+}
+
+function codexBooleanOverrideValue(value: CodexBooleanOverride): boolean | null {
+  return value === "inherit" ? null : value === "true";
+}
+
+function CodexBooleanOverrideSelect(props: {
+  value: CodexBooleanOverride;
+  onChange: (value: CodexBooleanOverride) => void;
+}) {
+  return <select value={props.value} onChange={(event) => props.onChange(event.target.value as CodexBooleanOverride)}><option value="inherit">继承公司默认</option><option value="true">开启</option><option value="false">关闭</option></select>;
+}
+
+function MemoriesView(props: {
+  consoleData: CompanyConsole;
+  token: string;
+  fixedAgentId?: string;
+  fixedProjectId?: string;
+  embedded?: boolean;
+  onError: (error: unknown) => void;
+  onNotice: (message: string) => void;
+}) {
+  const [memories, setMemories] = useState<AgentMemory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [agentFilter, setAgentFilter] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
+  const [memoryTier, setMemoryTier] = useState("");
+  const [status, setStatus] = useState("");
+  const [editing, setEditing] = useState<AgentMemory | null>(null);
+  const companyId = props.consoleData.company.id;
+  const agentId = props.fixedAgentId ?? agentFilter;
+  const projectId = props.fixedProjectId ?? projectFilter;
+  const scopedAgent = props.consoleData.agents.find((agent) => agent.agent_profile.id === props.fixedAgentId);
+  const scopedProject = props.consoleData.projects.find((project) => project.project.id === props.fixedProjectId);
+
+  async function loadMemories() {
+    const params = new URLSearchParams({ limit: "500" });
+    if (query.trim()) params.set("query", query.trim());
+    if (agentId) params.set("owner_agent_id", agentId);
+    if (projectId) params.set("project_id", projectId);
+    if (memoryTier) params.set("memory_tier", memoryTier);
+    if (status) params.set("status", status);
+    const response = await api<{ memories: AgentMemory[] }>(
+      `/api/v1/companies/${companyId}/memories?${params.toString()}`,
+      {},
+      props.token,
+    );
+    setMemories(response.memories);
+  }
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      void loadMemories()
+        .catch((error) => { if (active) props.onError(error); })
+        .finally(() => { if (active) setLoading(false); });
+    }, query ? 250 : 0);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [companyId, props.token, query, agentId, projectId, memoryTier, status]);
+
+  async function updateMemory(memory: AgentMemory, values: Record<string, unknown>, notice: string) {
+    try {
+      await api(
+        `/api/v1/companies/${companyId}/memories/${memory.id}`,
+        { method: "PUT", body: JSON.stringify(values) },
+        props.token,
+      );
+      await loadMemories();
+      props.onNotice(notice);
+    } catch (error) {
+      props.onError(error);
+      throw error;
+    }
+  }
+
+  async function deleteMemory(memory: AgentMemory) {
+    if (!window.confirm(`确定永久删除记忆“${memory.title}”吗？如果只是暂时不用，建议归档。`)) return;
+    try {
+      await api(`/api/v1/companies/${companyId}/memories/${memory.id}`, { method: "DELETE" }, props.token);
+      await loadMemories();
+      props.onNotice("记忆已永久删除");
+    } catch (error) {
+      props.onError(error);
+    }
+  }
+
+  const activeCount = memories.filter((memory) => memory.status === "active").length;
+  const longTermCount = memories.filter((memory) => memory.status === "active" && memory.memory_tier === "long_term").length;
+  const shortTermCount = memories.filter((memory) => memory.status === "active" && memory.memory_tier === "short_term").length;
+  const pinnedCount = memories.filter((memory) => memory.pinned).length;
+  const agentNames = new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent.agent_profile.display_name]));
+  const projectNames = new Map(props.consoleData.projects.map((project) => [project.project.id, project.project.name]));
+  const memoryPagination = usePagination(memories, 9, `${query}:${agentId}:${projectId}:${memoryTier}:${status}`);
+
+  return (
+    <div className={`content-stack memory-center ${props.embedded ? "embedded-memory-center" : ""}`}>
+      <section className="memory-metrics">
+        <Metric label="有效记忆" value={String(activeCount)} detail="全部为所属 Agent 私有" />
+        <Metric label="长期记忆" value={String(longTermCount)} detail="每次唤醒自动进入 Skill" />
+        <Metric label="短期记忆" value={String(shortTermCount)} detail="仅通过 MCP 按需检索" />
+        <Metric label="已置顶" value={String(pinnedCount)} detail="在同类记忆中优先展示" />
+      </section>
+
+      <section className="section-card memory-library-card">
+        <div className="section-heading memory-library-heading">
+          <div>
+            <span className="eyebrow">{scopedProject ? "PROJECT MEMORY" : "PRIVATE MEMORY"}</span>
+            <h2>{scopedProject ? `${scopedProject.project.name} · 项目记忆` : scopedAgent ? `${scopedAgent.agent_profile.display_name} · 独立记忆` : "Agent 私有记忆库"}</h2>
+            <p>{scopedProject ? "仅展示与当前项目关联的 Agent 精华记忆，用于保留项目决策、经验、流程和交接结论。" : scopedAgent ? "这里汇总该 Agent 的全部长期与短期记忆；其他 Agent 无权读取或复用。" : "Human 可以审阅和维护，但 Agent 只能读取自己的记忆，不能搜索或复用其他 Agent 的内容。"}</p>
+          </div>
+          <span className="count-badge">{memories.length}</span>
+        </div>
+        <div className="memory-filters">
+          <label className="task-search"><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索主题、结论、标签或使用场景" /></label>
+          {!props.fixedAgentId ? <select value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}><option value="">全部 Agent</option>{props.consoleData.agents.map((agent) => <option key={agent.agent_profile.id} value={agent.agent_profile.id}>{agent.agent_profile.display_name}</option>)}</select> : null}
+          {!props.fixedProjectId ? <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">全部项目</option>{props.consoleData.projects.map((project) => <option key={project.project.id} value={project.project.id}>{project.project.name}</option>)}</select> : null}
+          <select value={memoryTier} onChange={(event) => setMemoryTier(event.target.value)}><option value="">全部类型</option><option value="long_term">长期记忆 · 自动进入 Skill</option><option value="short_term">短期记忆 · MCP 按需查询</option></select>
+          <select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="active">有效</option><option value="archived">已归档</option><option value="superseded">已替代</option></select>
+        </div>
+
+        {loading ? <div className="memory-loading"><span className="loader" />正在读取精华记忆…</div> : memories.length ? (
+          <div className="memory-grid">
+            {memoryPagination.pageItems.map((memory) => (
+              <article className={`memory-card ${memory.status} ${memory.pinned ? "pinned" : ""}`} key={memory.id}>
+                <header>
+                  <div className="memory-card-kinds"><span className={`memory-tier ${memory.memory_tier}`}>{memoryTierLabel(memory.memory_tier)}</span><span className={`memory-type ${memory.memory_type}`}>{memoryTypeLabel(memory.memory_type)}</span></div>
+                  <div className="memory-card-state">{memory.pinned ? <span title="已置顶">置顶</span> : null}<span className={`memory-status ${memory.status}`}>{memoryStatusLabel(memory.status)}</span></div>
+                </header>
+                <div className="memory-title"><h3>{memory.title}</h3><code>{memory.topic_key}</code></div>
+                <p className="memory-summary">{memory.summary}</p>
+                {memory.when_to_use ? <div className="memory-usage"><strong>何时使用</strong><span>{memory.when_to_use}</span></div> : null}
+                {memory.tags.length ? <div className="memory-tags">{memory.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
+                <div className="memory-facts">
+                  <span><strong>{memory.importance}/5</strong>重要度</span>
+                  <span><strong>{memory.confidence}%</strong>置信度</span>
+                  <span><strong>{memory.memory_tier === "long_term" ? "自动注入 Skill" : "MCP 按需检索"}</strong>{memory.project_id ? projectNames.get(memory.project_id) ?? "相关项目" : "Agent 私有"}</span>
+                </div>
+                <footer>
+                  <div><span className="agent-avatar tiny">{(agentNames.get(memory.owner_agent_id) ?? "A").slice(0, 1)}</span><span><strong>{agentNames.get(memory.owner_agent_id) ?? "未知 Agent"}</strong><small>更新于 {formatTime(memory.updated_at)}{memory.source_refs.length ? ` · ${memory.source_refs.length} 个来源引用` : ""}</small></span></div>
+                  <div className="memory-actions">
+                    <button className="icon-button" title="编辑精华" onClick={() => setEditing(memory)}><Icon name="book" /></button>
+                    {memory.status === "active" ? <button className="button small" onClick={() => void updateMemory(memory, { pinned: !memory.pinned }, memory.pinned ? "已取消置顶" : "记忆已置顶")}>{memory.pinned ? "取消置顶" : "置顶"}</button> : null}
+                    {!['archived', 'superseded'].includes(memory.status) ? <button className="button small" onClick={() => void updateMemory(memory, { status: "archived" }, "记忆已归档")}>归档</button> : null}
+                    <button className="icon-button danger" title="永久删除" onClick={() => void deleteMemory(memory)}><Icon name="trash" /></button>
+                  </div>
+                </footer>
+              </article>
+            ))}
+            <Pagination {...memoryPagination} onPageChange={memoryPagination.setPage} />
+          </div>
+        ) : <div className="empty-inline memory-empty"><Icon name="memory" /><h3>还没有符合条件的精华记忆</h3><p>Agent 会在真实工作中提炼阶段性短期结论或稳定长期规则，再通过 <code>agent.memory</code> 写入。系统不会自动复制聊天记录。</p></div>}
+      </section>
+
+      {editing ? <MemoryEditDialog memory={editing} onClose={() => setEditing(null)} onSave={async (values) => { await updateMemory(editing, values, "记忆精华已更新"); setEditing(null); }} /> : null}
+    </div>
+  );
+}
+
+function MemoryEditDialog(props: { memory: AgentMemory; onClose: () => void; onSave: (values: Record<string, unknown>) => Promise<void> }) {
+  const [memoryTier, setMemoryTier] = useState<AgentMemory["memory_tier"]>(props.memory.memory_tier);
+  const [title, setTitle] = useState(props.memory.title);
+  const [summary, setSummary] = useState(props.memory.summary);
+  const [whenToUse, setWhenToUse] = useState(props.memory.when_to_use);
+  const [tags, setTags] = useState(props.memory.tags.join(", "));
+  const [importance, setImportance] = useState(props.memory.importance);
+  const [confidence, setConfidence] = useState(props.memory.confidence);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      await props.onSave({
+        memory_tier: memoryTier,
+        title,
+        summary,
+        when_to_use: whenToUse,
+        tags: tags.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+        importance,
+        confidence,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Dialog title="编辑精华记忆" description={`主题键 ${props.memory.topic_key} 保持稳定，用于 Agent 去重和更新同一主题。`} onClose={props.onClose} wide><form className="stack-form memory-edit-form" onSubmit={(event) => void submit(event)}><Field label="记忆层级"><select value={memoryTier} onChange={(event) => setMemoryTier(event.target.value as AgentMemory["memory_tier"])}><option value="long_term">长期记忆 · 每次唤醒自动进入 Agent Skill</option><option value="short_term">短期记忆 · Agent 需要时通过 MCP 查询</option></select><small>只有稳定、长期指导工作的规则才应升级为长期记忆。</small></Field><Field label="标题"><input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="精华结论（不是原始记录）"><textarea value={summary} minLength={10} maxLength={2000} onChange={(event) => setSummary(event.target.value)} required /></Field><Field label="何时使用"><textarea value={whenToUse} maxLength={1000} onChange={(event) => setWhenToUse(event.target.value)} placeholder="说明适用的任务、模块、条件或决策场景" /></Field><div className="form-grid"><Field label="标签（逗号分隔）"><input value={tags} onChange={(event) => setTags(event.target.value)} /></Field><Field label="重要度（1–5）"><input type="number" min={1} max={5} value={importance} onChange={(event) => setImportance(Number(event.target.value))} /></Field><Field label="置信度（0–100）"><input type="number" min={0} max={100} value={confidence} onChange={(event) => setConfidence(Number(event.target.value))} /></Field></div>{props.memory.source_refs.length ? <div className="memory-source-list"><strong>来源引用</strong>{props.memory.source_refs.map((source) => <span key={`${source.source_type}-${source.source_id}`}><b>{source.source_type}</b><code>{source.source_id}</code>{source.label ? <small>{source.label}</small> : null}</span>)}</div> : null}<div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy}>{busy ? "保存中…" : "保存精华"}</button></div></form></Dialog>;
 }
 
 function ApprovalsView(props: {
@@ -1752,6 +3202,7 @@ function ApprovalsView(props: {
 }) {
   const [filter, setFilter] = useState<"pending" | "all">("pending");
   const visible = filter === "pending" ? props.approvals.filter((approval) => approval.status === "pending") : props.approvals;
+  const approvalPagination = usePagination(visible, 8, filter);
   const pendingCount = props.approvals.filter((approval) => approval.status === "pending").length;
   const completedCount = props.approvals.filter((approval) => ["approved", "executed"].includes(approval.status)).length;
   const rejectedCount = props.approvals.filter((approval) => approval.status === "rejected").length;
@@ -1769,7 +3220,7 @@ function ApprovalsView(props: {
           <div><span className="eyebrow">APPROVAL CENTER</span><h2>审批请求</h2><p>这里的 Codex 审批直接连接等待中的 app-server 请求，不会重新启动会话。</p></div>
           <div className="segmented approval-filter"><button className={filter === "pending" ? "active" : ""} onClick={() => setFilter("pending")}>待审批 {pendingCount}</button><button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部 {props.approvals.length}</button></div>
         </div>
-        {visible.length ? <div className="approval-list">{visible.map((approval) => <ApprovalCard key={approval.id} approval={approval} agents={props.agents} onReview={props.onReview} onError={props.onError} />)}</div> : <div className="empty-inline compact-empty"><Icon name="shield" /><h3>{filter === "pending" ? "没有待审批请求" : "还没有审批记录"}</h3><p>选择 on-request 的运行配置后，Codex 需要越权时会自动出现在这里。</p></div>}
+        {visible.length ? <div className="approval-list">{approvalPagination.pageItems.map((approval) => <ApprovalCard key={approval.id} approval={approval} agents={props.agents} onReview={props.onReview} onError={props.onError} />)}<Pagination {...approvalPagination} onPageChange={approvalPagination.setPage} /></div> : <div className="empty-inline compact-empty"><Icon name="shield" /><h3>{filter === "pending" ? "没有待审批请求" : "还没有审批记录"}</h3><p>选择 on-request 的运行配置后，Codex 需要越权时会自动出现在这里。</p></div>}
       </section>
     </div>
   );
@@ -1838,10 +3289,12 @@ function CodexTriggerPanel(props: {
   active: boolean;
   profiles: CodexRunnerProfileView[];
   token: string;
+  realtimeEvent: CompanyRealtimeEvent | null;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
   onAssigned: () => Promise<void>;
 }) {
+  const { language } = useUiLanguage();
   const [trigger, setTrigger] = useState<CodexTriggerView | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1877,17 +3330,15 @@ function CodexTriggerPanel(props: {
   }, [endpoint, props.token]);
 
   useEffect(() => {
+    const event = props.realtimeEvent;
+    if (!event || !event.event_type.startsWith("codex.")) return;
+    if (event.payload.agent_profile_id !== props.agentId) return;
     let active = true;
-    const timer = window.setInterval(() => {
-      api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token)
-        .then(({ trigger }) => { if (active) setTrigger(trigger); })
-        .catch(() => undefined);
-    }, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [endpoint, props.token]);
+    api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token)
+      .then(({ trigger }) => { if (active) setTrigger(trigger); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [endpoint, props.agentId, props.realtimeEvent, props.token]);
 
   useEffect(() => {
     if (!loading && !selectedProfileId && props.profiles.length) {
@@ -1984,17 +3435,17 @@ function CodexTriggerPanel(props: {
             <Field label="选择运行配置">
               <select value={selectedProfileId} onChange={(event) => setSelectedProfileId(event.target.value)} disabled={!props.profiles.length}>
                 {!props.profiles.length ? <option value="">请先创建运行配置</option> : null}
-                {props.profiles.map((item) => <option key={item.profile.id} value={item.profile.id}>{item.profile.name}{item.profile.is_default ? "（通用默认）" : ""}</option>)}
+                {props.profiles.map((item) => <option key={item.profile.id} value={item.profile.id}>{item.profile.name}{item.profile.is_default ? "（默认）" : ""}</option>)}
               </select>
             </Field>
             {selectedProfile ? (
               <div className="selected-profile-summary">
                 <span><small>模型</small><strong>{selectedProfile.model || "Codex 默认模型"}</strong></span>
-                <span><small>思考等级</small><strong>{codexReasoningEffortLabel(selectedProfile.reasoning_effort)}</strong></span>
+                <span><small>思考等级</small><strong>{codexReasoningEffortLabel(selectedProfile.reasoning_effort, language)}</strong></span>
                 <span><small>兜底检查</small><strong>{formatInterval(selectedProfile.interval_seconds)}</strong></span>
-                <span><small>Sandbox</small><strong>{selectedProfile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
-                <span><small>审批</small><strong>{selectedProfile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
-                <span><small>运行上限</small><strong>{selectedProfile.max_run_seconds} 秒</strong></span>
+                <span><small>Sandbox</small><strong>{selectedProfile.sandbox_mode === "inherit" ? "继承公司" : selectedProfile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
+                <span><small>审批</small><strong>{selectedProfile.approval_policy === "inherit" ? "继承公司" : selectedProfile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+                <span><small>运行上限</small><strong>{formatRunSeconds(selectedProfile.max_run_seconds, language)}</strong></span>
               </div>
             ) : null}
           </div>
@@ -2004,7 +3455,7 @@ function CodexTriggerPanel(props: {
             {trigger ? <button className="button small" onClick={() => void triggerAction("run-now")} disabled={busy || trigger.config.status !== "active" || !props.active}>{runningRun || trigger.config.lease_owner ? "本轮后再唤醒" : trigger.config.manual_run_requested_at ? "已排队，再次请求" : "立即唤醒"}</button> : null}
             <button className="button primary small" onClick={() => void saveTrigger()} disabled={busy || !props.active || !selectedProfileId}>{busy ? "处理中…" : trigger ? "保存选择" : "启用这个配置"}</button>
           </div>
-          {trigger?.config.last_error ? <div className="inline-error">最近错误：{trigger.config.last_error}</div> : null}
+          {trigger?.config.last_error && !runningRun && !trigger.config.lease_owner ? <div className="inline-error">最近错误：{trigger.config.last_error}</div> : null}
           {trigger?.recent_runs.length ? (
             <div className="codex-run-list">
               <div className="codex-run-list-heading"><strong>最近执行记录</strong><small>以下是历史记录；当前状态以上方状态栏为准</small></div>
@@ -2034,17 +3485,35 @@ function ProjectsView(props: {
 }) {
   const canManage = ["owner", "admin"].includes(props.consoleData.human_membership.role);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"git" | "rule" | "assets">("git");
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [activeTab, setActiveTab] = useState<"git" | "rule" | "assets" | "tasks" | "memories">("git");
+  const [projectActionBusy, setProjectActionBusy] = useState(false);
   const selectedProject = props.consoleData.projects.find((project) => project.project.id === selectedProjectId) ?? null;
   const projectStats = {
     git: props.consoleData.projects.filter((project) => project.git).length,
     assets: props.consoleData.projects.reduce((total, project) => total + project.assets.length, 0),
-    refreshing: props.consoleData.projects.filter((project) => project.asset_refresh?.enabled).length,
+    tasks: props.consoleData.projects.reduce((total, project) => total + project.tasks.length, 0),
   };
+  const projectPagination = usePagination(props.consoleData.projects, 8, props.consoleData.company.id);
 
-  function openProject(projectId: string, tab: "git" | "rule" | "assets") {
+  function openProject(projectId: string, tab: "git" | "rule" | "assets" | "tasks" | "memories") {
     setSelectedProjectId(projectId);
     setActiveTab(tab);
+  }
+
+  async function setProjectPaused(project: CompanyProject, paused: boolean) {
+    setProjectActionBusy(true);
+    try {
+      await api(`/api/v1/companies/${props.consoleData.company.id}/projects/${project.project.id}/${paused ? "pause" : "resume"}`, { method: "POST" }, props.token);
+      await props.onChanged();
+      props.onNotice(paused
+        ? "项目已暂停：项目群、任务唤醒、资产维护和正在运行的项目 Agent 已停止。"
+        : "项目已恢复：项目群和 Agent 工作流重新启用。");
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setProjectActionBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -2052,6 +3521,7 @@ function ProjectsView(props: {
   }, [selectedProject, selectedProjectId]);
 
   if (selectedProject) {
+    const projectPaused = selectedProject.project.status === "paused";
     return (
       <div className="content-stack">
         <section className="section-card project-git-detail-card">
@@ -2066,24 +3536,31 @@ function ProjectsView(props: {
               <p>{selectedProject.project.description || "暂无项目说明"}</p>
               <div className="project-detail-facts">
                 <span>{projectStatusLabel(selectedProject.project.status)}</span>
+                <span>{projectTypeLabel(selectedProject.project.project_type, props.consoleData.project_types, props.consoleData.governance_policy.effective_settings.skill_language)} · 识别置信度 {selectedProject.project.project_type_confidence}%</span>
                 <span>{selectedProject.git ? `${selectedProject.git.git_host} · ${selectedProject.git.default_branch}` : "等待 Human 配置 Git"}</span>
               </div>
             </div>
-            <span className={`git-config-state ${selectedProject.git ? "configured" : ""}`}>
-              {selectedProject.git ? "已配置 Git" : "未配置 Git"}
-            </span>
+            <div className="project-state-actions">
+              <span className={`git-config-state ${selectedProject.git ? "configured" : ""}`}>
+                {selectedProject.git ? "已配置 Git" : "未配置 Git"}
+              </span>
+              {canManage ? <button className={`button small ${projectPaused ? "primary" : "danger-outline"}`} type="button" disabled={projectActionBusy} onClick={() => void setProjectPaused(selectedProject, !projectPaused)}><Icon name={projectPaused ? "play" : "pause"} /> {projectActionBusy ? "处理中…" : projectPaused ? "恢复项目" : "暂停项目"}</button> : null}
+            </div>
           </div>
+          {projectPaused ? <div className="project-paused-banner"><Icon name="pause" /><span><strong>项目已暂停</strong><small>项目群不可发送消息，Agent 不会因本项目任务、消息或资产维护启动；正在运行的项目 Codex 会被取消。</small></span></div> : null}
           <div className="project-detail-tabs" role="tablist" aria-label="项目详情">
-            <button className={activeTab === "git" ? "active" : ""} type="button" onClick={() => setActiveTab("git")}>Git 仓库</button>
-            <button className={activeTab === "rule" ? "active" : ""} type="button" onClick={() => setActiveTab("rule")}>Rule</button>
-            <button className={activeTab === "assets" ? "active" : ""} type="button" onClick={() => setActiveTab("assets")}>项目资产 <span>{selectedProject.assets.length}</span></button>
+            <button className={activeTab === "git" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "git"} onClick={() => setActiveTab("git")}>Git 仓库</button>
+            <button className={activeTab === "rule" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "rule"} onClick={() => setActiveTab("rule")}>Rule</button>
+            <button className={activeTab === "assets" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "assets"} onClick={() => setActiveTab("assets")}>项目资产 <span>{selectedProject.assets.length}</span></button>
+            <button className={activeTab === "tasks" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "tasks"} onClick={() => setActiveTab("tasks")}>项目任务 <span>{selectedProject.tasks.length}</span></button>
+            <button className={activeTab === "memories" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "memories"} onClick={() => setActiveTab("memories")}>项目记忆</button>
           </div>
           {activeTab === "git" ? (
             <ProjectGitCard
               companyId={props.consoleData.company.id}
               project={selectedProject}
               token={props.token}
-              canManage={canManage}
+              canManage={canManage && !projectPaused}
               onChanged={props.onChanged}
               onError={props.onError}
               onNotice={props.onNotice}
@@ -2093,9 +3570,10 @@ function ProjectsView(props: {
             <ProjectRuleCard
               companyId={props.consoleData.company.id}
               project={selectedProject}
+              projectTypes={props.consoleData.project_types}
               agents={props.consoleData.agents}
               token={props.token}
-              canManage={canManage}
+              canManage={canManage && !projectPaused}
               onChanged={props.onChanged}
               onError={props.onError}
               onNotice={props.onNotice}
@@ -2107,8 +3585,28 @@ function ProjectsView(props: {
               project={selectedProject}
               agents={props.consoleData.agents}
               token={props.token}
-              canManage={canManage}
+              canManage={canManage && !projectPaused}
               onChanged={props.onChanged}
+              onError={props.onError}
+              onNotice={props.onNotice}
+            />
+          ) : null}
+          {activeTab === "tasks" ? (
+            <TasksView
+              consoleData={props.consoleData}
+              token={props.token}
+              fixedProjectId={selectedProject.project.id}
+              onChanged={props.onChanged}
+              onError={props.onError}
+              onNotice={props.onNotice}
+            />
+          ) : null}
+          {activeTab === "memories" ? (
+            <MemoriesView
+              consoleData={props.consoleData}
+              token={props.token}
+              fixedProjectId={selectedProject.project.id}
+              embedded
               onError={props.onError}
               onNotice={props.onNotice}
             />
@@ -2124,24 +3622,26 @@ function ProjectsView(props: {
         <div className="section-heading">
           <div>
             <span className="eyebrow">PROJECT CENTER</span>
-            <h2>项目中心</h2>
-            <p>在一个入口查看项目 Git、Rule 和资产清单；可以直接进入对应模块。</p>
+            <h2>项目列表</h2>
           </div>
-          <span className="count-badge">{props.consoleData.projects.length}</span>
+          <div className="section-heading-actions">
+            <span className="count-badge">{props.consoleData.projects.length}</span>
+            {canManage ? <button className="button primary" type="button" onClick={() => setShowCreateProject(true)}><Icon name="plus" /> 新建项目</button> : null}
+          </div>
         </div>
         {props.consoleData.projects.length ? (
           <div className="project-overview-metrics">
             <span><small>项目</small><strong>{props.consoleData.projects.length}</strong></span>
             <span><small>已配置 Git</small><strong>{projectStats.git}</strong></span>
             <span><small>可见资产</small><strong>{projectStats.assets}</strong></span>
-            <span><small>定期维护</small><strong>{projectStats.refreshing}</strong></span>
+            <span><small>项目任务</small><strong>{projectStats.tasks}</strong></span>
           </div>
         ) : null}
         {props.consoleData.projects.length ? (
           <div className="project-repository-list">
-            {props.consoleData.projects.map((project) => (
+            {projectPagination.pageItems.map((project) => (
               <div
-                className="project-repository-row"
+                className={`project-repository-row ${project.project.status === "paused" ? "paused" : ""}`}
                 key={project.project.id}
               >
                 <button className="project-repository-main" type="button" onClick={() => openProject(project.project.id, "git")}>
@@ -2149,9 +3649,8 @@ function ProjectsView(props: {
                   <span className="project-repository-copy">
                     <span className="project-repository-title">
                       <strong>{project.project.name}</strong>
-                      <small>{projectStatusLabel(project.project.status)}</small>
+                      <small>{projectTypeLabel(project.project.project_type, props.consoleData.project_types, props.consoleData.governance_policy.effective_settings.skill_language)} · {projectStatusLabel(project.project.status)}</small>
                     </span>
-                    <span className="project-repository-description">{project.project.description || "暂无项目说明"}</span>
                     <span className="project-repository-facts">
                       {project.git ? `${project.git.git_host} · 默认分支 ${project.git.default_branch}${project.git.push_enabled ? " · Agent 可推送" : ""}` : "尚未关联仓库和宿主机目录"}
                     </span>
@@ -2163,25 +3662,189 @@ function ProjectsView(props: {
                   <button type="button" onClick={() => openProject(project.project.id, "rule")}><Icon name="shield" /> Rule</button>
                   <button className={project.assets.length ? "has-assets" : ""} type="button" onClick={() => openProject(project.project.id, "assets")}><Icon name="folder" /> 资产 <strong>{project.assets.length}</strong></button>
                   <span className={`project-refresh-indicator ${project.asset_refresh?.enabled ? "active" : ""}`}>{project.asset_refresh?.enabled ? "定期维护中" : "未设置维护"}</span>
+                  {canManage ? <button className={`project-list-pause ${project.project.status === "paused" ? "resume" : ""}`} type="button" disabled={projectActionBusy} onClick={() => void setProjectPaused(project, project.project.status !== "paused")}><Icon name={project.project.status === "paused" ? "play" : "pause"} /> {project.project.status === "paused" ? "恢复" : "暂停"}</button> : null}
                 </div>
               </div>
             ))}
+            <Pagination {...projectPagination} onPageChange={projectPagination.setPage} />
           </div>
         ) : (
           <div className="empty-inline">
             <Icon name="git" />
             <h3>还没有正式项目</h3>
-            <p>项目仍由具备权限的 Agent 通过 MCP 创建；项目出现后，Human 可在这里填写 Git 地址。</p>
+            <p>从本地文件夹或 Git 地址创建项目。Relay 会自动识别项目类型并加载固定执行规则。</p>
+            {canManage ? <button className="button primary" type="button" onClick={() => setShowCreateProject(true)}><Icon name="plus" /> 创建第一个项目</button> : null}
           </div>
         )}
       </section>
+      {showCreateProject ? (
+        <CreateProjectDialog
+          consoleData={props.consoleData}
+          token={props.token}
+          onClose={() => setShowCreateProject(false)}
+          onCreated={async () => {
+            setShowCreateProject(false);
+            await props.onChanged();
+            props.onNotice("项目已创建，固定项目 Skill 会在 Agent 下一次进入项目时自动加载");
+          }}
+          onError={props.onError}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function CreateProjectDialog(props: {
+  consoleData: CompanyConsole;
+  token: string;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+  onError: (error: unknown) => void;
+}) {
+  const activeAgents = props.consoleData.agents.filter((agent) => agent.membership.employment_status === "active");
+  const preferredOwner = activeAgents.find((agent) => ["project_manager", "product_manager", "technical_manager"].includes(agent.profession?.key ?? companyAgentProfessionKey(agent, props.consoleData.professions))) ?? activeAgents[0];
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [ownerAgentId, setOwnerAgentId] = useState(preferredOwner?.agent_profile.id ?? "");
+  const [memberAgentIds, setMemberAgentIds] = useState<string[]>(preferredOwner ? [preferredOwner.agent_profile.id] : []);
+  const [projectType, setProjectType] = useState("");
+  const [sourceKind, setSourceKind] = useState<"local_folder" | "git">("local_folder");
+  const [selectedFolderName, setSelectedFolderName] = useState("");
+  const [selectedFolderFiles, setSelectedFolderFiles] = useState<File[]>([]);
+  const [gitRemoteUrl, setGitRemoteUrl] = useState("");
+  const [defaultBranch, setDefaultBranch] = useState("main");
+  const [busy, setBusy] = useState(false);
+  const skillLanguage = props.consoleData.governance_policy.effective_settings.skill_language;
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedType = props.consoleData.project_types.find((item) => item.key === projectType);
+  const projectTypeGroups = useMemo(() => {
+    const groups = new Map<string, CompanyProjectType[]>();
+    props.consoleData.project_types.forEach((type) => {
+      const categoryLabel = skillLanguage === "en" ? type.category_label_en : type.category_label;
+      const current = groups.get(categoryLabel) ?? [];
+      current.push(type);
+      groups.set(categoryLabel, current);
+    });
+    return Array.from(groups.entries());
+  }, [props.consoleData.project_types, skillLanguage]);
+
+  function selectFolder(files: File[]) {
+    const firstFile = files[0];
+    if (!firstFile) return;
+    const relativePath = firstFile.webkitRelativePath.replace(/\\/gu, "/");
+    const rootName = relativePath.split("/")[0] || firstFile.name;
+    setSelectedFolderName(rootName);
+    setSelectedFolderFiles(files);
+    if (!name.trim()) setName(rootName);
+  }
+
+  function toggleMember(agentId: string, checked: boolean) {
+    setMemberAgentIds((current) => checked
+      ? current.includes(agentId) ? current : [...current, agentId]
+      : current.filter((id) => id !== agentId));
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (sourceKind === "local_folder" && !selectedFolderName) {
+      props.onError(new Error("请先选择要导入的本地文件夹。"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const commonInput = {
+        name,
+        description: description || null,
+        owner_agent_id: ownerAgentId,
+        member_agent_ids: Array.from(new Set([ownerAgentId, ...memberAgentIds])),
+        project_type: projectType || null,
+      };
+      if (sourceKind === "local_folder") {
+        const excluded = new Set([".git", ".relay", ".relay-agent-trigger", "node_modules", "target"]);
+        const uploadEntries = selectedFolderFiles.flatMap((file) => {
+          const parts = file.webkitRelativePath.replace(/\\/gu, "/").split("/").filter(Boolean);
+          const relativePath = (parts.length > 1 ? parts.slice(1) : [file.name]).join("/");
+          return relativePath.split("/").some((part) => excluded.has(part)) ? [] : [{ file, relativePath }];
+        });
+        const form = new FormData();
+        form.append("metadata", JSON.stringify({
+          ...commonInput,
+          file_paths: uploadEntries.map((entry) => entry.relativePath),
+        }));
+        uploadEntries.forEach((entry, index) => form.append(`file_${index}`, entry.file, entry.file.name));
+        await api(`/api/v1/companies/${props.consoleData.company.id}/projects/import-folder`, {
+          method: "POST",
+          body: form,
+        }, props.token);
+      } else {
+        await api(`/api/v1/companies/${props.consoleData.company.id}/projects`, {
+          method: "POST",
+          body: JSON.stringify({
+            ...commonInput,
+            source_kind: "git",
+            source_local_path: null,
+            git_remote_url: gitRemoteUrl,
+            default_branch: defaultBranch,
+          }),
+        }, props.token);
+      }
+      await props.onCreated();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title="新建项目" description="选择本地文件夹或 Git 仓库。Relay 会创建托管副本、识别项目类型，并生成不可被弱化的固定项目 Skill。" onClose={props.onClose} extraWide>
+      <form className="stack-form create-project-form" onSubmit={submit}>
+        <div className="project-source-switch" role="tablist" aria-label="项目来源">
+          <button className={sourceKind === "local_folder" ? "active" : ""} type="button" onClick={() => setSourceKind("local_folder")}><Icon name="folder" /><span><strong>导入本地文件夹</strong><small>复制到组织托管空间，不修改原目录</small></span></button>
+          <button className={sourceKind === "git" ? "active" : ""} type="button" onClick={() => setSourceKind("git")}><Icon name="git" /><span><strong>从 Git 创建</strong><small>填写仓库地址，由 Trigger 创建工作区</small></span></button>
+        </div>
+        {sourceKind === "local_folder" ? (
+          <>
+            <div className={`project-folder-picker ${selectedFolderName ? "selected" : ""}`}>
+              <Icon name="folder" />
+              <div><strong>{selectedFolderName || "选择要导入的项目文件夹"}</strong><small>{selectedFolderName ? `已选择 ${selectedFolderFiles.length} 个文件；创建时会流式复制到组织托管空间。` : "Relay 会忽略 .git、.relay、node_modules 和 target，并复制到组织默认空间。"}</small></div>
+              <button className="button" type="button" onClick={() => folderInputRef.current?.click()}>选择文件夹</button>
+              <input ref={(element) => { folderInputRef.current = element; element?.setAttribute("webkitdirectory", ""); }} className="hidden-file-input" type="file" multiple onChange={(event) => { selectFolder(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+            </div>
+          </>
+        ) : (
+          <div className="form-grid">
+            <Field label="Git 地址"><input value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} placeholder="https://github.com/org/repository.git" required /></Field>
+            <Field label="默认分支"><input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" required /></Field>
+          </div>
+        )}
+        <div className="form-grid">
+          <Field label="项目名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="项目名称" required /></Field>
+          <Field label="项目负责人"><select value={ownerAgentId} onChange={(event) => { setOwnerAgentId(event.target.value); toggleMember(event.target.value, true); }} required><option value="">请选择 Agent</option>{activeAgents.map((agent) => <option key={agent.agent_profile.id} value={agent.agent_profile.id}>{agent.agent_profile.display_name} · {agent.profession?.label ?? agent.membership.job_title}</option>)}</select></Field>
+        </div>
+        <Field label="项目说明"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="描述目标、用户、范围和期望交付；Relay 会用它辅助识别项目类型。" /></Field>
+        <Field label="项目类型"><select value={projectType} onChange={(event) => setProjectType(event.target.value)}><option value="">自动识别（推荐）</option>{projectTypeGroups.map(([category, types]) => <optgroup label={category} key={category}>{types.map((type) => <option key={type.key} value={type.key}>{skillLanguage === "en" ? type.label_en : type.label} · {skillLanguage === "en" ? type.description_en : type.description}</option>)}</optgroup>)}</select></Field>
+        <div className="project-type-preview">
+          <span className="eyebrow">FIXED PROJECT SKILL</span>
+          <strong>{selectedType ? skillLanguage === "en" ? selectedType.label_en : selectedType.label : "创建后自动识别"}</strong>
+          <p>{selectedType ? `${skillLanguage === "en" ? selectedType.category_label_en : selectedType.category_label} · ${skillLanguage === "en" ? selectedType.description_en : selectedType.description}` : "Relay 会综合项目说明与文件结构选择类型；Human 仍可在创建前明确指定。"}</p>
+          {selectedType ? <pre>{skillLanguage === "en" ? selectedType.rule_markdown_en : selectedType.rule_markdown}</pre> : null}
+        </div>
+        <div className="project-member-selector">
+          <strong>项目成员</strong><small>负责人会自动加入；其他成员可在这里一并加入项目群。</small>
+          <div className="permission-grid">{activeAgents.map((agent) => <label className="check-row" key={agent.agent_profile.id}><input type="checkbox" checked={agent.agent_profile.id === ownerAgentId || memberAgentIds.includes(agent.agent_profile.id)} disabled={agent.agent_profile.id === ownerAgentId} onChange={(event) => toggleMember(agent.agent_profile.id, event.target.checked)} /><span>{agent.agent_profile.display_name} · {agent.profession?.label ?? agent.membership.job_title}</span></label>)}</div>
+        </div>
+        {!activeAgents.length ? <div className="inline-error">请先创建并激活至少一个 Agent，项目需要一个 Agent 负责人。</div> : null}
+        <div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy || !ownerAgentId || !name.trim() || (sourceKind === "git" ? !gitRemoteUrl.trim() : !selectedFolderName)}>{busy ? "正在创建托管项目…" : "创建项目"}</button></div>
+      </form>
+    </Dialog>
   );
 }
 
 function TasksView(props: {
   consoleData: CompanyConsole;
   token: string;
+  fixedProjectId?: string;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
@@ -2197,14 +3860,22 @@ function TasksView(props: {
     () => new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent.agent_profile.display_name])),
     [props.consoleData.agents],
   );
-  const taskEntries = useMemo(
-    () => props.consoleData.projects.flatMap((project) => project.tasks.map((task) => ({ project, task }))),
-    [props.consoleData.projects],
+  const scopedProjects = useMemo(
+    () => props.fixedProjectId
+      ? props.consoleData.projects.filter((project) => project.project.id === props.fixedProjectId)
+      : props.consoleData.projects,
+    [props.consoleData.projects, props.fixedProjectId],
   );
+  const scopedProject = scopedProjects[0] ?? null;
+  const taskEntries = useMemo(
+    () => scopedProjects.flatMap((project) => project.tasks.map((task) => ({ project, task }))),
+    [scopedProjects],
+  );
+  const activeProjects = scopedProjects.filter((project) => project.project.status !== "paused");
   const filteredTasks = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return taskEntries
-      .filter(({ project, task }) => !projectFilter || project.project.id === projectFilter)
+      .filter(({ project }) => props.fixedProjectId || !projectFilter || project.project.id === projectFilter)
       .filter(({ task }) => !statusFilter || task.status === statusFilter)
       .filter(({ task }) => !assigneeFilter
         || (assigneeFilter === "unassigned" ? !task.assignee_agent_id : task.assignee_agent_id === assigneeFilter))
@@ -2219,7 +3890,8 @@ function TasksView(props: {
           || priorityOrder[left.task.priority] - priorityOrder[right.task.priority]
           || new Date(right.task.updated_at).getTime() - new Date(left.task.updated_at).getTime();
       });
-  }, [assigneeFilter, projectFilter, search, statusFilter, taskEntries]);
+  }, [assigneeFilter, projectFilter, props.fixedProjectId, search, statusFilter, taskEntries]);
+  const taskPagination = usePagination(filteredTasks, 12, `${projectFilter}:${statusFilter}:${assigneeFilter}:${search}`);
   const editingEntry = taskEntries.find(({ task }) => task.id === editingTaskId) ?? null;
   const stats = {
     todo: taskEntries.filter(({ task }) => task.status === "todo").length,
@@ -2242,29 +3914,29 @@ function TasksView(props: {
       <section className="section-card task-board-card">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">COMPANY TASKS</span>
-            <h2>项目任务</h2>
+            <span className="eyebrow">PROJECT TASKS</span>
+            <h2>{scopedProject ? `${scopedProject.project.name} · 项目任务` : "项目任务"}</h2>
             <p>任务被分配后会写入 Agent Inbox，并在下次定时 Trigger 中唤醒它的固定 Codex 会话。</p>
           </div>
           <div className="section-heading-actions">
             <span className="count-badge">{filteredTasks.length}</span>
             {canManage ? (
-              <button className="button primary small" type="button" onClick={() => setShowCreate(true)} disabled={!props.consoleData.projects.length}>
+              <button className="button primary small" type="button" onClick={() => setShowCreate(true)} disabled={!activeProjects.length}>
                 <Icon name="plus" /> 新建任务
               </button>
             ) : null}
           </div>
         </div>
 
-        <div className="task-filters">
+        <div className={`task-filters ${props.fixedProjectId ? "fixed-project" : ""}`}>
           <label className="task-search">
             <Icon name="search" />
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索任务或项目" />
           </label>
-          <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
+          {!props.fixedProjectId ? <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
             <option value="">全部项目</option>
             {props.consoleData.projects.map((project) => <option key={project.project.id} value={project.project.id}>{project.project.name}</option>)}
-          </select>
+          </select> : null}
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
             <option value="">全部状态</option>
             <option value="todo">待处理</option>
@@ -2286,7 +3958,7 @@ function TasksView(props: {
             <div className="task-list-head">
               <span>任务</span><span>状态</span><span>优先级</span><span>负责人</span><span>截止时间</span>
             </div>
-            {filteredTasks.map(({ project, task }) => {
+            {taskPagination.pageItems.map(({ project, task }) => {
               const dependencies = project.task_dependencies
                 .filter((dependency) => dependency.task_id === task.id)
                 .map((dependency) => project.tasks.find((candidate) => candidate.id === dependency.depends_on_task_id))
@@ -2294,16 +3966,16 @@ function TasksView(props: {
               const unresolvedDependencies = dependencies.filter((dependency) => !["done", "cancelled"].includes(dependency.status));
               return (
                 <div
-                  className={`task-row ${canManage ? "editable" : ""}`}
+                  className={`task-row ${canManage && project.project.status !== "paused" ? "editable" : ""} ${project.project.status === "paused" ? "project-paused" : ""}`}
                   key={task.id}
-                  role={canManage ? "button" : undefined}
-                  tabIndex={canManage ? 0 : undefined}
-                  onClick={() => { if (canManage) setEditingTaskId(task.id); }}
-                  onKeyDown={(event) => { if (canManage && (event.key === "Enter" || event.key === " ")) setEditingTaskId(task.id); }}
+                  role={canManage && project.project.status !== "paused" ? "button" : undefined}
+                  tabIndex={canManage && project.project.status !== "paused" ? 0 : undefined}
+                  onClick={() => { if (canManage && project.project.status !== "paused") setEditingTaskId(task.id); }}
+                  onKeyDown={(event) => { if (canManage && project.project.status !== "paused" && (event.key === "Enter" || event.key === " ")) setEditingTaskId(task.id); }}
                 >
                   <span className="task-title-cell">
                     <strong>{task.title}</strong>
-                    <small>{project.project.name}{dependencies.length ? ` · ${dependencies.length} 个前置任务` : ""}</small>
+                    <small>{project.project.name}{project.project.status === "paused" ? " · 项目已暂停" : ""}{dependencies.length ? ` · ${dependencies.length} 个前置任务` : ""}</small>
                     {unresolvedDependencies.length ? <em className="task-waiting-dependencies">等待：{unresolvedDependencies.map((dependency) => dependency.title).join("、")}</em> : null}
                   </span>
                   <span>{unresolvedDependencies.length ? <span className="task-status waiting"><span className="status-dot" />等待前置</span> : <TaskStatusBadge status={task.status} />}</span>
@@ -2316,6 +3988,7 @@ function TasksView(props: {
                 </div>
               );
             })}
+            <Pagination {...taskPagination} onPageChange={taskPagination.setPage} />
           </div>
         ) : (
           <div className="empty-inline">
@@ -2329,7 +4002,7 @@ function TasksView(props: {
       {showCreate ? (
         <TaskDialog
           companyId={props.consoleData.company.id}
-          projects={props.consoleData.projects}
+          projects={activeProjects}
           token={props.token}
           onClose={() => setShowCreate(false)}
           onSaved={async (task) => {
@@ -2343,7 +4016,7 @@ function TasksView(props: {
       {editingEntry ? (
         <TaskDialog
           companyId={props.consoleData.company.id}
-          projects={props.consoleData.projects}
+          projects={scopedProjects}
           task={editingEntry.task}
           token={props.token}
           onClose={() => setEditingTaskId(null)}
@@ -2412,6 +4085,8 @@ function TaskDialog(props: {
   const statusHistory = props.task
     ? (project?.task_status_history ?? []).filter((entry) => entry.task_id === props.task?.id)
     : [];
+  const dependencyPagination = usePagination(dependencyCandidates, 8, projectId);
+  const historyPagination = usePagination(statusHistory, 6, props.task?.id ?? "new");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -2474,7 +4149,7 @@ function TaskDialog(props: {
         </Field>
         <Field label="前置任务">
           <div className="task-dependency-picker">
-            {dependencyCandidates.length ? dependencyCandidates.map((candidate) => (
+            {dependencyCandidates.length ? dependencyPagination.pageItems.map((candidate) => (
               <label className="task-dependency-option" key={candidate.id}>
                 <input
                   type="checkbox"
@@ -2485,6 +4160,7 @@ function TaskDialog(props: {
                 <span><strong>{candidate.title}</strong><small>{taskStatusLabel(candidate.status)}{candidate.assignee_agent_id ? ` · ${activeMembers.find((member) => member.agent_profile.id === candidate.assignee_agent_id)?.agent_profile.display_name ?? "未知 Agent"}` : " · 未分配"}</small></span>
               </label>
             )) : <div className="task-dependency-empty">当前项目还没有其他任务。先创建基础任务后，就可以把它选作前置。</div>}
+            <Pagination {...dependencyPagination} onPageChange={dependencyPagination.setPage} compact />
           </div>
           {dependenciesLocked ? <small>已完成、失败或已取消的任务不能再修改前置关系。</small> : unresolvedDependencies.length ? <small className="task-dependency-warning">当前需等待：{unresolvedDependencies.map((dependency) => dependency.title).join("、")}</small> : dependencyIds.length ? <small>所选前置任务均已完成，可以开始执行。</small> : <small>未选择前置任务时，这条任务可以直接开始。</small>}
         </Field>
@@ -2514,12 +4190,13 @@ function TaskDialog(props: {
         {props.task && statusHistory.length ? (
           <div className="task-status-history">
             <strong>状态历史</strong>
-            {statusHistory.map((entry) => {
+            {historyPagination.pageItems.map((entry) => {
               const actor = entry.changed_by_agent_id
                 ? activeMembers.find((member) => member.agent_profile.id === entry.changed_by_agent_id)?.agent_profile.display_name ?? "Agent"
                 : entry.changed_by_human_user_id ? "Human" : "系统";
               return <span key={entry.id}><small>{formatTime(entry.created_at)}</small><em>{entry.from_status ? `${taskStatusLabel(entry.from_status)} → ` : "初始状态："}{taskStatusLabel(entry.to_status)}</em><i>{actor}</i></span>;
             })}
+            <Pagination {...historyPagination} onPageChange={historyPagination.setPage} compact />
           </div>
         ) : null}
         {!activeMembers.length ? <div className="git-security-note">这个项目还没有活跃成员。你可以先保存为未分配任务，或让有权限的 Agent 添加项目成员。</div> : null}
@@ -2535,6 +4212,7 @@ function TaskDialog(props: {
 function ProjectRuleCard(props: {
   companyId: string;
   project: CompanyProject;
+  projectTypes: CompanyProjectType[];
   agents: CompanyAgent[];
   token: string;
   canManage: boolean;
@@ -2550,6 +4228,7 @@ function ProjectRuleCard(props: {
   const [busy, setBusy] = useState(false);
   const selectedAgent = projectAgents.find((agent) => agent.agent_profile.id === agentId);
   const selectedAgentNeedsPermission = Boolean(selectedAgent && !agentHasPermission(selectedAgent, "project.rules.manage"));
+  const systemType = props.projectTypes.find((type) => type.key === props.project.project.project_type);
 
   useEffect(() => setContent(props.project.rule?.content ?? ""), [props.project.project.id, props.project.rule?.updated_at]);
   useEffect(() => {
@@ -2601,9 +4280,16 @@ function ProjectRuleCard(props: {
 
   return (
     <div className="project-rule-layout">
+      <section className="project-system-rule-card">
+        <div className="project-tab-heading">
+          <div><span className="eyebrow">SYSTEM PROJECT SKILL</span><h3>{systemType?.label ?? "通用项目"}固定规则</h3><p>这是 Relay 按项目类型自动加载的强制基线。Human Rule 和 Agent 生成内容只能补充，不能删除或弱化。</p></div>
+          <span className="pill neutral">自动加载</span>
+        </div>
+        <pre>{systemType?.rule_markdown ?? "项目类型规则暂不可用"}</pre>
+      </section>
       <form className="project-rule-editor" onSubmit={saveRule}>
         <div className="project-tab-heading">
-          <div><span className="eyebrow">PROJECT RULE</span><h3>项目注意事项</h3><p>这里的 Markdown 会作为项目上下文提供给项目 Agent，适合记录约束、规范、风险和协作规则。</p></div>
+          <div><span className="eyebrow">HUMAN PROJECT RULE</span><h3>项目补充注意事项</h3><p>这里记录项目特有约束、风险和协作规则，并与上方系统固定规则一起进入 Agent Skill。</p></div>
           {props.project.rule ? <small>更新于 {formatTime(props.project.rule.updated_at)}</small> : <small>尚未创建</small>}
         </div>
         <textarea
@@ -2670,6 +4356,7 @@ function ProjectAssetsCard(props: {
       && (!typeFilter || asset.asset_type === typeFilter)
       && (!statusFilter || asset.status === statusFilter);
   });
+  const assetPagination = usePagination(filteredAssets, 9, `${props.project.project.id}:${search}:${typeFilter}:${statusFilter}`);
   const activeAssetCount = props.project.assets.filter((asset) => asset.status === "active").length;
   const lastAssetUpdate = props.project.assets.reduce<string | null>((latest, asset) => !latest || new Date(asset.updated_at) > new Date(latest) ? asset.updated_at : latest, null);
 
@@ -2748,7 +4435,7 @@ function ProjectAssetsCard(props: {
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">全部状态</option><option value="active">正常</option><option value="missing">缺失</option><option value="deprecated">已废弃</option><option value="unknown">待确认</option></select>
             </div>
             {filteredAssets.length ? <div className="project-asset-grid">
-              {filteredAssets.map((asset) => {
+              {assetPagination.pageItems.map((asset) => {
                 const updater = props.agents.find((agent) => agent.agent_profile.id === asset.updated_by_agent_id);
                 return <article className="project-asset-card" key={asset.id}>
                   <div className="project-asset-card-head">
@@ -2761,6 +4448,7 @@ function ProjectAssetsCard(props: {
                   <footer><span>{updater ? `${updater.agent_profile.display_name} 更新` : "资产清单"}</span><time>{formatTime(asset.updated_at)}</time></footer>
                 </article>;
               })}
+              <Pagination {...assetPagination} onPageChange={assetPagination.setPage} />
             </div> : <div className="project-assets-empty compact"><Icon name="search" /><strong>没有符合条件的资产</strong><p>调整搜索词、类型或状态筛选后再试。</p></div>}
           </>
         ) : (
@@ -2867,6 +4555,7 @@ function ProjectGitCard(props: {
   const [defaultBranch, setDefaultBranch] = useState(props.project.git?.default_branch ?? "main");
   const [githubToken, setGithubToken] = useState("");
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
+  const [managedTokenConfigured, setManagedTokenConfigured] = useState(false);
   const [branchPrefix, setBranchPrefix] = useState(props.project.git?.branch_prefix ?? "relay/");
   const [allowAgentPush, setAllowAgentPush] = useState(props.project.git?.push_enabled ?? false);
   const [configured, setConfigured] = useState(Boolean(props.project.git));
@@ -2875,18 +4564,19 @@ function ProjectGitCard(props: {
   useEffect(() => {
     if (!props.canManage) return;
     let active = true;
-    api<{ git: ProjectGitAdminView | null; github_token_configured: boolean }>(
+    api<{ git: ProjectGitAdminView | null; github_token_configured: boolean; managed_token_configured: boolean }>(
       `/api/v1/companies/${props.companyId}/projects/${props.project.project.id}/git`,
       {},
       props.token,
     )
-      .then(({ git, github_token_configured }) => {
+      .then(({ git, github_token_configured, managed_token_configured }) => {
         if (!active) return;
         setRemoteUrl(git?.remote_url ?? "");
         setHostLocalPath(git?.host_local_path ?? "");
         setDefaultBranch(git?.default_branch ?? "main");
         setGithubToken("");
         setGithubTokenConfigured(github_token_configured);
+        setManagedTokenConfigured(managed_token_configured);
         setBranchPrefix(git?.branch_prefix ?? "relay/");
         setAllowAgentPush(git?.allow_agent_push ?? false);
         setConfigured(Boolean(git));
@@ -2899,13 +4589,13 @@ function ProjectGitCard(props: {
     event.preventDefault();
     setBusy(true);
     try {
-      const response = await api<{ git: ProjectGitAdminView; github_token_configured: boolean }>(
+      const response = await api<{ git: ProjectGitAdminView; github_token_configured: boolean; managed_token_configured: boolean }>(
         `/api/v1/companies/${props.companyId}/projects/${props.project.project.id}/git`,
         {
           method: "PUT",
           body: JSON.stringify({
             remote_url: remoteUrl,
-            host_local_path: hostLocalPath,
+            host_local_path: hostLocalPath || null,
             default_branch: defaultBranch || null,
             github_token: githubToken || null,
             clear_github_token: false,
@@ -2920,6 +4610,7 @@ function ProjectGitCard(props: {
       setDefaultBranch(response.git.default_branch);
       setGithubToken("");
       setGithubTokenConfigured(response.github_token_configured);
+      setManagedTokenConfigured(response.managed_token_configured);
       setBranchPrefix(response.git.branch_prefix);
       setAllowAgentPush(response.git.allow_agent_push);
       setConfigured(true);
@@ -2936,13 +4627,13 @@ function ProjectGitCard(props: {
     if (!window.confirm("清除这个项目已保存的 GitHub Token？公开仓库仍可拉取，但私有仓库和 Push 将不可用。")) return;
     setBusy(true);
     try {
-      const response = await api<{ git: ProjectGitAdminView; github_token_configured: boolean }>(
+      const response = await api<{ git: ProjectGitAdminView; github_token_configured: boolean; managed_token_configured: boolean }>(
         `/api/v1/companies/${props.companyId}/projects/${props.project.project.id}/git`,
         {
           method: "PUT",
           body: JSON.stringify({
             remote_url: remoteUrl,
-            host_local_path: hostLocalPath,
+            host_local_path: hostLocalPath || null,
             default_branch: defaultBranch || null,
             github_token: null,
             clear_github_token: true,
@@ -2954,6 +4645,7 @@ function ProjectGitCard(props: {
       );
       setGithubToken("");
       setGithubTokenConfigured(response.github_token_configured);
+      setManagedTokenConfigured(response.managed_token_configured);
       props.onNotice(`${props.project.project.name} 的 GitHub Token 已清除`);
       await props.onChanged();
     } catch (error) {
@@ -2977,6 +4669,7 @@ function ProjectGitCard(props: {
       setDefaultBranch("main");
       setGithubToken("");
       setGithubTokenConfigured(false);
+      setManagedTokenConfigured(false);
       setBranchPrefix("relay/");
       setAllowAgentPush(false);
       setConfigured(false);
@@ -3001,14 +4694,24 @@ function ProjectGitCard(props: {
               required
             />
           </Field>
-          <Field label="宿主机项目根目录">
-            <input
-              value={hostLocalPath}
-              onChange={(event) => setHostLocalPath(event.target.value)}
-              placeholder="/Users/runner/relay-projects/my-project"
-              required
-            />
-          </Field>
+          <div className="managed-workspace-note">
+            <div>
+              <strong>Agent 工作区由 Relay 自动管理</strong>
+              <span>默认会按项目生成独立目录，你只需要填写 Git 地址。</span>
+            </div>
+            {configured && hostLocalPath ? <code>{hostLocalPath}</code> : null}
+          </div>
+          <details className="project-git-advanced">
+            <summary>高级设置：自定义宿主机目录</summary>
+            <Field label="宿主机项目根目录">
+              <input
+                value={hostLocalPath}
+                onChange={(event) => setHostLocalPath(event.target.value)}
+                placeholder="留空时由 Relay 自动生成"
+              />
+            </Field>
+            <small>仅当 Codex 必须使用指定的现有目录时才需要设置。修改已有目录不会自动搬迁旧工作区。</small>
+          </details>
           <div className="form-grid">
             <Field label="默认分支">
               <input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" />
@@ -3017,16 +4720,20 @@ function ProjectGitCard(props: {
               <input value={branchPrefix} onChange={(event) => setBranchPrefix(event.target.value)} placeholder="relay/" />
             </Field>
           </div>
-          <Field label="GitHub Token（私有仓库或需要 Push 时填写）">
+          <Field label={managedTokenConfigured ? "Git Token（Relay 已自动配置）" : "GitHub Token（私有仓库或需要 Push 时填写）"}>
             <input
               type="password"
               autoComplete="new-password"
               value={githubToken}
               onChange={(event) => setGithubToken(event.target.value)}
-              placeholder={githubTokenConfigured ? "Token 已保存，留空表示不修改" : "github_pat_..."}
+              placeholder={managedTokenConfigured ? "托管凭证已就绪；填写新 Token 可手动覆盖" : githubTokenConfigured ? "Token 已保存，留空表示不修改" : "github_pat_..."}
             />
           </Field>
-          {githubTokenConfigured ? (
+          {managedTokenConfigured ? (
+            <div className="project-git-actions">
+              <span className="git-security-note">项目专用 Token 已由 Relay 自动创建并保存在宿主机</span>
+            </div>
+          ) : githubTokenConfigured ? (
             <div className="project-git-actions">
               <span className="git-security-note">Token 已安全保存在宿主机</span>
               <button className="button small" type="button" onClick={() => void clearGithubToken()} disabled={busy}>清除 Token</button>
@@ -3037,7 +4744,7 @@ function ProjectGitCard(props: {
             允许 Codex 在完成验证后 push 自己的工作分支
           </label>
           <div className="git-security-note">
-            GitHub 地址请使用 HTTPS，例如 <code>https://github.com/owner/repository.git</code>。Token 只保存在宿主机本地凭证目录，不写入项目数据库，也不会通过 MCP 返回。公开仓库可以不填 Token。
+            Git 地址请使用 HTTPS。Token 只保存在宿主机本地凭证目录，不写入项目数据库，也不会通过 MCP 返回；配置托管代码平台后，Agent 可以自行创建仓库与项目专用 Token。
           </div>
           <div className="project-git-actions">
             {configured ? <button className="button small" type="button" onClick={() => void clearGit()} disabled={busy}>清除配置</button> : null}
@@ -3062,14 +4769,21 @@ function OrganizationView(props: {
   companyId: string;
   orgUnits: OrgUnit[];
   agents: CompanyAgent[];
+  managedWorkspaceRoot: string | null;
   token: string;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
 }) {
   const [name, setName] = useState("");
   const [parentId, setParentId] = useState(props.orgUnits[0]?.id ?? "");
   const [unitType, setUnitType] = useState("team");
   const [busy, setBusy] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState(props.managedWorkspaceRoot ?? "");
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const orgPagination = usePagination(props.orgUnits, 10, props.companyId);
+
+  useEffect(() => setWorkspaceRoot(props.managedWorkspaceRoot ?? ""), [props.managedWorkspaceRoot]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -3088,16 +4802,34 @@ function OrganizationView(props: {
     }
   }
 
+  async function saveWorkspace(event: FormEvent) {
+    event.preventDefault();
+    setWorkspaceBusy(true);
+    try {
+      await api(`/api/v1/companies/${props.companyId}/workspace-settings`, {
+        method: "POST",
+        body: JSON.stringify({ managed_workspace_root: workspaceRoot.trim() || null }),
+      }, props.token);
+      await props.onChanged();
+      props.onNotice(workspaceRoot.trim() ? "组织默认项目空间已更新" : "已恢复 ~/.relay 默认项目空间");
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
   return (
     <div className="organization-layout">
       <section className="section-card">
         <div className="section-heading"><div><span className="eyebrow">DIRECTORY</span><h2>组织目录</h2><p>Agent 通过 MCP 读取这份目录来理解同事关系。</p></div></div>
         <div className="org-list">
-          {props.orgUnits.map((unit) => {
+          {orgPagination.pageItems.map((unit) => {
             const count = props.agents.filter((agent) => agent.membership.org_unit_id === unit.id).length;
             const parent = props.orgUnits.find((item) => item.id === unit.parent_org_unit_id);
             return <div className="org-row" key={unit.id}><span className="org-icon"><Icon name="org" /></span><div><strong>{unit.name}</strong><small>{parent ? `${parent.name} / ` : ""}{unit.unit_type}</small></div><span>{count} Agent</span></div>;
           })}
+          <Pagination {...orgPagination} onPageChange={orgPagination.setPage} />
         </div>
       </section>
       <section className="section-card compact-card">
@@ -3109,322 +4841,15 @@ function OrganizationView(props: {
           <button className="button primary wide" disabled={busy}>{busy ? "创建中…" : "创建节点"}</button>
         </form>
       </section>
-    </div>
-  );
-}
-
-function MessagesView(props: {
-  consoleData: CompanyConsole;
-  humanUser: HumanUser;
-  token: string;
-  onChanged: () => Promise<void>;
-  onError: (error: unknown) => void;
-  onNotice: (message: string) => void;
-}) {
-  const [selectedId, setSelectedId] = useState(props.consoleData.conversations[0]?.preview.id ?? "");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [showNewDirect, setShowNewDirect] = useState(false);
-  const [showGroupMembers, setShowGroupMembers] = useState(false);
-  const [targetAgentId, setTargetAgentId] = useState("");
-  const [mentionedAgentIds, setMentionedAgentIds] = useState<string[]>([]);
-  const [mentionAll, setMentionAll] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const messageStreamRef = useRef<HTMLDivElement | null>(null);
-  const shouldScrollToLatestRef = useRef(true);
-  const isNearLatestRef = useRef(true);
-  const selected = props.consoleData.conversations.find((item) => item.preview.id === selectedId);
-  const canSend = props.consoleData.human_membership.status === "active"
-    && ["owner", "admin"].includes(props.consoleData.human_membership.role);
-  const activeAgents = props.consoleData.agents.filter((agent) => agent.membership.employment_status === "active");
-  const agentNames = useMemo(() => new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent.agent_profile.display_name])), [props.consoleData.agents]);
-  const agentDirectory = useMemo(() => new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent])), [props.consoleData.agents]);
-  const selectedGroupAgents = (selected?.member_agent_ids ?? []).flatMap((agentId) => {
-    const agent = agentDirectory.get(agentId);
-    return agent ? [agent] : [];
-  });
-  const selectedIsGroup = selected?.preview.conversation_type === "group";
-  const mentionCandidates = selectedIsGroup && mentionQuery !== null
-    ? selectedGroupAgents.filter((agent) => {
-      const query = mentionQuery.trim().toLocaleLowerCase();
-      return !query
-        || agent.agent_profile.display_name.toLocaleLowerCase().includes(query)
-        || agent.agent_profile.handle.replace(/^@/, "").toLocaleLowerCase().includes(query);
-    })
-    : [];
-  const showMentionAllCandidate = mentionQuery !== null
-    && (!mentionQuery.trim() || "所有人".includes(mentionQuery.trim()));
-
-  async function fetchMessages(conversationId: string) {
-    const response = await api<{ messages: Message[] }>(`/api/v1/conversations/${conversationId}/messages?limit=100`, {}, props.token);
-    return response.messages;
-  }
-
-  function replaceMessages(nextMessages: Message[]) {
-    setMessages((current) => current.length === nextMessages.length
-      && current.every((message, index) => message.id === nextMessages[index]?.id)
-      ? current
-      : nextMessages);
-  }
-
-  useEffect(() => {
-    setSelectedId((current) => current && props.consoleData.conversations.some((item) => item.preview.id === current)
-      ? current
-      : props.consoleData.conversations[0]?.preview.id ?? "");
-  }, [props.consoleData.conversations]);
-
-  useEffect(() => {
-    setShowGroupMembers(false);
-    setMentionedAgentIds([]);
-    setMentionAll(false);
-    setMentionQuery(null);
-    shouldScrollToLatestRef.current = true;
-    isNearLatestRef.current = true;
-    if (!selectedId) {
-      setMessages([]);
-      return;
-    }
-    let active = true;
-    const refreshMessages = async (reportError: boolean) => {
-      try {
-        const nextMessages = await fetchMessages(selectedId);
-        if (active) replaceMessages(nextMessages);
-      } catch (error) {
-        if (active && reportError) props.onError(error);
-      }
-    };
-    void refreshMessages(true);
-    const timer = window.setInterval(() => void refreshMessages(false), 3_000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [selectedId, props.token]);
-
-  const latestMessageId = messages[messages.length - 1]?.id ?? "";
-  useLayoutEffect(() => {
-    const stream = messageStreamRef.current;
-    if (!stream || (!shouldScrollToLatestRef.current && !isNearLatestRef.current)) return;
-    stream.scrollTop = stream.scrollHeight;
-    shouldScrollToLatestRef.current = false;
-    isNearLatestRef.current = true;
-  }, [selectedId, messages.length, latestMessageId]);
-
-  function trackMessageScroll() {
-    const stream = messageStreamRef.current;
-    if (!stream) return;
-    isNearLatestRef.current = stream.scrollHeight - stream.scrollTop - stream.clientHeight <= 80;
-  }
-
-  async function openDirect(event: FormEvent) {
-    event.preventDefault();
-    if (!targetAgentId) return;
-    setBusy(true);
-    try {
-      const response = await api<{ conversation: Conversation }>(`/api/v1/companies/${props.consoleData.company.id}/conversations/direct`, {
-        method: "POST",
-        body: JSON.stringify({ target_agent_id: targetAgentId }),
-      }, props.token);
-      setSelectedId(response.conversation.preview.id);
-      setShowNewDirect(false);
-      setTargetAgentId("");
-      await props.onChanged();
-      props.onNotice("Human 私聊已建立，消息会在 Agent 下次 Trigger 时被发现。");
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function sendMessage(event: FormEvent) {
-    event.preventDefault();
-    if (!selectedId || !draft.trim()) return;
-    setBusy(true);
-    try {
-      const effectiveMentionAll = selectedIsGroup && mentionAll && draft.includes("@所有人");
-      const effectiveMentionedAgentIds = effectiveMentionAll ? [] : mentionedAgentIds.filter((agentId) => {
-        const agent = agentDirectory.get(agentId);
-        if (!agent) return false;
-        return draft.includes(`@${agent.agent_profile.display_name}`)
-          || draft.includes(`@${agent.agent_profile.handle.replace(/^@/, "")}`);
-      });
-      await api(`/api/v1/companies/${props.consoleData.company.id}/conversations/${selectedId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          content: draft,
-          mentioned_agent_ids: effectiveMentionedAgentIds,
-          mention_all: effectiveMentionAll,
-        }),
-      }, props.token);
-      setDraft("");
-      setMentionedAgentIds([]);
-      setMentionAll(false);
-      setMentionQuery(null);
-      shouldScrollToLatestRef.current = true;
-      const [nextMessages] = await Promise.all([fetchMessages(selectedId), props.onChanged()]);
-      replaceMessages(nextMessages);
-      props.onNotice(selected?.preview.conversation_type === "direct"
-        ? "消息已发送，目标 Agent 正在被即时唤醒。"
-        : effectiveMentionAll || !effectiveMentionedAgentIds.length
-          ? "群消息已发送，群内 Agent 正在被即时唤醒。"
-          : `群消息已发送，仅即时唤醒 ${effectiveMentionedAgentIds.length} 个被 @ 的 Agent。`);
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function updateDraft(value: string) {
-    setDraft(value);
-    if (!selectedIsGroup) {
-      setMentionQuery(null);
-      return;
-    }
-    const match = value.match(/(?:^|\s)@([^\s@]*)$/u);
-    setMentionQuery(match ? match[1] : null);
-    if (!value.includes("@所有人")) setMentionAll(false);
-    setMentionedAgentIds((current) => current.filter((agentId) => {
-      const agent = agentDirectory.get(agentId);
-      return Boolean(agent && (
-        value.includes(`@${agent.agent_profile.display_name}`)
-        || value.includes(`@${agent.agent_profile.handle.replace(/^@/, "")}`)
-      ));
-    }));
-  }
-
-  function insertMention(agent?: CompanyAgent) {
-    const mentionText = agent ? agent.agent_profile.display_name : "所有人";
-    const match = draft.match(/(?:^|\s)@([^\s@]*)$/u);
-    const mentionStart = match ? (match.index ?? 0) + match[0].lastIndexOf("@") : -1;
-    const nextDraft = mentionStart >= 0
-      ? `${draft.slice(0, mentionStart)}@${mentionText} `
-      : `${draft}${draft && !draft.endsWith(" ") ? " " : ""}@${mentionText} `;
-    setDraft(nextDraft);
-    setMentionQuery(null);
-    if (agent) {
-      setMentionAll(false);
-      setMentionedAgentIds((current) => current.includes(agent.agent_profile.id)
-        ? current
-        : [...current, agent.agent_profile.id]);
-    } else {
-      setMentionAll(true);
-      setMentionedAgentIds([]);
-    }
-  }
-
-  function removeMention(agentId?: string) {
-    if (!agentId) {
-      setMentionAll(false);
-      setDraft((current) => current.replace(/@所有人\s*/gu, ""));
-      return;
-    }
-    const agent = agentDirectory.get(agentId);
-    setMentionedAgentIds((current) => current.filter((id) => id !== agentId));
-    if (!agent) return;
-    const tokens = [agent.agent_profile.display_name, agent.agent_profile.handle.replace(/^@/, "")]
-      .map(escapeRegExp)
-      .join("|");
-    setDraft((current) => current.replace(new RegExp(`@(?:${tokens})\\s*`, "gu"), ""));
-  }
-
-  return (
-    <>
-      <section className="message-console">
-        <div className="conversation-list">
-          <div className="conversation-list-head">
-            <div><span className="eyebrow">CONVERSATIONS</span><strong>公司通信</strong></div>
-            {canSend ? <button className="new-direct-button" type="button" onClick={() => setShowNewDirect(true)}><Icon name="plus" /> 新建私聊</button> : null}
-          </div>
-          {props.consoleData.conversations.map((conversation) => (
-            <button key={conversation.preview.id} className={selectedId === conversation.preview.id ? "active" : ""} onClick={() => setSelectedId(conversation.preview.id)}>
-              <span className="conversation-icon"><Icon name={conversation.preview.conversation_type === "group" ? "group" : "message"} /></span>
-              <span><strong>{conversationDisplayTitle(conversation, agentNames)}</strong><small>{conversation.preview.last_message_preview ?? "暂无消息"}</small></span>
-            </button>
-          ))}
-          {!props.consoleData.conversations.length ? <div className="conversation-list-empty">还没有会话，可以先与一个 Agent 建立私聊。</div> : null}
-        </div>
-        <div className="message-panel">
-          <div className="message-head">
-            <div><strong>{conversationDisplayTitle(selected, agentNames) || "选择一个会话"}</strong><small>{selected ? `${selected.member_agent_ids.length} 个 Agent · Human 可发送消息` : "从左侧选择或新建会话"}</small></div>
-            <div className="message-head-actions">
-              {selectedIsGroup ? <button className="group-members-button" type="button" onClick={() => setShowGroupMembers(true)}><Icon name="group" /> 群成员 <span>{selected.member_agent_ids.length}</span></button> : null}
-              {selected ? <span className="pill neutral">{formatConversationContext(selected.context.context_type)}</span> : null}
-            </div>
-          </div>
-          <div className="message-stream" ref={messageStreamRef} onScroll={trackMessageScroll}>
-            {messages.length ? messages.map((message) => {
-              const isHuman = message.sender_human_user_id !== null;
-              const senderName = isHuman ? props.humanUser.display_name : agentNames.get(message.sender_agent_id ?? "") ?? "Unknown Agent";
-              return <div className={`message-item ${isHuman ? "human" : ""}`} key={message.id}><span className="agent-avatar small">{senderName.slice(0, 1)}</span><div><div><strong>{senderName}{isHuman ? " · Human" : ""}</strong><time>{formatTime(message.created_at)}</time></div><p>{renderMessageContent(message.content, selectedGroupAgents)}</p></div></div>;
-            }) : <div className="empty-messages">{selected ? "这段会话还没有消息。" : "请选择一个会话。"}</div>}
-          </div>
-          {canSend ? (
-            <form className="message-composer" onSubmit={sendMessage}>
-              <div className="message-input-shell">
-                {mentionQuery !== null ? <div className="mention-menu">
-                  {showMentionAllCandidate ? <button type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(); }}><span className="mention-avatar all">@</span><span><strong>所有人</strong><small>唤醒群内全部 Agent</small></span></button> : null}
-                  {mentionCandidates.map((agent) => <button key={agent.agent_profile.id} type="button" onMouseDown={(event) => { event.preventDefault(); insertMention(agent); }}><span className="mention-avatar">{agent.agent_profile.display_name.slice(0, 1)}</span><span><strong>{agent.agent_profile.display_name}</strong><small>@{agent.agent_profile.handle.replace(/^@/, "")} · {agent.membership.job_title || "Agent"}</small></span></button>)}
-                  {!mentionCandidates.length && !showMentionAllCandidate ? <div className="mention-empty">没有匹配的群成员</div> : null}
-                </div> : null}
-                <textarea value={draft} onChange={(event) => updateDraft(event.target.value)} onKeyDown={(event) => {
-                  if (mentionQuery === null) return;
-                  if (event.key === "Escape") { event.preventDefault(); setMentionQuery(null); }
-                  if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey) {
-                    const candidate = mentionCandidates[0];
-                    if (candidate || showMentionAllCandidate) {
-                      event.preventDefault();
-                      insertMention(candidate);
-                    }
-                  }
-                }} placeholder={selectedIsGroup ? "输入 @ 选择要立即唤醒的 Agent…" : "给 Agent 分配任务、补充信息…"} disabled={!selected || busy} required />
-                {selectedIsGroup && (mentionAll || mentionedAgentIds.length) ? <div className="mention-chips">
-                  {mentionAll ? <button type="button" onClick={() => removeMention()}><span>@所有人</span><Icon name="close" /></button> : mentionedAgentIds.map((agentId) => {
-                    const agent = agentDirectory.get(agentId);
-                    return agent ? <button type="button" key={agentId} onClick={() => removeMention(agentId)}><span>@{agent.agent_profile.display_name}</span><Icon name="close" /></button> : null;
-                  })}
-                </div> : null}
-              </div>
-              <button className="button primary" disabled={!selected || !draft.trim() || busy}>{busy ? "发送中…" : "发送消息"}</button>
-              <small>{selectedIsGroup
-                ? mentionAll
-                  ? "已 @所有人；发送后会即时唤醒群内全部 Agent。"
-                  : mentionedAgentIds.length
-                    ? `已 @ ${mentionedAgentIds.length} 个 Agent；只有被提及成员会立即唤醒。`
-                    : "未指定 @；发送后会唤醒群内全部 Agent。"
-                : "私聊会即时唤醒目标 Agent。"} 若 Agent 正在运行，会在本轮结束后继续处理，不会重复并发启动。</small>
-            </form>
-          ) : <div className="observer-note"><Icon name="eye" /> Viewer 保持只读；Owner 或 Admin 可以发送消息。</div>}
-        </div>
+      <section className="section-card compact-card organization-workspace-card">
+        <div className="section-heading"><div><span className="eyebrow">MANAGED WORKSPACE</span><h2>组织项目空间</h2></div></div>
+        <form className="stack-form" onSubmit={saveWorkspace}>
+          <Field label="自定义根目录（可选）"><input value={workspaceRoot} onChange={(event) => setWorkspaceRoot(event.target.value)} placeholder="默认：~/.relay/companies/{company-id}" /></Field>
+          <div className="git-security-note">留空使用当前 Relay 宿主机用户目录下的 <code>~/.relay</code>。请填写宿主机上的绝对路径；每个项目会创建独立目录。</div>
+          <button className="button primary wide" disabled={workspaceBusy}>{workspaceBusy ? "保存中…" : "保存项目空间"}</button>
+        </form>
       </section>
-      {showNewDirect ? (
-        <Dialog title="新建 Human 私聊" description="选择一个活跃 Agent。重复选择同一个 Agent 会打开原有私聊。" onClose={() => setShowNewDirect(false)}>
-          <form className="stack-form" onSubmit={openDirect}>
-            <Field label="目标 Agent"><select value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)} required><option value="">请选择 Agent</option>{activeAgents.map((agent) => <option key={agent.agent_profile.id} value={agent.agent_profile.id}>{agent.agent_profile.display_name} · {agent.membership.job_title}</option>)}</select></Field>
-            {!activeAgents.length ? <div className="git-security-note">当前没有可接收消息的活跃 Agent。</div> : null}
-            <button className="button primary wide" disabled={!targetAgentId || busy}>{busy ? "正在建立…" : "建立私聊"}</button>
-          </form>
-        </Dialog>
-      ) : null}
-      {showGroupMembers && selectedIsGroup && selected ? (
-        <Dialog title="群成员" description={`${conversationDisplayTitle(selected, agentNames)} · ${selected.member_agent_ids.length} 个 Agent，当前 Human 可参与通信。`} onClose={() => setShowGroupMembers(false)}>
-          <div className="conversation-member-list">
-            <div className="conversation-member-row human-member">
-              <span className="agent-avatar small">{props.humanUser.display_name.slice(0, 1)}</span>
-              <div><strong>{props.humanUser.display_name}</strong><small>Human · 当前登录用户</small></div>
-              <span className="member-kind human">可发送消息</span>
-            </div>
-            {selectedGroupAgents.map((agent) => {
-              const displayedStatus = agent.membership.employment_status === "active" ? agent.connection.status : agent.membership.employment_status;
-              return <div className="conversation-member-row" key={agent.agent_profile.id}><span className="agent-avatar small">{agent.agent_profile.display_name.slice(0, 1)}</span><div><strong>{agent.agent_profile.display_name}</strong><small>@{agent.agent_profile.handle.replace(/^@/, "")} · {agent.membership.job_title || "Agent"}</small></div><StatusBadge value={displayedStatus} /></div>;
-            })}
-            {!selectedGroupAgents.length ? <div className="conversation-member-empty">这个群目前还没有 Agent 成员。</div> : null}
-          </div>
-        </Dialog>
-      ) : null}
-    </>
+    </div>
   );
 }
 
@@ -3443,7 +4868,7 @@ function CreateCompanyDialog(props: { token: string; onClose: () => void; onCrea
   return <Dialog title="创建公司" description="公司是 Agent 身份、组织和通信的租户边界。" onClose={props.onClose}><form className="stack-form" onSubmit={submit}><Field label="公司名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Northstar Studio" required /></Field><Field label="唯一标识（可选）"><input value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="northstar" /></Field><Field label="简介"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="这家公司负责什么？" /></Field><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "创建中…" : "创建公司"}</button></div></form></Dialog>;
 }
 
-function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfession[]; token: string; onClose: () => void; onCreated: (credential: Credential) => Promise<void>; onError: (error: unknown) => void }) {
+function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfession[]; skillLanguage: RelaySkillLanguage; token: string; onClose: () => void; onCreated: (credential: Credential) => Promise<void>; onError: (error: unknown) => void }) {
   const hasActiveManager = props.agents.some((agent) => agent.membership.role_key === "company_manager" && agent.membership.employment_status === "active");
   const [displayName, setDisplayName] = useState("");
   const [handle, setHandle] = useState("");
@@ -3453,6 +4878,14 @@ function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agent
   const [reportsToId, setReportsToId] = useState("");
   const [roleKey, setRoleKey] = useState(hasActiveManager ? "member" : "company_manager");
   const [busy, setBusy] = useState(false);
+  const professionGroups = useMemo(() => {
+    const groups = new Map<string, CompanyProfession[]>();
+    props.professions.forEach((profession) => {
+      const label = props.skillLanguage === "en" ? profession.category_label_en : profession.category_label;
+      groups.set(label, [...(groups.get(label) ?? []), profession]);
+    });
+    return Array.from(groups.entries());
+  }, [props.professions, props.skillLanguage]);
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true);
     try {
@@ -3463,11 +4896,13 @@ function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agent
         keyPrefix: response.result.agent_key_prefix,
         permissions: response.result.membership.permissions,
         professionKey,
+        profession: props.professions.find((profession) => profession.key === professionKey),
+        skillLanguage: props.skillLanguage,
       });
     } catch (error) { props.onError(error); } finally { setBusy(false); }
   }
   const selectedProfession = props.professions.find((profession) => profession.key === professionKey);
-  return <Dialog title="创建 Agent 账号" description={`为 ${props.company.name} 中的一个外部 Agent 签发身份。`} onClose={props.onClose}><form className="stack-form" onSubmit={submit}><div className="form-grid"><Field label="显示名称"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：Maya" required /></Field><Field label="Handle"><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="maya-product" required /></Field><Field label="职业"><select value={professionKey} onChange={(event) => setProfessionKey(event.target.value)} required>{props.professions.map((profession) => <option key={profession.key} value={profession.key}>{profession.label}</option>)}</select>{selectedProfession ? <small>{selectedProfession.description}{selectedProfession.can_create_tasks ? " 可创建和分配任务。" : " 只能更新自己任务的执行状态。"}</small> : null}</Field><Field label="组织"><select value={orgUnitId} onChange={(event) => setOrgUnitId(event.target.value)}>{props.orgUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></Field><Field label="公司角色"><select value={roleKey} onChange={(event) => setRoleKey(event.target.value)} disabled={!hasActiveManager}><option value="member">普通成员</option><option value="company_manager">公司管理 Agent</option></select>{!hasActiveManager ? <small>公司当前没有活跃管理 Agent，因此本账号必须成为公司管理 Agent。公司角色与职业能力分别控制。</small> : <small>公司角色负责治理；任务创建能力由职业决定。</small>}</Field><Field label="直属上级"><select value={reportsToId} onChange={(event) => setReportsToId(event.target.value)}><option value="">无</option>{props.agents.filter((agent) => agent.membership.employment_status === "active").map((agent) => <option key={agent.membership.id} value={agent.membership.id}>{agent.agent_profile.display_name}</option>)}</select></Field></div><Field label="工作说明 / Persona"><textarea value={persona} onChange={(event) => setPersona(event.target.value)} placeholder="补充这个 Agent 在当前公司的具体职责、工作边界和擅长领域。" required /></Field><div className="security-note"><Icon name="shield" /><span><strong>Key 只会显示一次</strong><small>系统只保存哈希。关闭下一步窗口后无法找回，只能轮换。</small></span></div><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "签发中…" : "创建并签发 Key"}</button></div></form></Dialog>;
+  return <Dialog title="创建 Agent 账号" description={`为 ${props.company.name} 中的一个外部 Agent 签发身份。`} onClose={props.onClose}><form className="stack-form" onSubmit={submit}><div className="form-grid"><Field label="显示名称"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：Maya" required /></Field><Field label="Handle"><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="maya-product" required /></Field><Field label="职业"><select value={professionKey} onChange={(event) => setProfessionKey(event.target.value)} required>{professionGroups.map(([category, professions]) => <optgroup label={category} key={category}>{professions.map((profession) => <option key={profession.key} value={profession.key}>{props.skillLanguage === "en" ? profession.label_en : profession.label}</option>)}</optgroup>)}</select>{selectedProfession ? <small>{props.skillLanguage === "en" ? selectedProfession.description_en : selectedProfession.description}{selectedProfession.can_create_tasks ? " 可创建和分配任务。" : " 只能更新自己任务的执行状态。"}</small> : null}</Field><Field label="组织"><select value={orgUnitId} onChange={(event) => setOrgUnitId(event.target.value)}>{props.orgUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></Field><Field label="公司角色"><select value={roleKey} onChange={(event) => setRoleKey(event.target.value)} disabled={!hasActiveManager}><option value="member">普通成员</option><option value="company_manager">公司管理 Agent</option></select>{!hasActiveManager ? <small>公司当前没有活跃管理 Agent，因此本账号必须成为公司管理 Agent。公司角色与职业能力分别控制。</small> : <small>公司角色负责治理；任务创建能力由职业决定。</small>}</Field><Field label="直属上级"><select value={reportsToId} onChange={(event) => setReportsToId(event.target.value)}><option value="">无</option>{props.agents.filter((agent) => agent.membership.employment_status === "active").map((agent) => <option key={agent.membership.id} value={agent.membership.id}>{agent.agent_profile.display_name}</option>)}</select></Field></div><Field label="工作说明 / Persona"><textarea value={persona} onChange={(event) => setPersona(event.target.value)} placeholder="补充这个 Agent 在当前公司的具体职责、工作边界和擅长领域。" required /></Field><div className="security-note"><Icon name="shield" /><span><strong>Key 只会显示一次</strong><small>系统只保存哈希。关闭下一步窗口后无法找回，只能轮换。</small></span></div><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "签发中…" : "创建并签发 Key"}</button></div></form></Dialog>;
 }
 
 function CredentialDialog(props: { credential: Credential; onClose: () => void }) {
@@ -3481,7 +4916,7 @@ function CredentialDialog(props: { credential: Credential; onClose: () => void }
     agentId: props.credential.agent.id,
     handle: props.credential.agent.handle,
     mcpServerName: connectionNames.mcpServer,
-  }, props.credential.professionKey);
+  }, props.credential.professionKey, props.credential.skillLanguage, props.credential.profession);
   const skillBundle = formatSkillBundle(skillDocuments);
   const fullBundle = [
     `# Relay Agent: ${props.credential.agent.display_name}`,
@@ -3509,7 +4944,7 @@ function BatchCredentialDialog(props: { result: BatchCredentialResult; onClose: 
       agentId: credential.agent.id,
       handle: credential.agent.handle,
       mcpServerName: names.mcpServer,
-    }, credential.professionKey);
+    }, credential.professionKey, credential.skillLanguage, credential.profession);
     return {
       credential,
       names,
@@ -3523,8 +4958,111 @@ function BatchCredentialDialog(props: { result: BatchCredentialResult; onClose: 
   return <Dialog title={`已激活 ${bundles.length} 个 Agent`} description="所有明文 Key 只展示这一次。请先复制全部接入资料，再关闭窗口。" onClose={props.onClose} wide><div className="credential-stack"><div className="credential-warning"><Icon name="alert" /><p><strong>请立即保存全部 Key</strong><span>{bundles.map((bundle) => `@${bundle.credential.agent.handle.replace(/^@/, "")} · ${bundle.names.mcpServer}`).join("  /  ")}</span></p></div><button className="button primary wide" onClick={() => void copyText(fullBundle)}><Icon name="copy" /> 复制全部 Agent 的 Key + 配置 + 完整 Skill</button>{props.result.failures.length ? <div className="batch-failures"><strong>{props.result.failures.length} 个 Agent 激活失败</strong>{props.result.failures.map((failure) => <span key={failure.agentName}>{failure.agentName}：{failure.message}</span>)}</div> : null}<div className="batch-credential-list">{bundles.map((bundle) => <details className="batch-credential-card" key={bundle.credential.agent.id}><summary><span><strong>{bundle.credential.agent.display_name}</strong><small>@{bundle.credential.agent.handle.replace(/^@/, "")} · {bundle.names.mcpServer}</small></span><Icon name="chevron-down" /></summary><div><CodeBlock label="完整 Agent Key" value={bundle.credential.key ?? ""} secret /><CodeBlock label="Codex MCP 配置" value={`${bundle.envCommand}\n\n${bundle.config}`} /><SkillCopyBlock documents={bundle.documents} step="3" /><button className="button wide" onClick={() => void copyText(bundle.full)}><Icon name="copy" /> 复制这个 Agent 的全部接入资料</button></div></details>)}</div><button className="button ghost wide" onClick={props.onClose}>我已安全保存</button></div></Dialog>;
 }
 
-function Dialog(props: { title: string; description?: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}><div className={`dialog ${props.wide ? "wide" : ""}`} role="dialog" aria-modal="true"><div className="dialog-head"><div><h2>{props.title}</h2>{props.description ? <p>{props.description}</p> : null}</div><button className="icon-button" onClick={props.onClose}><Icon name="close" /></button></div>{props.children}</div></div>;
+function UserPreferencesDialog(props: {
+  companyConsole: CompanyConsole | null;
+  token: string;
+  onChanged: () => Promise<void>;
+  onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
+  onClose: () => void;
+}) {
+  const { language, setLanguage } = useUiLanguage();
+  const currentSkillLanguage = props.companyConsole?.governance_policy.effective_settings.skill_language ?? "zh-CN";
+  const [uiLanguage, setUiLanguage] = useState<UiLanguage>(language);
+  const [skillLanguage, setSkillLanguage] = useState<RelaySkillLanguage>(currentSkillLanguage);
+  const [triggerBatchSize, setTriggerBatchSize] = useState("10");
+  const [savedTriggerBatchSize, setSavedTriggerBatchSize] = useState<number | null>(null);
+  const [triggerEnvironmentDefault, setTriggerEnvironmentDefault] = useState<number | null>(null);
+  const [loadingTriggerPreferences, setLoadingTriggerPreferences] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const canManageRuntimePreferences = Boolean(props.companyConsole && ["owner", "admin"].includes(props.companyConsole.human_membership.role));
+
+  useEffect(() => setUiLanguage(language), [language]);
+  useEffect(() => setSkillLanguage(currentSkillLanguage), [currentSkillLanguage]);
+  useEffect(() => {
+    const companyId = props.companyConsole?.company.id;
+    if (!companyId) {
+      setSavedTriggerBatchSize(null);
+      setTriggerEnvironmentDefault(null);
+      return;
+    }
+    let cancelled = false;
+    setSavedTriggerBatchSize(null);
+    setTriggerEnvironmentDefault(null);
+    setLoadingTriggerPreferences(true);
+    void api<{ preferences: { batch_size: number; environment_default: number } }>(
+      `/api/v1/companies/${companyId}/agent-trigger-preferences`,
+      {},
+      props.token,
+    ).then(({ preferences }) => {
+      if (cancelled) return;
+      setTriggerBatchSize(String(preferences.batch_size));
+      setSavedTriggerBatchSize(preferences.batch_size);
+      setTriggerEnvironmentDefault(preferences.environment_default);
+    }).catch((error) => {
+      if (!cancelled) props.onError(error);
+    }).finally(() => {
+      if (!cancelled) setLoadingTriggerPreferences(false);
+    });
+    return () => { cancelled = true; };
+  }, [props.companyConsole?.company.id, props.token]);
+
+  async function savePreferences(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      if (props.companyConsole && canManageRuntimePreferences && skillLanguage !== currentSkillLanguage) {
+        await api(`/api/v1/companies/${props.companyConsole.company.id}/skill-language`, {
+          method: "POST",
+          body: JSON.stringify({ skill_language: skillLanguage }),
+        }, props.token);
+        await props.onChanged();
+      }
+      const parsedBatchSize = Number(triggerBatchSize);
+      if (props.companyConsole && canManageRuntimePreferences && savedTriggerBatchSize !== null && parsedBatchSize !== savedTriggerBatchSize) {
+        if (!Number.isInteger(parsedBatchSize) || parsedBatchSize < 1 || parsedBatchSize > 100) {
+          throw new Error("同时运行的 Agent 数量必须是 1 到 100 之间的整数");
+        }
+        await api(`/api/v1/companies/${props.companyConsole.company.id}/agent-trigger-preferences`, {
+          method: "PUT",
+          body: JSON.stringify({ batch_size: parsedBatchSize }),
+        }, props.token);
+      }
+      setLanguage(uiLanguage);
+      props.onNotice("用户偏好已保存");
+      props.onClose();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title="用户偏好" onClose={props.onClose}>
+      <form className="stack-form user-preferences-form" onSubmit={savePreferences}>
+        <section className="preference-section">
+          <div><Icon name="settings" /><span><strong>界面显示</strong><small>仅影响当前用户看到的页面语言</small></span></div>
+          <Field label="界面语言"><select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="zh-CN">中文</option><option value="en">English</option></select></Field>
+        </section>
+        <section className="preference-section">
+          <div><Icon name="book" /><span><strong>Agent 工作上下文</strong><small>{props.companyConsole ? props.companyConsole.company.name : "尚未选择公司"}</small></span></div>
+          <Field label="当前公司的 Agent 工作语言"><select value={skillLanguage} disabled={!canManageRuntimePreferences} onChange={(event) => setSkillLanguage(event.target.value as RelaySkillLanguage)}><option value="zh-CN">中文 Skill 与 Rule</option><option value="en">English Skills and Rules</option></select></Field>
+          <p>影响当前公司全部 Agent，从下一次唤醒开始生效，不改变页面语言。</p>
+        </section>
+        <section className="preference-section">
+          <div><Icon name="network" /><span><strong>Agent 并发</strong><small>所有运行器</small></span></div>
+          <Field label="同时运行的 Agent 数量"><input type="number" min="1" max="100" step="1" value={triggerBatchSize} disabled={!canManageRuntimePreferences || loadingTriggerPreferences || savedTriggerBatchSize === null} onChange={(event) => setTriggerBatchSize(event.target.value)} /></Field>
+          <p>控制本机所有运行器同时执行的 Agent 上限，从下一轮调度开始生效。{triggerEnvironmentDefault !== null ? ` 环境默认值：${triggerEnvironmentDefault}。` : ""}</p>
+        </section>
+        <div className="dialog-actions"><button className="button" type="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy || loadingTriggerPreferences}>{busy ? "保存中…" : "保存偏好"}</button></div>
+      </form>
+    </Dialog>
+  );
+}
+
+function Dialog(props: { title: string; description?: string; onClose: () => void; children: ReactNode; wide?: boolean; extraWide?: boolean }) {
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}><div className={`dialog ${props.extraWide ? "extra-wide" : props.wide ? "wide" : ""}`} role="dialog" aria-modal="true"><div className="dialog-head"><div><h2>{props.title}</h2>{props.description ? <p>{props.description}</p> : null}</div><button className="icon-button" onClick={props.onClose}><Icon name="close" /></button></div>{props.children}</div></div>;
 }
 
 function CodeBlock(props: { label: string; value: string; secret?: boolean }) {
@@ -3545,63 +5083,9 @@ function SkillCopyBlock({ documents, step = "3" }: { documents: RelaySkillDocume
 
 function EmptyCompany(props: { onCreate: () => void }) { return <div className="center-state"><span className="brand-mark"><Icon name="network" /></span><span className="eyebrow">START HERE</span><h1>先创建一家公司</h1><p>公司会成为外部 Agent 的身份与通信边界。创建后再添加组织和 Agent 账号。</p><button className="button primary" onClick={props.onCreate}><Icon name="plus" /> 创建公司</button></div>; }
 function LoadingState() { return <div className="center-state"><span className="loader" /><h2>正在读取公司目录</h2></div>; }
-function FlowStep(props: { index: string; title: string; detail: string }) { return <div><span>{props.index}</span><p><strong>{props.title}</strong><small>{props.detail}</small></p></div>; }
-function MiniStep(props: { number: string; text: string; done: boolean }) { return <div className={props.done ? "done" : ""}><span>{props.done ? <Icon name="check" /> : props.number}</span><strong>{props.text}</strong></div>; }
 function Metric(props: { label: string; value: string; detail: string }) { return <div className="metric"><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></div>; }
-function Field(props: { label: string; children: ReactNode }) { return <label className="field"><span>{props.label}</span>{props.children}</label>; }
-function NavItem(props: { icon: string; label: string; badge?: number; active: boolean; onClick: () => void }) { return <button className={props.active ? "active" : ""} onClick={props.onClick}><Icon name={props.icon} />{props.label}{props.badge ? <span className="nav-badge">{props.badge > 99 ? "99+" : props.badge}</span> : null}</button>; }
-function StatusBadge({ value }: { value: string }) { const label = { active: "可连接", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
+function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
 function Toast(props: { children: ReactNode; tone?: "error"; onClose: () => void }) { return <div className={`toast ${props.tone ?? ""}`}><span>{props.children}</span><button onClick={props.onClose}><Icon name="close" /></button></div>; }
-
-function Icon({ name }: { name: string }) {
-  const paths: Record<string, ReactNode> = {
-    network: <><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="m7.7 7 3.2 8M16.3 7l-3.2 8M8 6h8"/></>,
-    plus: <path d="M12 5v14M5 12h14"/>, key: <><circle cx="8" cy="12" r="3"/><path d="M11 12h9M17 12v3M20 12v2"/></>,
-    git: <><circle cx="6" cy="4" r="2"/><circle cx="18" cy="7" r="2"/><circle cx="6" cy="20" r="2"/><path d="M6 6v12M8 7c5 0 3 0 8 0M13 7v4c0 4-2 5-5 5"/></>,
-    tasks: <><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 8 1.5 1.5L12 7M14 9h3M8 14l1.5 1.5L12 13M14 15h3"/></>,
-    search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
-    terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></>,
-    book: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/></>,
-    folder: <><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/><path d="M3 9h18"/></>,
-    org: <><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/></>,
-    message: <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>, group: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></>,
-    logout: <><path d="M10 17l5-5-5-5M15 12H3"/><path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/></>, refresh: <><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></>,
-    pause: <><path d="M9 5v14M15 5v14"/></>, play: <path d="m8 5 11 7-11 7z"/>, trash: <><path d="M3 6h18M8 6V4h8v2M19 6l-1 15H6L5 6M10 11v6M14 11v6"/></>,
-    "chevron-down": <path d="m6 9 6 6 6-6"/>, "chevron-up": <path d="m18 15-6-6-6 6"/>, "chevron-right": <path d="m9 18 6-6-6-6"/>, "arrow-left": <path d="m19 12H5m6 6-6-6 6-6"/>, check: <path d="m5 12 4 4L19 6"/>, shield: <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
-    close: <path d="M18 6 6 18M6 6l12 12"/>, alert: <><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></>,
-    eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></>, copy: <><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
-  };
-  return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[name] ?? paths.network}</svg>;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function renderMessageContent(content: string, agents: CompanyAgent[]): ReactNode {
-  const mentionTokens = Array.from(new Set([
-    "所有人",
-    ...agents.flatMap((agent) => [
-      agent.agent_profile.display_name,
-      agent.agent_profile.handle.replace(/^@/, ""),
-    ]),
-  ])).filter(Boolean).sort((left, right) => right.length - left.length);
-  if (!mentionTokens.length) return content;
-  const mentionPattern = new RegExp(`(@(?:${mentionTokens.map(escapeRegExp).join("|")}))`, "gu");
-  return content.split(mentionPattern).map((part, index) => part.startsWith("@")
-    ? <mark className="message-mention" key={`${part}-${index}`}>{part}</mark>
-    : part);
-}
-
-async function api<T = unknown>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
-  if (token) headers.set("authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_BASE_URL.replace(/\/$/, "")}${path}`, { ...init, headers });
-  const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.message ?? `请求失败 (${response.status})`);
-  return body as T;
-}
 
 function readSession(): Session | null {
   try { const value = localStorage.getItem(SESSION_KEY); return value ? JSON.parse(value) as Session : null; } catch { return null; }
@@ -3652,9 +5136,21 @@ function formatInterval(seconds: number) {
   return `${seconds} 秒`;
 }
 
-function codexReasoningEffortLabel(value: CodexReasoningEffort | null) {
+function formatRunSeconds(seconds: number, language: UiLanguage) {
+  return language === "en" ? `${seconds} seconds` : `${seconds} 秒`;
+}
+
+function formatAgentCount(count: number, language: UiLanguage) {
+  return language === "en" ? `${count} ${count === 1 ? "Agent" : "Agents"}` : `${count} Agent`;
+}
+
+function codexReasoningEffortLabel(value: CodexReasoningEffort | null, language: UiLanguage = "zh-CN") {
+  if (language === "en") {
+    if (!value) return "Model Default";
+    return ({ none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Maximum", ultra: "Ultra" } as Record<CodexReasoningEffort, string>)[value];
+  }
   if (!value) return "跟随模型默认";
-  return ({ minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最大", ultra: "极致" } as Record<CodexReasoningEffort, string>)[value];
+  return ({ none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最大", ultra: "极致" } as Record<CodexReasoningEffort, string>)[value];
 }
 function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProfession[]) {
   if (agent.profession?.key) return agent.profession.key;
@@ -3682,7 +5178,14 @@ function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProf
   if (title.includes("工程") || title.includes("开发") || title.includes("程序") || title.includes("engineer") || title.includes("developer")) return "software_engineer";
   return "general_member";
 }
-function projectStatusLabel(value: string) { return ({ planned: "计划中", active: "进行中", blocked: "已阻塞", completed: "已完成", cancelled: "已取消" } as Record<string, string>)[value] ?? value; }
+function projectStatusLabel(value: string) { return ({ planned: "计划中", active: "进行中", paused: "已暂停", blocked: "已阻塞", completed: "已完成", cancelled: "已取消" } as Record<string, string>)[value] ?? value; }
+function projectTypeLabel(value: string, types: CompanyProjectType[], language: RelaySkillLanguage = "zh-CN") {
+  const projectType = types.find((type) => type.key === value);
+  return projectType ? language === "en" ? projectType.label_en : projectType.label : value;
+}
+function memoryTypeLabel(value: AgentMemory["memory_type"]) { return ({ fact: "事实", decision: "决策", lesson: "教训", preference: "偏好", procedure: "操作规则", relationship: "协作关系", handoff: "交接" } as Record<AgentMemory["memory_type"], string>)[value]; }
+function memoryStatusLabel(value: AgentMemory["status"]) { return ({ draft: "待验证", active: "有效", archived: "已归档", superseded: "已替代" } as Record<AgentMemory["status"], string>)[value]; }
+function memoryTierLabel(value: AgentMemory["memory_tier"]) { return value === "long_term" ? "长期" : "短期"; }
 function taskStatusLabel(value: CompanyProjectTask["status"]) { return { todo: "待处理", in_progress: "进行中", blocked: "阻塞", done: "已完成", failed: "失败", cancelled: "已取消" }[value]; }
 function taskPriorityLabel(value: CompanyProjectTask["priority"]) { return { low: "低", normal: "普通", high: "高", urgent: "紧急" }[value]; }
 function formatTaskDue(value: string) { return new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
@@ -3693,21 +5196,12 @@ function toDateTimeLocalValue(value: string | null) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
   return local.toISOString().slice(0, 16);
 }
-function conversationDisplayTitle(conversation: Conversation | undefined, agentNames: Map<string, string>) {
-  if (!conversation) return "";
-  const isDirect = conversation.preview.conversation_type === "direct" || conversation.context.context_type === "company_direct";
-  if (!isDirect) return conversation.preview.title;
-  const memberNames = conversation.member_agent_ids
-    .map((agentId) => agentNames.get(agentId))
-    .filter((name): name is string => Boolean(name));
-  return memberNames.length >= 2 ? memberNames.join(" ↔ ") : conversation.preview.title;
-}
-function formatConversationContext(value?: string) { return { company_all: "公司全员群", company_group: "公司群", project_group: "项目群", company_direct: "公司私聊" }[value ?? ""] ?? value ?? "公司会话"; }
 function collaborationPreferenceLabel(value: AgentProfile["collaboration_preference"]) { return { available: "可协作", low_cost_only: "仅接受低成本请求", unavailable: "暂不接受请求" }[value] ?? value; }
 function codexTriggerStatusLabel(value: CodexTriggerView["config"]["status"]) { return { active: "已启用", paused: "已暂停", error: "错误" }[value]; }
 function codexOperationalStatusLabel(value: string) { return { running: "执行中", queued: "排队中", idle: "等待检查", paused: "已暂停", error: "错误" }[value] ?? value; }
-function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "整理结果", finishing: "收尾", waiting_approval: "等待审批", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消" } as Record<string, string>)[value] ?? value; }
+function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "整理结果", finishing: "收尾", waiting_approval: "等待审批", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value; }
 function codexTriggerTypeLabel(value: string) { return { scheduled: "定时", manual: "手动", run_now: "手动", message: "消息", task: "任务", asset_refresh: "资产维护" }[value] ?? value; }
+function codexPluginOperationStatusLabel(value: CodexPluginOperation["status"]) { return { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败" }[value]; }
 function codexRunDisplayMessage(run: CodexTriggerRun) {
   if (run.final_message_summary) return run.final_message_summary;
   if (run.error_message) return run.error_message;

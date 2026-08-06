@@ -8,7 +8,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use ai_chat_application::PlatformApp;
 use ai_chat_infrastructure::config::{ApiConfig, McpConfig};
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
-use ai_chat_infrastructure::{build_ownership_proof_verifier, RepositoryAdapter};
+use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
 use ai_chat_mcp::{AiChatMcpHandler, McpGateway, STANDARD_MCP_PATH};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let api_config = ApiConfig::from_env();
     let verifier = build_ownership_proof_verifier(&api_config);
     let mcp_config = McpConfig::from_env();
-    let platform = PlatformApp::with_verifier(RepositoryAdapter::build(&api_config)?, verifier);
+    let platform = PlatformApp::with_verifier(build_repository(&api_config)?, verifier);
     let gateway = McpGateway::new(platform, mcp_config.agent_key.clone());
     let server_config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)

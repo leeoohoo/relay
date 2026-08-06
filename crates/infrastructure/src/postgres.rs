@@ -13,32 +13,28 @@ use ai_chat_application::{
     CompanyConversationCreationBundle, CompanyCreationBundle, CompanyProjectCreationBundle,
     CompanyProjectMemberAddBundle, CompleteAgentCodexTriggerLeaseInput,
     HumanCompanyDirectConversationCreationBundle, MessagePageView, PlatformRepository,
-    ProblemWorkspace, ProblemWorkspaceInvitation, ProblemWorkspaceProgressRecord,
     RegistrationCompletionBundle,
 };
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,
     AgentInboxEventStatus, AgentKeyIssueLog, AgentKeyIssueType, AgentKeyRecord, AgentOwnerBinding,
     AgentProfile, AgentRegistrationRequest, AgentStatus, ChallengeStatus, HumanAccountToken,
-    HumanCredential, HumanSession, HumanUser, OwnershipProofChallenge, OwnershipProofProvider,
-    RegistrationStatus, SocialProofSubmission,
+    HumanCredential, HumanHarnessAccount, HumanSession, HumanUser, OwnershipProofChallenge,
+    OwnershipProofProvider, RegistrationStatus, SocialProofSubmission,
 };
 use ai_chat_domain::company::{
     AgentCodexRunActivity, AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig,
-    AgentCodexTriggerRun, AgentModelPriceCatalogEntry, AgentRuntimeConfig, AgentRuntimeDailyUsage,
-    AgentRuntimeRun, AgentRuntimeTemplate, AgentRuntimeTemplateSettings, AgentStaffingAction,
-    AgentToolApprovalRequest, Company, CompanyAgentMembership, CompanyCodexRunnerProfile,
-    CompanyGovernancePolicySettings, CompanyGovernancePolicyVersion, CompanyHumanMember,
-    CompanyModelBudgetPolicy, CompanyModelDailyUsage, CompanyProject, CompanyProjectAsset,
+    AgentCodexTriggerRun, AgentMemory, AgentMemorySourceRef, AgentStaffingAction,
+    AgentToolApprovalRequest, CodexPluginCatalogSnapshot, CodexPluginOperation, Company,
+    CompanyAgentMembership, CompanyCodexRunnerProfile, CompanyGovernancePolicySettings,
+    CompanyGovernancePolicyVersion, CompanyHumanMember, CompanyProject, CompanyProjectAsset,
     CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig, CompanyProjectMember,
     CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
-    CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRealtimeEvent,
-    CompanyRuntimePolicy, OrgUnit, COMPANY_AGENT_ROLE_MANAGER,
+    CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRealtimeEvent, OrgUnit,
+    COMPANY_AGENT_ROLE_MANAGER,
 };
 use ai_chat_domain::social::{
-    ConversationContext, ConversationPreview, ConversationType, DiaryEntryView, FriendProfileFact,
-    FriendProfileFactSourceKind, FriendProfileFactType, FriendProfileSnapshot, FriendRequestView,
-    FriendSummary, MessageView, PostCommentView, PostView,
+    ConversationContext, ConversationPreview, ConversationType, MessageView,
 };
 use ai_chat_shared::{hash_secret, AppError, AppResult};
 
@@ -60,13 +56,13 @@ impl PostgresPlatformRepository {
             Pool::builder()
                 .max_size(max_size)
                 .build(manager)
-                .map_err(|error| AppError::Validation(format!("postgres pool error: {error}")))
+                .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))
         })
         .map_err(anyhow::Error::msg)?;
         run_sync_postgres(|| {
             let mut client = pool
                 .get()
-                .map_err(|error| AppError::Validation(format!("postgres pool error: {error}")))?;
+                .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))?;
             client
                 .simple_query("SELECT 1")
                 .map_err(map_postgres_error)?;
@@ -84,8 +80,24 @@ impl PostgresPlatformRepository {
             let mut client = self
                 .pool
                 .get()
-                .map_err(|error| AppError::Validation(format!("postgres pool error: {error}")))?;
+                .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))?;
             f(&mut client).map_err(map_postgres_error)
+        })
+    }
+
+    fn with_transaction<T>(
+        &self,
+        f: impl FnOnce(&mut postgres::Transaction<'_>) -> AppResult<T>,
+    ) -> AppResult<T> {
+        run_sync_postgres(|| {
+            let mut client = self
+                .pool
+                .get()
+                .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))?;
+            let mut transaction = client.transaction().map_err(map_postgres_error)?;
+            let output = f(&mut transaction)?;
+            transaction.commit().map_err(map_postgres_error)?;
+            Ok(output)
         })
     }
 }
@@ -105,6 +117,10 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn find_human_user_by_email(&self, email: &str) -> Option<HumanUser> {
+        self.find_human_user_by_email_result(email).ok().flatten()
+    }
+
+    fn find_human_user_by_email_result(&self, email: &str) -> AppResult<Option<HumanUser>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -115,12 +131,14 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&email],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_human_user)
+        .map(|row| row.map(map_human_user))
     }
 
     fn get_human_user(&self, user_id: Uuid) -> Option<HumanUser> {
+        self.get_human_user_result(user_id).ok().flatten()
+    }
+
+    fn get_human_user_result(&self, user_id: Uuid) -> AppResult<Option<HumanUser>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -131,9 +149,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&user_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_human_user)
+        .map(|row| row.map(map_human_user))
     }
 
     fn list_human_users(&self) -> Vec<HumanUser> {
@@ -167,6 +183,10 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn human_user_exists(&self, user_id: Uuid) -> bool {
+        self.human_user_exists_result(user_id).unwrap_or(false)
+    }
+
+    fn human_user_exists_result(&self, user_id: Uuid) -> AppResult<bool> {
         self.with_client(|client| {
             client
                 .query_one(
@@ -175,10 +195,13 @@ impl PlatformRepository for PostgresPlatformRepository {
                 )
                 .map(|row| row.get::<_, i64>(0) > 0)
         })
-        .unwrap_or(false)
     }
 
     fn get_human_credential(&self, user_id: Uuid) -> Option<HumanCredential> {
+        self.get_human_credential_result(user_id).ok().flatten()
+    }
+
+    fn get_human_credential_result(&self, user_id: Uuid) -> AppResult<Option<HumanCredential>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -189,9 +212,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&user_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_human_credential)
+        .map(|row| row.map(map_human_credential))
     }
 
     fn insert_human_auth_bundle(
@@ -227,6 +248,75 @@ impl PlatformRepository for PostgresPlatformRepository {
         })
     }
 
+    fn get_human_harness_account(&self, human_user_id: Uuid) -> Option<HumanHarnessAccount> {
+        self.get_human_harness_account_result(human_user_id)
+            .ok()
+            .flatten()
+    }
+
+    fn get_human_harness_account_result(
+        &self,
+        human_user_id: Uuid,
+    ) -> AppResult<Option<HumanHarnessAccount>> {
+        self.with_client(|client| {
+            client.query_opt(
+                r#"
+                SELECT human_user_id, provider_mode, harness_base_url, harness_uid,
+                       harness_email, space_identifier, status, attempt_count,
+                       last_error, last_attempt_at, provisioned_at, created_at, updated_at
+                FROM human_harness_accounts
+                WHERE human_user_id = $1
+                "#,
+                &[&human_user_id],
+            )
+        })
+        .map(|row| row.map(map_human_harness_account))
+    }
+
+    fn upsert_human_harness_account(&self, account: HumanHarnessAccount) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                INSERT INTO human_harness_accounts (
+                    human_user_id, provider_mode, harness_base_url, harness_uid,
+                    harness_email, space_identifier, status, attempt_count,
+                    last_error, last_attempt_at, provisioned_at, created_at, updated_at
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                )
+                ON CONFLICT (human_user_id) DO UPDATE SET
+                    provider_mode = EXCLUDED.provider_mode,
+                    harness_base_url = EXCLUDED.harness_base_url,
+                    harness_uid = EXCLUDED.harness_uid,
+                    harness_email = EXCLUDED.harness_email,
+                    space_identifier = EXCLUDED.space_identifier,
+                    status = EXCLUDED.status,
+                    attempt_count = EXCLUDED.attempt_count,
+                    last_error = EXCLUDED.last_error,
+                    last_attempt_at = EXCLUDED.last_attempt_at,
+                    provisioned_at = EXCLUDED.provisioned_at,
+                    updated_at = EXCLUDED.updated_at
+                "#,
+                &[
+                    &account.human_user_id,
+                    &account.provider_mode,
+                    &account.harness_base_url,
+                    &account.harness_uid,
+                    &account.harness_email,
+                    &account.space_identifier,
+                    &account.status,
+                    &account.attempt_count,
+                    &account.last_error,
+                    &account.last_attempt_at,
+                    &account.provisioned_at,
+                    &account.created_at,
+                    &account.updated_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
     fn insert_human_session(&self, session: HumanSession) -> AppResult<()> {
         self.with_client(|client| {
             client.execute(
@@ -253,6 +343,15 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn find_human_session_by_token_hash(&self, token_hash: &str) -> Option<HumanSession> {
+        self.find_human_session_by_token_hash_result(token_hash)
+            .ok()
+            .flatten()
+    }
+
+    fn find_human_session_by_token_hash_result(
+        &self,
+        token_hash: &str,
+    ) -> AppResult<Option<HumanSession>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -264,9 +363,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&token_hash],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_human_session)
+        .map(|row| row.map(map_human_session))
     }
 
     fn touch_human_session(
@@ -302,6 +399,10 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn get_human_session(&self, session_id: Uuid) -> Option<HumanSession> {
+        self.get_human_session_result(session_id).ok().flatten()
+    }
+
+    fn get_human_session_result(&self, session_id: Uuid) -> AppResult<Option<HumanSession>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -313,12 +414,15 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&session_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_human_session)
+        .map(|row| row.map(map_human_session))
     }
 
     fn list_human_sessions(&self, human_user_id: Uuid) -> Vec<HumanSession> {
+        self.list_human_sessions_result(human_user_id)
+            .unwrap_or_default()
+    }
+
+    fn list_human_sessions_result(&self, human_user_id: Uuid) -> AppResult<Vec<HumanSession>> {
         self.with_client(|client| {
             client.query(
                 r#"
@@ -332,10 +436,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&human_user_id],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_human_session)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_human_session).collect())
     }
 
     fn revoke_human_sessions(
@@ -423,6 +524,15 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn find_human_account_token_by_hash(&self, token_hash: &str) -> Option<HumanAccountToken> {
+        self.find_human_account_token_by_hash_result(token_hash)
+            .ok()
+            .flatten()
+    }
+
+    fn find_human_account_token_by_hash_result(
+        &self,
+        token_hash: &str,
+    ) -> AppResult<Option<HumanAccountToken>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -434,9 +544,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&token_hash],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_human_account_token)
+        .map(|row| row.map(map_human_account_token))
     }
 
     fn mark_human_account_token_used(
@@ -481,7 +589,99 @@ impl PlatformRepository for PostgresPlatformRepository {
         })
     }
 
+    fn verify_human_email_atomic(
+        &self,
+        token_id: Uuid,
+        human_user_id: Uuid,
+        verified_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        self.with_transaction(|transaction| {
+            let consumed = transaction
+                .execute(
+                    r#"
+                    UPDATE human_account_tokens
+                    SET used_at = $3
+                    WHERE id = $1 AND human_user_id = $2 AND used_at IS NULL
+                    "#,
+                    &[&token_id, &human_user_id, &verified_at],
+                )
+                .map_err(map_postgres_error)?;
+            if consumed == 0 {
+                return Err(AppError::Conflict(
+                    "human account token was already used or not found".into(),
+                ));
+            }
+            transaction
+                .execute(
+                    r#"
+                    INSERT INTO human_email_verifications (human_user_id, verified_at)
+                    VALUES ($1, $2)
+                    ON CONFLICT (human_user_id)
+                    DO UPDATE SET verified_at = EXCLUDED.verified_at
+                    "#,
+                    &[&human_user_id, &verified_at],
+                )
+                .map_err(map_postgres_error)?;
+            Ok(())
+        })
+    }
+
+    fn reset_human_password_atomic(
+        &self,
+        token_id: Uuid,
+        human_user_id: Uuid,
+        password_hash: String,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        self.with_transaction(|transaction| {
+            let consumed = transaction
+                .execute(
+                    r#"
+                    UPDATE human_account_tokens
+                    SET used_at = $3
+                    WHERE id = $1 AND human_user_id = $2 AND used_at IS NULL
+                    "#,
+                    &[&token_id, &human_user_id, &updated_at],
+                )
+                .map_err(map_postgres_error)?;
+            if consumed == 0 {
+                return Err(AppError::Conflict(
+                    "human account token was already used or not found".into(),
+                ));
+            }
+            let updated = transaction
+                .execute(
+                    r#"
+                    UPDATE human_credentials
+                    SET password_hash = $2, updated_at = $3
+                    WHERE human_user_id = $1
+                    "#,
+                    &[&human_user_id, &password_hash, &updated_at],
+                )
+                .map_err(map_postgres_error)?;
+            if updated == 0 {
+                return Err(AppError::NotFound("human credential not found".into()));
+            }
+            transaction
+                .execute(
+                    r#"
+                    UPDATE human_sessions
+                    SET revoked_at = $2
+                    WHERE human_user_id = $1 AND revoked_at IS NULL
+                    "#,
+                    &[&human_user_id, &updated_at],
+                )
+                .map_err(map_postgres_error)?;
+            Ok(())
+        })
+    }
+
     fn is_human_email_verified(&self, human_user_id: Uuid) -> bool {
+        self.is_human_email_verified_result(human_user_id)
+            .unwrap_or(false)
+    }
+
+    fn is_human_email_verified_result(&self, human_user_id: Uuid) -> AppResult<bool> {
         self.with_client(|client| {
             client
                 .query_one(
@@ -490,7 +690,6 @@ impl PlatformRepository for PostgresPlatformRepository {
                 )
                 .map(|row| row.get::<_, i64>(0) > 0)
         })
-        .unwrap_or(false)
     }
 
     fn delete_expired_human_account_tokens(
@@ -592,6 +791,10 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn get_company(&self, company_id: Uuid) -> Option<Company> {
+        self.get_company_result(company_id).ok().flatten()
+    }
+
+    fn get_company_result(&self, company_id: Uuid) -> AppResult<Option<Company>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -602,9 +805,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&company_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_company)
+        .map(|row| row.map(map_company))
     }
 
     fn get_company_by_slug(&self, slug: &str) -> Option<Company> {
@@ -649,6 +850,16 @@ impl PlatformRepository for PostgresPlatformRepository {
         company_id: Uuid,
         human_user_id: Uuid,
     ) -> Option<CompanyHumanMember> {
+        self.get_company_human_member_result(company_id, human_user_id)
+            .ok()
+            .flatten()
+    }
+
+    fn get_company_human_member_result(
+        &self,
+        company_id: Uuid,
+        human_user_id: Uuid,
+    ) -> AppResult<Option<CompanyHumanMember>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -659,9 +870,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&company_id, &human_user_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_company_human_member)
+        .map(|row| row.map(map_company_human_member))
     }
 
     fn get_org_unit(&self, org_unit_id: Uuid) -> Option<OrgUnit> {
@@ -974,9 +1183,6 @@ impl PlatformRepository for PostgresPlatformRepository {
                     &bundle.membership.company_id,
                 ],
             )?;
-            if let Some(runtime_config) = &bundle.runtime_config {
-                upsert_agent_runtime_config(&mut tx, runtime_config)?;
-            }
             tx.commit()?;
             Ok(())
         })
@@ -1210,9 +1416,6 @@ impl PlatformRepository for PostgresPlatformRepository {
                 ],
             )?;
             insert_agent_staffing_action(&mut tx, &bundle.action)?;
-            if let Some(runtime_config) = &bundle.runtime_config {
-                upsert_agent_runtime_config(&mut tx, runtime_config)?;
-            }
             tx.commit()?;
             Ok(())
         })
@@ -2523,6 +2726,15 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn get_conversation_context(&self, conversation_id: Uuid) -> Option<ConversationContext> {
+        self.get_conversation_context_result(conversation_id)
+            .ok()
+            .flatten()
+    }
+
+    fn get_conversation_context_result(
+        &self,
+        conversation_id: Uuid,
+    ) -> AppResult<Option<ConversationContext>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
@@ -2533,14 +2745,14 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&conversation_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(|row| ConversationContext {
-            conversation_id: row.get("id"),
-            company_id: row.get("company_id"),
-            project_id: row.get("project_id"),
-            context_type: row.get("context_type"),
-            visibility: row.get("visibility"),
+        .map(|row| {
+            row.map(|row| ConversationContext {
+                conversation_id: row.get("id"),
+                company_id: row.get("company_id"),
+                project_id: row.get("project_id"),
+                context_type: row.get("context_type"),
+                visibility: row.get("visibility"),
+            })
         })
     }
 
@@ -2572,6 +2784,12 @@ impl PlatformRepository for PostgresPlatformRepository {
                 "company project members required".into(),
             ));
         }
+        let project_type_evidence = serde_json::to_value(&bundle.project.project_type_evidence)
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "failed to serialize project type evidence: {error}"
+                ))
+            })?;
         self.with_client(|client| {
             let mut tx = client.transaction()?;
             let preview = &bundle.conversation_members[0].preview;
@@ -2619,17 +2837,22 @@ impl PlatformRepository for PostgresPlatformRepository {
             tx.execute(
                 r#"
                 INSERT INTO company_projects (
-                    id, company_id, name, description, status, owner_agent_id,
+                    id, company_id, name, description, project_type, project_type_source,
+                    project_type_confidence, project_type_evidence, status, owner_agent_id,
                     project_group_conversation_id, created_by_agent_id,
                     updated_by_agent_id, due_at, created_at, updated_at, completed_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
                 "#,
                 &[
                     &bundle.project.id,
                     &bundle.project.company_id,
                     &bundle.project.name,
                     &bundle.project.description,
+                    &bundle.project.project_type,
+                    &bundle.project.project_type_source,
+                    &bundle.project.project_type_confidence,
+                    &project_type_evidence,
                     &bundle.project.status,
                     &bundle.project.owner_agent_id,
                     &bundle.project.project_group_conversation_id,
@@ -2671,10 +2894,16 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn get_company_project(&self, project_id: Uuid) -> Option<CompanyProject> {
+        self.get_company_project_result(project_id).ok().flatten()
+    }
+
+    fn get_company_project_result(&self, project_id: Uuid) -> AppResult<Option<CompanyProject>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
                 SELECT id, company_id, name, description, status, owner_agent_id,
+                       project_type, project_type_source, project_type_confidence,
+                       project_type_evidence,
                        project_group_conversation_id, created_by_agent_id,
                        updated_by_agent_id, due_at, created_at, updated_at, completed_at
                 FROM company_projects
@@ -2683,16 +2912,21 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&project_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_company_project)
+        .map(|row| row.map(map_company_project))
     }
 
     fn list_company_projects(&self, company_id: Uuid) -> Vec<CompanyProject> {
+        self.list_company_projects_result(company_id)
+            .unwrap_or_default()
+    }
+
+    fn list_company_projects_result(&self, company_id: Uuid) -> AppResult<Vec<CompanyProject>> {
         self.with_client(|client| {
             client.query(
                 r#"
                 SELECT id, company_id, name, description, status, owner_agent_id,
+                       project_type, project_type_source, project_type_confidence,
+                       project_type_evidence,
                        project_group_conversation_id, created_by_agent_id,
                        updated_by_agent_id, due_at, created_at, updated_at, completed_at
                 FROM company_projects
@@ -2702,10 +2936,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&company_id],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_company_project)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_company_project).collect())
     }
 
     fn save_company_project_git_config(&self, config: CompanyProjectGitConfig) -> AppResult<()> {
@@ -2841,6 +3072,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&project_id],
             )?;
             for asset in assets {
+                let metadata = Json(&asset.metadata);
                 tx.execute(
                     r#"
                     INSERT INTO company_project_assets (
@@ -2858,7 +3090,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                         &asset.locator,
                         &asset.description,
                         &asset.status,
-                        &asset.metadata,
+                        &metadata,
                         &asset.updated_by_agent_id,
                         &asset.updated_by_human_user_id,
                         &asset.created_at,
@@ -2866,6 +3098,16 @@ impl PlatformRepository for PostgresPlatformRepository {
                     ],
                 )?;
             }
+            tx.execute(
+                r#"
+                UPDATE company_project_asset_refresh_configs
+                SET last_completed_at = CURRENT_TIMESTAMP,
+                    next_refresh_at = CURRENT_TIMESTAMP + make_interval(mins => interval_minutes),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE project_id = $1
+                "#,
+                &[&project_id],
+            )?;
             tx.commit()?;
             Ok(())
         })
@@ -2889,6 +3131,165 @@ impl PlatformRepository for PostgresPlatformRepository {
         .into_iter()
         .map(map_company_project_asset)
         .collect()
+    }
+
+    fn insert_agent_memory(&self, memory: AgentMemory) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                INSERT INTO agent_memories (
+                    id, company_id, owner_agent_id, scope, project_id, memory_tier, memory_type,
+                    topic_key, title, summary, when_to_use, tags, importance, confidence,
+                    pinned, status, source_refs, supersedes_memory_id, expires_at,
+                    verified_by_agent_id, verified_by_human_user_id, verified_at,
+                    created_by_agent_id, created_by_human_user_id, updated_by_agent_id,
+                    updated_by_human_user_id, created_at, updated_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+                    $25, $26, $27, $28
+                )
+                "#,
+                &[
+                    &memory.id,
+                    &memory.company_id,
+                    &memory.owner_agent_id,
+                    &memory.scope,
+                    &memory.project_id,
+                    &memory.memory_tier,
+                    &memory.memory_type,
+                    &memory.topic_key,
+                    &memory.title,
+                    &memory.summary,
+                    &memory.when_to_use,
+                    &Json(memory.tags),
+                    &memory.importance,
+                    &memory.confidence,
+                    &memory.pinned,
+                    &memory.status,
+                    &Json(memory.source_refs),
+                    &memory.supersedes_memory_id,
+                    &memory.expires_at,
+                    &memory.verified_by_agent_id,
+                    &memory.verified_by_human_user_id,
+                    &memory.verified_at,
+                    &memory.created_by_agent_id,
+                    &memory.created_by_human_user_id,
+                    &memory.updated_by_agent_id,
+                    &memory.updated_by_human_user_id,
+                    &memory.created_at,
+                    &memory.updated_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn update_agent_memory(&self, memory: AgentMemory) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                UPDATE agent_memories
+                SET memory_tier = $2,
+                    title = $3,
+                    summary = $4,
+                    when_to_use = $5,
+                    tags = $6,
+                    importance = $7,
+                    confidence = $8,
+                    pinned = $9,
+                    status = $10,
+                    source_refs = $11,
+                    supersedes_memory_id = $12,
+                    expires_at = $13,
+                    verified_by_agent_id = $14,
+                    verified_by_human_user_id = $15,
+                    verified_at = $16,
+                    updated_by_agent_id = $17,
+                    updated_by_human_user_id = $18,
+                    updated_at = $19
+                WHERE id = $1
+                "#,
+                &[
+                    &memory.id,
+                    &memory.memory_tier,
+                    &memory.title,
+                    &memory.summary,
+                    &memory.when_to_use,
+                    &Json(memory.tags),
+                    &memory.importance,
+                    &memory.confidence,
+                    &memory.pinned,
+                    &memory.status,
+                    &Json(memory.source_refs),
+                    &memory.supersedes_memory_id,
+                    &memory.expires_at,
+                    &memory.verified_by_agent_id,
+                    &memory.verified_by_human_user_id,
+                    &memory.verified_at,
+                    &memory.updated_by_agent_id,
+                    &memory.updated_by_human_user_id,
+                    &memory.updated_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn get_agent_memory(&self, memory_id: Uuid) -> Option<AgentMemory> {
+        self.get_agent_memory_result(memory_id).ok().flatten()
+    }
+
+    fn get_agent_memory_result(&self, memory_id: Uuid) -> AppResult<Option<AgentMemory>> {
+        self.with_client(|client| {
+            client.query_opt(
+                r#"
+                SELECT id, company_id, owner_agent_id, scope, project_id, memory_tier, memory_type,
+                       topic_key, title, summary, when_to_use, tags, importance, confidence,
+                       pinned, status, source_refs, supersedes_memory_id, expires_at,
+                       verified_by_agent_id, verified_by_human_user_id, verified_at,
+                       created_by_agent_id, created_by_human_user_id, updated_by_agent_id,
+                       updated_by_human_user_id, created_at, updated_at
+                FROM agent_memories
+                WHERE id = $1
+                "#,
+                &[&memory_id],
+            )
+        })
+        .map(|row| row.map(map_agent_memory))
+    }
+
+    fn list_company_agent_memories(&self, company_id: Uuid) -> Vec<AgentMemory> {
+        self.list_company_agent_memories_result(company_id)
+            .unwrap_or_default()
+    }
+
+    fn list_company_agent_memories_result(&self, company_id: Uuid) -> AppResult<Vec<AgentMemory>> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, company_id, owner_agent_id, scope, project_id, memory_tier, memory_type,
+                       topic_key, title, summary, when_to_use, tags, importance, confidence,
+                       pinned, status, source_refs, supersedes_memory_id, expires_at,
+                       verified_by_agent_id, verified_by_human_user_id, verified_at,
+                       created_by_agent_id, created_by_human_user_id, updated_by_agent_id,
+                       updated_by_human_user_id, created_at, updated_at
+                FROM agent_memories
+                WHERE company_id = $1
+                ORDER BY pinned DESC, importance DESC, updated_at DESC
+                "#,
+                &[&company_id],
+            )
+        })
+        .map(|rows| rows.into_iter().map(map_agent_memory).collect())
+    }
+
+    fn delete_agent_memory(&self, memory_id: Uuid) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute("DELETE FROM agent_memories WHERE id = $1", &[&memory_id])?;
+            Ok(())
+        })
     }
 
     fn save_company_project_asset_refresh_config(
@@ -2964,12 +3365,14 @@ impl PlatformRepository for PostgresPlatformRepository {
             client.query_opt(
                 r#"
                 WITH due AS (
-                    SELECT project_id
-                    FROM company_project_asset_refresh_configs
-                    WHERE enabled = TRUE
-                      AND maintainer_agent_id = $1
-                      AND next_refresh_at <= $2
-                    ORDER BY next_refresh_at, project_id
+                    SELECT config.project_id
+                    FROM company_project_asset_refresh_configs config
+                    INNER JOIN company_projects project ON project.id = config.project_id
+                    WHERE config.enabled = TRUE
+                      AND config.maintainer_agent_id = $1
+                      AND config.next_refresh_at <= $2
+                      AND project.status <> 'paused'
+                    ORDER BY config.next_refresh_at, config.project_id
                     FOR UPDATE SKIP LOCKED
                     LIMIT 1
                 )
@@ -3000,9 +3403,9 @@ impl PlatformRepository for PostgresPlatformRepository {
             client.execute(
                 r#"
                 UPDATE company_project_asset_refresh_configs
-                SET last_completed_at = $2,
-                    next_refresh_at = $2 + make_interval(mins => interval_minutes),
-                    updated_at = $2
+                SET last_completed_at = $2::timestamptz,
+                    next_refresh_at = $2::timestamptz + make_interval(mins => interval_minutes),
+                    updated_at = $2::timestamptz
                 WHERE project_id = $1
                 "#,
                 &[&project_id, &completed_at],
@@ -3020,19 +3423,35 @@ impl PlatformRepository for PostgresPlatformRepository {
                 r#"
                 INSERT INTO company_codex_runner_profiles (
                     id, company_id, name, interval_seconds, codex_profile,
-                    model, reasoning_effort, sandbox_mode, approval_policy, max_run_seconds, is_default,
+                    model, reasoning_effort, reasoning_summary, verbosity, personality,
+                    service_tier, sandbox_mode, approval_policy, network_access, web_search,
+                    feature_multi_agent, feature_remote_plugin, feature_hooks, feature_goals,
+                    feature_shell_tool, max_run_seconds, is_default,
                     created_by_human_user_id, updated_by_human_user_id,
                     created_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                        $21, $22, $23, $24, $25, $26)
                 ON CONFLICT (id) DO UPDATE
                 SET name = EXCLUDED.name,
                     interval_seconds = EXCLUDED.interval_seconds,
                     codex_profile = EXCLUDED.codex_profile,
                     model = EXCLUDED.model,
                     reasoning_effort = EXCLUDED.reasoning_effort,
+                    reasoning_summary = EXCLUDED.reasoning_summary,
+                    verbosity = EXCLUDED.verbosity,
+                    personality = EXCLUDED.personality,
+                    service_tier = EXCLUDED.service_tier,
                     sandbox_mode = EXCLUDED.sandbox_mode,
                     approval_policy = EXCLUDED.approval_policy,
+                    network_access = EXCLUDED.network_access,
+                    web_search = EXCLUDED.web_search,
+                    feature_multi_agent = EXCLUDED.feature_multi_agent,
+                    feature_remote_plugin = EXCLUDED.feature_remote_plugin,
+                    feature_hooks = EXCLUDED.feature_hooks,
+                    feature_goals = EXCLUDED.feature_goals,
+                    feature_shell_tool = EXCLUDED.feature_shell_tool,
                     max_run_seconds = EXCLUDED.max_run_seconds,
                     is_default = EXCLUDED.is_default,
                     updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
@@ -3046,8 +3465,19 @@ impl PlatformRepository for PostgresPlatformRepository {
                     &profile.codex_profile,
                     &profile.model,
                     &profile.reasoning_effort,
+                    &profile.reasoning_summary,
+                    &profile.verbosity,
+                    &profile.personality,
+                    &profile.service_tier,
                     &profile.sandbox_mode,
                     &profile.approval_policy,
+                    &profile.network_access,
+                    &profile.web_search,
+                    &profile.feature_multi_agent,
+                    &profile.feature_remote_plugin,
+                    &profile.feature_hooks,
+                    &profile.feature_goals,
+                    &profile.feature_shell_tool,
                     &profile.max_run_seconds,
                     &profile.is_default,
                     &profile.created_by_human_user_id,
@@ -3068,7 +3498,10 @@ impl PlatformRepository for PostgresPlatformRepository {
             client.query_opt(
                 r#"
                 SELECT id, company_id, name, interval_seconds, codex_profile,
-                       model, reasoning_effort, sandbox_mode, approval_policy, max_run_seconds, is_default,
+                       model, reasoning_effort, reasoning_summary, verbosity, personality,
+                       service_tier, sandbox_mode, approval_policy, network_access, web_search,
+                       feature_multi_agent, feature_remote_plugin, feature_hooks, feature_goals,
+                       feature_shell_tool, max_run_seconds, is_default,
                        created_by_human_user_id, updated_by_human_user_id,
                        created_at, updated_at
                 FROM company_codex_runner_profiles
@@ -3090,7 +3523,10 @@ impl PlatformRepository for PostgresPlatformRepository {
             client.query(
                 r#"
                 SELECT id, company_id, name, interval_seconds, codex_profile,
-                       model, reasoning_effort, sandbox_mode, approval_policy, max_run_seconds, is_default,
+                       model, reasoning_effort, reasoning_summary, verbosity, personality,
+                       service_tier, sandbox_mode, approval_policy, network_access, web_search,
+                       feature_multi_agent, feature_remote_plugin, feature_hooks, feature_goals,
+                       feature_shell_tool, max_run_seconds, is_default,
                        created_by_human_user_id, updated_by_human_user_id,
                        created_at, updated_at
                 FROM company_codex_runner_profiles
@@ -3194,13 +3630,225 @@ impl PlatformRepository for PostgresPlatformRepository {
         .collect()
     }
 
+    fn save_codex_plugin_catalog_snapshot(
+        &self,
+        snapshot: CodexPluginCatalogSnapshot,
+    ) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                INSERT INTO codex_plugin_catalog_snapshots (
+                    runner_id, hostname, codex_version, fingerprint,
+                    installed, available, marketplaces, discovered_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (runner_id) DO UPDATE
+                SET hostname = EXCLUDED.hostname,
+                    codex_version = EXCLUDED.codex_version,
+                    fingerprint = EXCLUDED.fingerprint,
+                    installed = EXCLUDED.installed,
+                    available = EXCLUDED.available,
+                    marketplaces = EXCLUDED.marketplaces,
+                    discovered_at = EXCLUDED.discovered_at,
+                    updated_at = EXCLUDED.updated_at
+                "#,
+                &[
+                    &snapshot.runner_id,
+                    &snapshot.hostname,
+                    &snapshot.codex_version,
+                    &snapshot.fingerprint,
+                    &Json(snapshot.installed),
+                    &Json(snapshot.available),
+                    &Json(snapshot.marketplaces),
+                    &snapshot.discovered_at,
+                    &snapshot.updated_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn list_codex_plugin_catalog_snapshots(&self) -> AppResult<Vec<CodexPluginCatalogSnapshot>> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT runner_id, hostname, codex_version, fingerprint,
+                       installed, available, marketplaces, discovered_at, updated_at
+                FROM codex_plugin_catalog_snapshots
+                ORDER BY discovered_at DESC, runner_id
+                "#,
+                &[],
+            )
+        })
+        .map(|rows| {
+            rows.into_iter()
+                .map(map_codex_plugin_catalog_snapshot)
+                .collect()
+        })
+    }
+
+    fn insert_codex_plugin_operation(&self, operation: CodexPluginOperation) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                INSERT INTO codex_plugin_operations (
+                    id, company_id, target_runner_id, operation, plugin_id, status,
+                    requested_by_human_user_id, lease_owner, lease_expires_at,
+                    attempt_count, error_message, result, requested_at,
+                    started_at, finished_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                        $9, $10, $11, $12, $13, $14, $15, $16)
+                "#,
+                &[
+                    &operation.id,
+                    &operation.company_id,
+                    &operation.target_runner_id,
+                    &operation.operation,
+                    &operation.plugin_id,
+                    &operation.status,
+                    &operation.requested_by_human_user_id,
+                    &operation.lease_owner,
+                    &operation.lease_expires_at,
+                    &operation.attempt_count,
+                    &operation.error_message,
+                    &Json(operation.result),
+                    &operation.requested_at,
+                    &operation.started_at,
+                    &operation.finished_at,
+                    &operation.updated_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn list_company_codex_plugin_operations(
+        &self,
+        company_id: Uuid,
+        limit: usize,
+    ) -> AppResult<Vec<CodexPluginOperation>> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, company_id, target_runner_id, operation, plugin_id, status,
+                       requested_by_human_user_id, lease_owner, lease_expires_at,
+                       attempt_count, error_message, result, requested_at,
+                       started_at, finished_at, updated_at
+                FROM codex_plugin_operations
+                WHERE company_id = $1
+                ORDER BY requested_at DESC, id
+                LIMIT $2
+                "#,
+                &[&company_id, &(limit as i64)],
+            )
+        })
+        .map(|rows| rows.into_iter().map(map_codex_plugin_operation).collect())
+    }
+
+    fn claim_codex_plugin_operations(
+        &self,
+        target_runner_id: &str,
+        lease_owner: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<CodexPluginOperation>> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                WITH due AS (
+                    SELECT id
+                    FROM codex_plugin_operations
+                    WHERE target_runner_id = $1
+                      AND (
+                        status = 'queued'
+                        OR (status = 'running' AND lease_expires_at <= $3)
+                      )
+                    ORDER BY requested_at, id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $4
+                )
+                UPDATE codex_plugin_operations operation
+                SET status = 'running',
+                    lease_owner = $2,
+                    lease_expires_at = $3 + INTERVAL '2 minutes',
+                    attempt_count = operation.attempt_count + 1,
+                    started_at = COALESCE(operation.started_at, $3),
+                    updated_at = $3
+                FROM due
+                WHERE operation.id = due.id
+                RETURNING operation.id, operation.company_id, operation.target_runner_id,
+                          operation.operation, operation.plugin_id, operation.status,
+                          operation.requested_by_human_user_id, operation.lease_owner,
+                          operation.lease_expires_at, operation.attempt_count,
+                          operation.error_message, operation.result, operation.requested_at,
+                          operation.started_at, operation.finished_at, operation.updated_at
+                "#,
+                &[&target_runner_id, &lease_owner, &now, &(limit as i64)],
+            )
+        })
+        .map(|rows| rows.into_iter().map(map_codex_plugin_operation).collect())
+    }
+
+    fn finish_codex_plugin_operation(
+        &self,
+        operation_id: Uuid,
+        lease_owner: &str,
+        succeeded: bool,
+        result: Value,
+        error_message: Option<String>,
+        finished_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let updated = self.with_client(|client| {
+            client.execute(
+                r#"
+                UPDATE codex_plugin_operations
+                SET status = CASE
+                        WHEN $3 THEN 'succeeded'
+                        WHEN attempt_count < 3 THEN 'queued'
+                        ELSE 'failed'
+                    END,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    error_message = $5,
+                    result = $4,
+                    finished_at = CASE
+                        WHEN $3 OR attempt_count >= 3 THEN $6::TIMESTAMPTZ
+                        ELSE NULL
+                    END,
+                    updated_at = $6::TIMESTAMPTZ
+                WHERE id = $1
+                  AND status = 'running'
+                  AND lease_owner = $2
+                "#,
+                &[
+                    &operation_id,
+                    &lease_owner,
+                    &succeeded,
+                    &Json(result),
+                    &error_message,
+                    &finished_at,
+                ],
+            )
+        })?;
+        if updated == 0 {
+            return Err(AppError::Conflict(
+                "Codex plugin operation lease is no longer owned by this Trigger".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn save_agent_codex_trigger_config(&self, config: AgentCodexTriggerConfig) -> AppResult<()> {
         self.with_client(|client| {
             client.execute(
                 r#"
                 INSERT INTO agent_codex_trigger_configs (
                     id, company_id, agent_profile_id, status, interval_seconds,
-                    codex_profile, model, reasoning_effort, sandbox_mode, approval_policy, max_run_seconds, next_run_at,
+                    codex_profile, model, reasoning_effort, reasoning_summary, verbosity,
+                    personality, service_tier, sandbox_mode, approval_policy, network_access,
+                    web_search, feature_multi_agent, feature_remote_plugin, feature_hooks,
+                    feature_goals, feature_shell_tool, max_run_seconds, next_run_at,
                     lease_owner, lease_expires_at, manual_run_requested_at,
                     last_run_at, last_success_at, last_error,
                     consecutive_failure_count, created_by_human_user_id,
@@ -3208,8 +3856,9 @@ impl PlatformRepository for PostgresPlatformRepository {
                     wake_requested_at, wake_reason
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-                        $23, $24, $25)
+                        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+                        $31, $32, $33, $34, $35, $36)
                 ON CONFLICT (agent_profile_id) DO UPDATE
                 SET company_id = EXCLUDED.company_id,
                     status = EXCLUDED.status,
@@ -3217,8 +3866,19 @@ impl PlatformRepository for PostgresPlatformRepository {
                     codex_profile = EXCLUDED.codex_profile,
                     model = EXCLUDED.model,
                     reasoning_effort = EXCLUDED.reasoning_effort,
+                    reasoning_summary = EXCLUDED.reasoning_summary,
+                    verbosity = EXCLUDED.verbosity,
+                    personality = EXCLUDED.personality,
+                    service_tier = EXCLUDED.service_tier,
                     sandbox_mode = EXCLUDED.sandbox_mode,
                     approval_policy = EXCLUDED.approval_policy,
+                    network_access = EXCLUDED.network_access,
+                    web_search = EXCLUDED.web_search,
+                    feature_multi_agent = EXCLUDED.feature_multi_agent,
+                    feature_remote_plugin = EXCLUDED.feature_remote_plugin,
+                    feature_hooks = EXCLUDED.feature_hooks,
+                    feature_goals = EXCLUDED.feature_goals,
+                    feature_shell_tool = EXCLUDED.feature_shell_tool,
                     max_run_seconds = EXCLUDED.max_run_seconds,
                     next_run_at = EXCLUDED.next_run_at,
                     lease_owner = EXCLUDED.lease_owner,
@@ -3242,8 +3902,19 @@ impl PlatformRepository for PostgresPlatformRepository {
                     &config.codex_profile,
                     &config.model,
                     &config.reasoning_effort,
+                    &config.reasoning_summary,
+                    &config.verbosity,
+                    &config.personality,
+                    &config.service_tier,
                     &config.sandbox_mode,
                     &config.approval_policy,
+                    &config.network_access,
+                    &config.web_search,
+                    &config.feature_multi_agent,
+                    &config.feature_remote_plugin,
+                    &config.feature_hooks,
+                    &config.feature_goals,
+                    &config.feature_shell_tool,
                     &config.max_run_seconds,
                     &config.next_run_at,
                     &config.lease_owner,
@@ -3269,11 +3940,23 @@ impl PlatformRepository for PostgresPlatformRepository {
         &self,
         agent_id: Uuid,
     ) -> Option<AgentCodexTriggerConfig> {
+        self.get_agent_codex_trigger_config_by_agent_result(agent_id)
+            .ok()
+            .flatten()
+    }
+
+    fn get_agent_codex_trigger_config_by_agent_result(
+        &self,
+        agent_id: Uuid,
+    ) -> AppResult<Option<AgentCodexTriggerConfig>> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
                 SELECT id, company_id, agent_profile_id, status, interval_seconds,
-                       codex_profile, model, reasoning_effort, sandbox_mode, approval_policy, max_run_seconds, next_run_at,
+                       codex_profile, model, reasoning_effort, reasoning_summary, verbosity,
+                       personality, service_tier, sandbox_mode, approval_policy, network_access,
+                       web_search, feature_multi_agent, feature_remote_plugin, feature_hooks,
+                       feature_goals, feature_shell_tool, max_run_seconds, next_run_at,
                        lease_owner, lease_expires_at, manual_run_requested_at,
                        wake_requested_at, wake_reason,
                        last_run_at, last_success_at, last_error,
@@ -3285,9 +3968,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&agent_id],
             )
         })
-        .ok()
-        .flatten()
-        .map(map_agent_codex_trigger_config)
+        .map(|row| row.map(map_agent_codex_trigger_config))
     }
 
     fn claim_due_agent_codex_trigger_configs(
@@ -3301,11 +3982,14 @@ impl PlatformRepository for PostgresPlatformRepository {
                 r#"
                 WITH stale_runs AS (
                     UPDATE agent_codex_trigger_runs run
-                    SET status = 'timed_out',
+                    SET status = 'lease_lost',
                         finished_at = $2,
+                        activity_phase = 'lease_lost',
+                        activity_summary = 'Trigger 进程中断，本轮已停止',
+                        last_activity_at = $2,
                         error_message = COALESCE(
                             run.error_message,
-                            'Codex trigger run exceeded its execution lease'
+                            'Codex trigger process stopped before the run completed'
                         )
                     FROM agent_codex_trigger_configs stale_config
                     WHERE run.trigger_config_id = stale_config.id
@@ -3353,7 +4037,11 @@ impl PlatformRepository for PostgresPlatformRepository {
                 WHERE config.id = due.id
                 RETURNING config.id, config.company_id, config.agent_profile_id,
                           config.status, config.interval_seconds, config.codex_profile,
-                          config.model, config.reasoning_effort, config.sandbox_mode, config.approval_policy,
+                          config.model, config.reasoning_effort, config.reasoning_summary,
+                          config.verbosity, config.personality, config.service_tier,
+                          config.sandbox_mode, config.approval_policy, config.network_access,
+                          config.web_search, config.feature_multi_agent, config.feature_remote_plugin,
+                          config.feature_hooks, config.feature_goals, config.feature_shell_tool,
                           config.max_run_seconds, config.next_run_at,
                           config.lease_owner, config.lease_expires_at,
                           config.manual_run_requested_at,
@@ -3372,6 +4060,47 @@ impl PlatformRepository for PostgresPlatformRepository {
                 .map(map_agent_codex_trigger_config)
                 .collect()
         })
+    }
+
+    fn abandon_agent_codex_trigger_leases(
+        &self,
+        lease_owner: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<usize> {
+        self.with_client(|client| {
+            client.query_one(
+                r#"
+                WITH abandoned_configs AS (
+                    UPDATE agent_codex_trigger_configs
+                    SET lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        next_run_at = LEAST(next_run_at, $2),
+                        updated_at = $2
+                    WHERE lease_owner = $1
+                    RETURNING id
+                ),
+                abandoned_runs AS (
+                    UPDATE agent_codex_trigger_runs run
+                    SET status = 'lease_lost',
+                        finished_at = $2,
+                        error_message = COALESCE(
+                            run.error_message,
+                            'Codex trigger process stopped before the run completed'
+                        ),
+                        activity_phase = 'lease_lost',
+                        activity_summary = 'Trigger 进程中断，本轮已停止',
+                        last_activity_at = $2
+                    WHERE run.status = 'running'
+                      AND run.trigger_config_id IN (SELECT id FROM abandoned_configs)
+                    RETURNING run.id
+                )
+                SELECT COUNT(*)::BIGINT AS abandoned_run_count
+                FROM abandoned_runs
+                "#,
+                &[&lease_owner, &now],
+            )
+        })
+        .map(|row| row.get::<_, i64>("abandoned_run_count") as usize)
     }
 
     fn request_agent_codex_trigger_wake(
@@ -3627,6 +4356,15 @@ impl PlatformRepository for PostgresPlatformRepository {
         agent_id: Uuid,
         limit: usize,
     ) -> Vec<AgentCodexTriggerRun> {
+        self.list_agent_codex_trigger_runs_result(agent_id, limit)
+            .unwrap_or_default()
+    }
+
+    fn list_agent_codex_trigger_runs_result(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> AppResult<Vec<AgentCodexTriggerRun>> {
         self.with_client(|client| {
             client.query(
                 r#"
@@ -3643,10 +4381,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&agent_id, &(limit as i64)],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_agent_codex_trigger_run)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_agent_codex_trigger_run).collect())
     }
 
     fn save_agent_codex_session(&self, session: AgentCodexSession) -> AppResult<()> {
@@ -4063,6 +4798,14 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn list_company_project_tasks(&self, project_id: Uuid) -> Vec<CompanyProjectTask> {
+        self.list_company_project_tasks_result(project_id)
+            .unwrap_or_default()
+    }
+
+    fn list_company_project_tasks_result(
+        &self,
+        project_id: Uuid,
+    ) -> AppResult<Vec<CompanyProjectTask>> {
         self.with_client(|client| {
             client.query(
                 r#"
@@ -4077,10 +4820,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&project_id],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_company_project_task)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_company_project_task).collect())
     }
 
     fn update_company_project_task(&self, task: CompanyProjectTask) -> AppResult<()> {
@@ -4427,6 +5167,16 @@ impl PlatformRepository for PostgresPlatformRepository {
         after_sequence_id: i64,
         limit: usize,
     ) -> Vec<CompanyRealtimeEvent> {
+        self.list_company_realtime_events_result(company_id, after_sequence_id, limit)
+            .unwrap_or_default()
+    }
+
+    fn list_company_realtime_events_result(
+        &self,
+        company_id: Uuid,
+        after_sequence_id: i64,
+        limit: usize,
+    ) -> AppResult<Vec<CompanyRealtimeEvent>> {
         self.with_client(|client| {
             client.query(
                 r#"
@@ -4442,13 +5192,15 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&company_id, &after_sequence_id, &(limit as i64)],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_company_realtime_event)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_company_realtime_event).collect())
     }
 
     fn latest_company_realtime_sequence(&self, company_id: Uuid) -> i64 {
+        self.latest_company_realtime_sequence_result(company_id)
+            .unwrap_or(0)
+    }
+
+    fn latest_company_realtime_sequence_result(&self, company_id: Uuid) -> AppResult<i64> {
         self.with_client(|client| {
             client.query_one(
                 "SELECT COALESCE(MAX(sequence_id), 0)::BIGINT AS sequence_id FROM realtime_events WHERE company_id = $1",
@@ -4456,525 +5208,6 @@ impl PlatformRepository for PostgresPlatformRepository {
             )
         })
         .map(|row| row.get("sequence_id"))
-        .unwrap_or(0)
-    }
-
-    fn save_agent_runtime_config(&self, config: AgentRuntimeConfig) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO agent_runtime_configs (
-                    id, company_id, agent_profile_id, runtime_template_id, executor_kind, status,
-                    interval_seconds, max_events, daily_run_budget, daily_action_budget,
-                    daily_model_input_token_budget, daily_model_output_token_budget,
-                    daily_model_cost_budget_microusd,
-                    model_input_price_microusd_per_million_tokens,
-                    model_output_price_microusd_per_million_tokens,
-                    daily_approval_request_budget,
-                    company_message_policy, auto_start_assigned_tasks,
-                    auto_announce_project_membership, context_max_projects,
-                    context_max_conversations, context_max_inbox_events,
-                    system_prompt, model_name, model_provider, provider_secret_ref,
-                    allowed_model_actions, approval_required_model_actions,
-                    approval_request_ttl_minutes, model_max_output_tokens, model_timeout_seconds,
-                    model_max_retries, fallback_to_rules_v1, next_run_at,
-                    last_run_at, last_success_at, last_error_at, last_error,
-                    created_by_human_user_id, updated_by_human_user_id, created_at, updated_at,
-                    model_price_catalog_entry_id
-                )
-                VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-                    $22, $23, $24, $25, $26, $27, $28, $29, $30, $31,
-                    $32, $33, $34, $35, $36, $37, $38, $39, $40,
-                    $41, $42, $43
-                )
-                ON CONFLICT (id) DO UPDATE
-                SET executor_kind = EXCLUDED.executor_kind,
-                    status = EXCLUDED.status,
-                    runtime_template_id = EXCLUDED.runtime_template_id,
-                    model_price_catalog_entry_id = EXCLUDED.model_price_catalog_entry_id,
-                    interval_seconds = EXCLUDED.interval_seconds,
-                    max_events = EXCLUDED.max_events,
-                    daily_run_budget = EXCLUDED.daily_run_budget,
-                    daily_action_budget = EXCLUDED.daily_action_budget,
-                    daily_model_input_token_budget = EXCLUDED.daily_model_input_token_budget,
-                    daily_model_output_token_budget = EXCLUDED.daily_model_output_token_budget,
-                    daily_model_cost_budget_microusd = EXCLUDED.daily_model_cost_budget_microusd,
-                    model_input_price_microusd_per_million_tokens = EXCLUDED.model_input_price_microusd_per_million_tokens,
-                    model_output_price_microusd_per_million_tokens = EXCLUDED.model_output_price_microusd_per_million_tokens,
-                    daily_approval_request_budget = EXCLUDED.daily_approval_request_budget,
-                    company_message_policy = EXCLUDED.company_message_policy,
-                    auto_start_assigned_tasks = EXCLUDED.auto_start_assigned_tasks,
-                    auto_announce_project_membership = EXCLUDED.auto_announce_project_membership,
-                    context_max_projects = EXCLUDED.context_max_projects,
-                    context_max_conversations = EXCLUDED.context_max_conversations,
-                    context_max_inbox_events = EXCLUDED.context_max_inbox_events,
-                    system_prompt = EXCLUDED.system_prompt,
-                    model_name = EXCLUDED.model_name,
-                    model_provider = EXCLUDED.model_provider,
-                    provider_secret_ref = EXCLUDED.provider_secret_ref,
-                    allowed_model_actions = EXCLUDED.allowed_model_actions,
-                    approval_required_model_actions = EXCLUDED.approval_required_model_actions,
-                    approval_request_ttl_minutes = EXCLUDED.approval_request_ttl_minutes,
-                    model_max_output_tokens = EXCLUDED.model_max_output_tokens,
-                    model_timeout_seconds = EXCLUDED.model_timeout_seconds,
-                    model_max_retries = EXCLUDED.model_max_retries,
-                    fallback_to_rules_v1 = EXCLUDED.fallback_to_rules_v1,
-                    next_run_at = EXCLUDED.next_run_at,
-                    last_run_at = EXCLUDED.last_run_at,
-                    last_success_at = EXCLUDED.last_success_at,
-                    last_error_at = EXCLUDED.last_error_at,
-                    last_error = EXCLUDED.last_error,
-                    updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
-                    updated_at = EXCLUDED.updated_at
-                "#,
-                &[
-                    &config.id,
-                    &config.company_id,
-                    &config.agent_profile_id,
-                    &config.runtime_template_id,
-                    &config.executor_kind,
-                    &config.status,
-                    &config.interval_seconds,
-                    &config.max_events,
-                    &config.daily_run_budget,
-                    &config.daily_action_budget,
-                    &config.daily_model_input_token_budget,
-                    &config.daily_model_output_token_budget,
-                    &config.daily_model_cost_budget_microusd,
-                    &config.model_input_price_microusd_per_million_tokens,
-                    &config.model_output_price_microusd_per_million_tokens,
-                    &config.daily_approval_request_budget,
-                    &config.company_message_policy,
-                    &config.auto_start_assigned_tasks,
-                    &config.auto_announce_project_membership,
-                    &config.context_max_projects,
-                    &config.context_max_conversations,
-                    &config.context_max_inbox_events,
-                    &config.system_prompt,
-                    &config.model_name,
-                    &config.model_provider,
-                    &config.provider_secret_ref,
-                    &Json(config.allowed_model_actions.clone()),
-                    &Json(config.approval_required_model_actions.clone()),
-                    &config.approval_request_ttl_minutes,
-                    &config.model_max_output_tokens,
-                    &config.model_timeout_seconds,
-                    &config.model_max_retries,
-                    &config.fallback_to_rules_v1,
-                    &config.next_run_at,
-                    &config.last_run_at,
-                    &config.last_success_at,
-                    &config.last_error_at,
-                    &config.last_error,
-                    &config.created_by_human_user_id,
-                    &config.updated_by_human_user_id,
-                    &config.created_at,
-                    &config.updated_at,
-                    &config.model_price_catalog_entry_id,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_agent_runtime_config(&self, runtime_config_id: Uuid) -> Option<AgentRuntimeConfig> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, company_id, agent_profile_id, runtime_template_id, executor_kind, status,
-                       interval_seconds, max_events, daily_run_budget, daily_action_budget,
-                       daily_model_input_token_budget, daily_model_output_token_budget,
-                       daily_model_cost_budget_microusd,
-                       model_input_price_microusd_per_million_tokens,
-                       model_output_price_microusd_per_million_tokens,
-                       daily_approval_request_budget,
-                       company_message_policy, auto_start_assigned_tasks,
-                       auto_announce_project_membership, context_max_projects,
-                       context_max_conversations, context_max_inbox_events,
-                       system_prompt, model_name, model_provider, provider_secret_ref,
-                       allowed_model_actions, approval_required_model_actions,
-                       approval_request_ttl_minutes, model_max_output_tokens, model_timeout_seconds,
-                       model_max_retries, fallback_to_rules_v1, next_run_at,
-                       last_run_at, last_success_at, last_error_at, last_error,
-                       created_by_human_user_id, updated_by_human_user_id, created_at, updated_at,
-                       model_price_catalog_entry_id
-                FROM agent_runtime_configs
-                WHERE id = $1
-                "#,
-                &[&runtime_config_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_agent_runtime_config)
-    }
-
-    fn get_agent_runtime_config_by_agent(&self, agent_id: Uuid) -> Option<AgentRuntimeConfig> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, company_id, agent_profile_id, runtime_template_id, executor_kind, status,
-                       interval_seconds, max_events, daily_run_budget, daily_action_budget,
-                       daily_model_input_token_budget, daily_model_output_token_budget,
-                       daily_model_cost_budget_microusd,
-                       model_input_price_microusd_per_million_tokens,
-                       model_output_price_microusd_per_million_tokens,
-                       daily_approval_request_budget,
-                       company_message_policy, auto_start_assigned_tasks,
-                       auto_announce_project_membership, context_max_projects,
-                       context_max_conversations, context_max_inbox_events,
-                       system_prompt, model_name, model_provider, provider_secret_ref,
-                       allowed_model_actions, approval_required_model_actions,
-                       approval_request_ttl_minutes, model_max_output_tokens, model_timeout_seconds,
-                       model_max_retries, fallback_to_rules_v1, next_run_at,
-                       last_run_at, last_success_at, last_error_at, last_error,
-                       created_by_human_user_id, updated_by_human_user_id, created_at, updated_at,
-                       model_price_catalog_entry_id
-                FROM agent_runtime_configs
-                WHERE agent_profile_id = $1
-                "#,
-                &[&agent_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_agent_runtime_config)
-    }
-
-    fn list_company_agent_runtime_configs(&self, company_id: Uuid) -> Vec<AgentRuntimeConfig> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, company_id, agent_profile_id, runtime_template_id, executor_kind, status,
-                       interval_seconds, max_events, daily_run_budget, daily_action_budget,
-                       daily_model_input_token_budget, daily_model_output_token_budget,
-                       daily_model_cost_budget_microusd,
-                       model_input_price_microusd_per_million_tokens,
-                       model_output_price_microusd_per_million_tokens,
-                       daily_approval_request_budget,
-                       company_message_policy, auto_start_assigned_tasks,
-                       auto_announce_project_membership, context_max_projects,
-                       context_max_conversations, context_max_inbox_events,
-                       system_prompt, model_name, model_provider, provider_secret_ref,
-                       allowed_model_actions, approval_required_model_actions,
-                       approval_request_ttl_minutes, model_max_output_tokens, model_timeout_seconds,
-                       model_max_retries, fallback_to_rules_v1, next_run_at,
-                       last_run_at, last_success_at, last_error_at, last_error,
-                       created_by_human_user_id, updated_by_human_user_id, created_at, updated_at,
-                       model_price_catalog_entry_id
-                FROM agent_runtime_configs
-                WHERE company_id = $1
-                ORDER BY created_at
-                "#,
-                &[&company_id],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_agent_runtime_config)
-        .collect()
-    }
-
-    fn save_agent_runtime_template(&self, template: AgentRuntimeTemplate) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO agent_runtime_templates (
-                    id, company_id, name, description, status, settings,
-                    source_agent_profile_id, created_by_human_user_id,
-                    updated_by_human_user_id, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT (id) DO UPDATE
-                SET name = EXCLUDED.name,
-                    description = EXCLUDED.description,
-                    status = EXCLUDED.status,
-                    settings = EXCLUDED.settings,
-                    source_agent_profile_id = EXCLUDED.source_agent_profile_id,
-                    updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
-                    updated_at = EXCLUDED.updated_at
-                "#,
-                &[
-                    &template.id,
-                    &template.company_id,
-                    &template.name,
-                    &template.description,
-                    &template.status,
-                    &Json(template.settings.clone()),
-                    &template.source_agent_profile_id,
-                    &template.created_by_human_user_id,
-                    &template.updated_by_human_user_id,
-                    &template.created_at,
-                    &template.updated_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_agent_runtime_template(&self, template_id: Uuid) -> Option<AgentRuntimeTemplate> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, company_id, name, description, status, settings,
-                       source_agent_profile_id, created_by_human_user_id,
-                       updated_by_human_user_id, created_at, updated_at
-                FROM agent_runtime_templates
-                WHERE id = $1
-                "#,
-                &[&template_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_agent_runtime_template)
-    }
-
-    fn list_company_agent_runtime_templates(&self, company_id: Uuid) -> Vec<AgentRuntimeTemplate> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, company_id, name, description, status, settings,
-                       source_agent_profile_id, created_by_human_user_id,
-                       updated_by_human_user_id, created_at, updated_at
-                FROM agent_runtime_templates
-                WHERE company_id = $1
-                ORDER BY updated_at DESC, name
-                "#,
-                &[&company_id],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_agent_runtime_template)
-        .collect()
-    }
-
-    fn save_company_runtime_policy(&self, policy: CompanyRuntimePolicy) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO company_runtime_policies (
-                    company_id, default_runtime_template_id, auto_apply_to_new_agents,
-                    created_by_human_user_id, updated_by_human_user_id, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (company_id) DO UPDATE
-                SET default_runtime_template_id = EXCLUDED.default_runtime_template_id,
-                    auto_apply_to_new_agents = EXCLUDED.auto_apply_to_new_agents,
-                    updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
-                    updated_at = EXCLUDED.updated_at
-                "#,
-                &[
-                    &policy.company_id,
-                    &policy.default_runtime_template_id,
-                    &policy.auto_apply_to_new_agents,
-                    &policy.created_by_human_user_id,
-                    &policy.updated_by_human_user_id,
-                    &policy.created_at,
-                    &policy.updated_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_company_runtime_policy(&self, company_id: Uuid) -> Option<CompanyRuntimePolicy> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT company_id, default_runtime_template_id, auto_apply_to_new_agents,
-                       created_by_human_user_id, updated_by_human_user_id, created_at, updated_at
-                FROM company_runtime_policies
-                WHERE company_id = $1
-                "#,
-                &[&company_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(|row| CompanyRuntimePolicy {
-            company_id: row.get("company_id"),
-            default_runtime_template_id: row.get("default_runtime_template_id"),
-            auto_apply_to_new_agents: row.get("auto_apply_to_new_agents"),
-            configured: true,
-            created_by_human_user_id: row.get("created_by_human_user_id"),
-            updated_by_human_user_id: row.get("updated_by_human_user_id"),
-            created_at: Some(row.get("created_at")),
-            updated_at: Some(row.get("updated_at")),
-        })
-    }
-
-    fn publish_agent_model_price_catalog_entry(
-        &self,
-        mut entry: AgentModelPriceCatalogEntry,
-    ) -> AppResult<AgentModelPriceCatalogEntry> {
-        self.with_client(|client| {
-            let mut tx = client.transaction()?;
-            tx.query_one(
-                "SELECT id FROM companies WHERE id = $1 FOR UPDATE",
-                &[&entry.company_id],
-            )?;
-            if let Some(row) = tx.query_opt(
-                r#"
-                SELECT id, company_id, model_provider, model_name, version, status,
-                       input_price_microusd_per_million_tokens,
-                       output_price_microusd_per_million_tokens,
-                       notes, source_agent_profile_id, created_by_human_user_id,
-                       updated_by_human_user_id, created_at, updated_at
-                FROM agent_model_price_catalog_entries
-                WHERE company_id = $1 AND model_provider = $2 AND model_name = $3
-                  AND status = 'active'
-                "#,
-                &[&entry.company_id, &entry.model_provider, &entry.model_name],
-            )? {
-                let active_entry = map_agent_model_price_catalog_entry(row);
-                if active_entry.input_price_microusd_per_million_tokens
-                    == entry.input_price_microusd_per_million_tokens
-                    && active_entry.output_price_microusd_per_million_tokens
-                        == entry.output_price_microusd_per_million_tokens
-                {
-                    tx.commit()?;
-                    return Ok(active_entry);
-                }
-            }
-            let version: i32 = tx
-                .query_one(
-                    r#"
-                    SELECT COALESCE(MAX(version), 0)::INTEGER + 1 AS next_version
-                    FROM agent_model_price_catalog_entries
-                    WHERE company_id = $1 AND model_provider = $2 AND model_name = $3
-                    "#,
-                    &[&entry.company_id, &entry.model_provider, &entry.model_name],
-                )?
-                .get("next_version");
-            tx.execute(
-                r#"
-                UPDATE agent_model_price_catalog_entries
-                SET status = 'archived',
-                    updated_by_human_user_id = $4,
-                    updated_at = $5
-                WHERE company_id = $1 AND model_provider = $2 AND model_name = $3
-                  AND status = 'active'
-                "#,
-                &[
-                    &entry.company_id,
-                    &entry.model_provider,
-                    &entry.model_name,
-                    &entry.updated_by_human_user_id,
-                    &entry.updated_at,
-                ],
-            )?;
-            entry.version = version;
-            tx.execute(
-                r#"
-                INSERT INTO agent_model_price_catalog_entries (
-                    id, company_id, model_provider, model_name, version, status,
-                    input_price_microusd_per_million_tokens,
-                    output_price_microusd_per_million_tokens,
-                    notes, source_agent_profile_id, created_by_human_user_id,
-                    updated_by_human_user_id, created_at, updated_at
-                ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7,
-                    $8, $9, $10, $11, $12, $13, $14
-                )
-                "#,
-                &[
-                    &entry.id,
-                    &entry.company_id,
-                    &entry.model_provider,
-                    &entry.model_name,
-                    &entry.version,
-                    &entry.status,
-                    &entry.input_price_microusd_per_million_tokens,
-                    &entry.output_price_microusd_per_million_tokens,
-                    &entry.notes,
-                    &entry.source_agent_profile_id,
-                    &entry.created_by_human_user_id,
-                    &entry.updated_by_human_user_id,
-                    &entry.created_at,
-                    &entry.updated_at,
-                ],
-            )?;
-            tx.commit()?;
-            Ok(entry)
-        })
-    }
-
-    fn save_agent_model_price_catalog_entry(
-        &self,
-        entry: AgentModelPriceCatalogEntry,
-    ) -> AppResult<()> {
-        let updated = self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE agent_model_price_catalog_entries
-                SET status = $2, notes = $3, updated_by_human_user_id = $4, updated_at = $5
-                WHERE id = $1
-                "#,
-                &[
-                    &entry.id,
-                    &entry.status,
-                    &entry.notes,
-                    &entry.updated_by_human_user_id,
-                    &entry.updated_at,
-                ],
-            )
-        })?;
-        if updated == 0 {
-            return Err(AppError::NotFound(
-                "model price catalog entry not found".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn get_agent_model_price_catalog_entry(
-        &self,
-        entry_id: Uuid,
-    ) -> Option<AgentModelPriceCatalogEntry> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, company_id, model_provider, model_name, version, status,
-                       input_price_microusd_per_million_tokens,
-                       output_price_microusd_per_million_tokens,
-                       notes, source_agent_profile_id, created_by_human_user_id,
-                       updated_by_human_user_id, created_at, updated_at
-                FROM agent_model_price_catalog_entries
-                WHERE id = $1
-                "#,
-                &[&entry_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_agent_model_price_catalog_entry)
-    }
-
-    fn list_company_agent_model_price_catalog_entries(
-        &self,
-        company_id: Uuid,
-    ) -> Vec<AgentModelPriceCatalogEntry> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, company_id, model_provider, model_name, version, status,
-                       input_price_microusd_per_million_tokens,
-                       output_price_microusd_per_million_tokens,
-                       notes, source_agent_profile_id, created_by_human_user_id,
-                       updated_by_human_user_id, created_at, updated_at
-                FROM agent_model_price_catalog_entries
-                WHERE company_id = $1
-                ORDER BY model_provider, model_name, version DESC
-                "#,
-                &[&company_id],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_agent_model_price_catalog_entry)
-        .collect()
     }
 
     fn publish_company_governance_policy_version(
@@ -5096,354 +5329,6 @@ impl PlatformRepository for PostgresPlatformRepository {
         .into_iter()
         .map(map_company_governance_policy_version)
         .collect()
-    }
-
-    fn list_due_agent_runtime_configs(
-        &self,
-        now: chrono::DateTime<chrono::Utc>,
-        limit: usize,
-    ) -> Vec<AgentRuntimeConfig> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT r.id, r.company_id, r.agent_profile_id, r.runtime_template_id,
-                       r.executor_kind, r.status,
-                       r.interval_seconds, r.max_events, r.daily_run_budget, r.daily_action_budget,
-                       r.daily_model_input_token_budget, r.daily_model_output_token_budget,
-                       r.daily_model_cost_budget_microusd,
-                       r.model_input_price_microusd_per_million_tokens,
-                       r.model_output_price_microusd_per_million_tokens,
-                       r.daily_approval_request_budget,
-                       r.company_message_policy, r.auto_start_assigned_tasks,
-                       r.auto_announce_project_membership, r.context_max_projects,
-                       r.context_max_conversations, r.context_max_inbox_events,
-                       r.system_prompt, r.model_name, r.model_provider, r.provider_secret_ref,
-                       r.allowed_model_actions, r.approval_required_model_actions,
-                       r.approval_request_ttl_minutes, r.model_max_output_tokens,
-                       r.model_timeout_seconds, r.model_max_retries,
-                       r.fallback_to_rules_v1, r.next_run_at,
-                       r.last_run_at, r.last_success_at, r.last_error_at, r.last_error,
-                       r.created_by_human_user_id, r.updated_by_human_user_id,
-                       r.created_at, r.updated_at, r.model_price_catalog_entry_id
-                FROM agent_runtime_configs r
-                JOIN companies c ON c.id = r.company_id AND c.status = 'active'
-                JOIN company_agent_memberships m
-                  ON m.agent_profile_id = r.agent_profile_id
-                 AND m.company_id = r.company_id
-                 AND m.employment_status = 'active'
-                JOIN agent_profiles a ON a.id = r.agent_profile_id AND a.status = 'active'
-                WHERE r.status = 'active'
-                  AND r.next_run_at <= $1
-                ORDER BY r.next_run_at
-                LIMIT $2
-                "#,
-                &[&now, &(limit as i64)],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_agent_runtime_config)
-        .collect()
-    }
-
-    fn claim_agent_runtime_config(
-        &self,
-        runtime_config_id: Uuid,
-        now: chrono::DateTime<chrono::Utc>,
-        next_run_at: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<bool> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE agent_runtime_configs
-                SET next_run_at = $3,
-                    updated_at = $2
-                WHERE id = $1
-                  AND status = 'active'
-                  AND next_run_at <= $2
-                "#,
-                &[&runtime_config_id, &now, &next_run_at],
-            )
-        })
-        .map(|updated| updated > 0)
-    }
-
-    fn insert_agent_runtime_run(&self, run: AgentRuntimeRun) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO agent_runtime_runs (
-                    id, runtime_config_id, company_id, agent_profile_id,
-                    trigger_type, executor_kind, status, input_event_count,
-                    processed_event_count, action_count, approval_request_count,
-                    model_request_count,
-                    model_input_tokens, model_output_tokens, model_cost_microusd,
-                    model_input_price_microusd_per_million_tokens,
-                    model_output_price_microusd_per_million_tokens, model_pricing_status,
-                    remaining_pending_count,
-                    input_payload, output_payload, error_message, started_at, finished_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
-                "#,
-                &[
-                    &run.id,
-                    &run.runtime_config_id,
-                    &run.company_id,
-                    &run.agent_profile_id,
-                    &run.trigger_type,
-                    &run.executor_kind,
-                    &run.status,
-                    &run.input_event_count,
-                    &run.processed_event_count,
-                    &run.action_count,
-                    &run.approval_request_count,
-                    &run.model_request_count,
-                    &run.model_input_tokens,
-                    &run.model_output_tokens,
-                    &run.model_cost_microusd,
-                    &run.model_input_price_microusd_per_million_tokens,
-                    &run.model_output_price_microusd_per_million_tokens,
-                    &run.model_pricing_status,
-                    &run.remaining_pending_count,
-                    &Json(run.input_payload.clone()),
-                    &Json(run.output_payload.clone()),
-                    &run.error_message,
-                    &run.started_at,
-                    &run.finished_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn update_agent_runtime_run(&self, run: AgentRuntimeRun) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE agent_runtime_runs
-                SET status = $2,
-                    input_event_count = $3,
-                    processed_event_count = $4,
-                    action_count = $5,
-                    approval_request_count = $6,
-                    model_request_count = $7,
-                    model_input_tokens = $8,
-                    model_output_tokens = $9,
-                    model_cost_microusd = $10,
-                    model_input_price_microusd_per_million_tokens = $11,
-                    model_output_price_microusd_per_million_tokens = $12,
-                    model_pricing_status = $13,
-                    remaining_pending_count = $14,
-                    input_payload = $15,
-                    output_payload = $16,
-                    error_message = $17,
-                    finished_at = $18
-                WHERE id = $1
-                "#,
-                &[
-                    &run.id,
-                    &run.status,
-                    &run.input_event_count,
-                    &run.processed_event_count,
-                    &run.action_count,
-                    &run.approval_request_count,
-                    &run.model_request_count,
-                    &run.model_input_tokens,
-                    &run.model_output_tokens,
-                    &run.model_cost_microusd,
-                    &run.model_input_price_microusd_per_million_tokens,
-                    &run.model_output_price_microusd_per_million_tokens,
-                    &run.model_pricing_status,
-                    &run.remaining_pending_count,
-                    &Json(run.input_payload.clone()),
-                    &Json(run.output_payload.clone()),
-                    &run.error_message,
-                    &run.finished_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn list_agent_runtime_runs(
-        &self,
-        runtime_config_id: Uuid,
-        limit: usize,
-    ) -> Vec<AgentRuntimeRun> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, runtime_config_id, company_id, agent_profile_id,
-                       trigger_type, executor_kind, status, input_event_count,
-                       processed_event_count, action_count, approval_request_count,
-                       model_request_count,
-                       model_input_tokens, model_output_tokens, model_cost_microusd,
-                       model_input_price_microusd_per_million_tokens,
-                       model_output_price_microusd_per_million_tokens, model_pricing_status,
-                       remaining_pending_count,
-                       input_payload, output_payload, error_message, started_at, finished_at
-                FROM agent_runtime_runs
-                WHERE runtime_config_id = $1
-                ORDER BY started_at DESC
-                LIMIT $2
-                "#,
-                &[&runtime_config_id, &(limit as i64)],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_agent_runtime_run)
-        .collect()
-    }
-
-    fn get_agent_runtime_daily_usage(
-        &self,
-        runtime_config_id: Uuid,
-        window_start: chrono::DateTime<chrono::Utc>,
-    ) -> AgentRuntimeDailyUsage {
-        self.with_client(|client| {
-            client.query_one(
-                r#"
-                SELECT
-                    COUNT(*) FILTER (WHERE status <> 'skipped_budget')::BIGINT AS run_count,
-                    COALESCE(SUM(action_count) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS action_count,
-                    COALESCE(SUM(approval_request_count) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS approval_request_count,
-                    COUNT(*) FILTER (WHERE status = 'failed')::BIGINT AS failed_run_count,
-                    COALESCE(SUM(model_request_count) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_request_count,
-                    COALESCE(SUM(model_input_tokens) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_input_tokens,
-                    COALESCE(SUM(model_output_tokens) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_output_tokens,
-                    COALESCE(SUM(model_cost_microusd) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_cost_microusd
-                FROM agent_runtime_runs
-                WHERE runtime_config_id = $1
-                  AND started_at >= $2
-                "#,
-                &[&runtime_config_id, &window_start],
-            )
-        })
-        .map(|row| AgentRuntimeDailyUsage {
-            window_start,
-            run_count: row.get("run_count"),
-            action_count: row.get("action_count"),
-            approval_request_count: row.get("approval_request_count"),
-            failed_run_count: row.get("failed_run_count"),
-            model_request_count: row.get("model_request_count"),
-            model_input_tokens: row.get("model_input_tokens"),
-            model_output_tokens: row.get("model_output_tokens"),
-            model_cost_microusd: row.get("model_cost_microusd"),
-        })
-        .unwrap_or(AgentRuntimeDailyUsage {
-            window_start,
-            run_count: 0,
-            action_count: 0,
-            approval_request_count: 0,
-            failed_run_count: 0,
-            model_request_count: 0,
-            model_input_tokens: 0,
-            model_output_tokens: 0,
-            model_cost_microusd: 0,
-        })
-    }
-
-    fn save_company_model_budget_policy(&self, policy: CompanyModelBudgetPolicy) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO company_model_budget_policies (
-                    company_id, daily_model_cost_budget_microusd,
-                    created_by_human_user_id, updated_by_human_user_id,
-                    created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (company_id) DO UPDATE
-                SET daily_model_cost_budget_microusd = EXCLUDED.daily_model_cost_budget_microusd,
-                    updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
-                    updated_at = EXCLUDED.updated_at
-                "#,
-                &[
-                    &policy.company_id,
-                    &policy.daily_model_cost_budget_microusd,
-                    &policy.created_by_human_user_id,
-                    &policy.updated_by_human_user_id,
-                    &policy.created_at,
-                    &policy.updated_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_company_model_budget_policy(
-        &self,
-        company_id: Uuid,
-    ) -> Option<CompanyModelBudgetPolicy> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT company_id, daily_model_cost_budget_microusd,
-                       created_by_human_user_id, updated_by_human_user_id,
-                       created_at, updated_at
-                FROM company_model_budget_policies
-                WHERE company_id = $1
-                "#,
-                &[&company_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(|row| CompanyModelBudgetPolicy {
-            company_id: row.get("company_id"),
-            daily_model_cost_budget_microusd: row.get("daily_model_cost_budget_microusd"),
-            configured: true,
-            created_by_human_user_id: row.get("created_by_human_user_id"),
-            updated_by_human_user_id: row.get("updated_by_human_user_id"),
-            created_at: Some(row.get("created_at")),
-            updated_at: Some(row.get("updated_at")),
-        })
-    }
-
-    fn get_company_model_daily_usage(
-        &self,
-        company_id: Uuid,
-        window_start: chrono::DateTime<chrono::Utc>,
-    ) -> CompanyModelDailyUsage {
-        self.with_client(|client| {
-            client.query_one(
-                r#"
-                SELECT
-                    COALESCE(SUM(model_request_count) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_request_count,
-                    COALESCE(SUM(model_input_tokens) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_input_tokens,
-                    COALESCE(SUM(model_output_tokens) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_output_tokens,
-                    COALESCE(SUM(model_cost_microusd) FILTER (WHERE status <> 'skipped_budget'), 0)::BIGINT
-                        AS model_cost_microusd
-                FROM agent_runtime_runs
-                WHERE company_id = $1
-                  AND started_at >= $2
-                "#,
-                &[&company_id, &window_start],
-            )
-        })
-        .map(|row| CompanyModelDailyUsage {
-            window_start,
-            model_request_count: row.get("model_request_count"),
-            model_input_tokens: row.get("model_input_tokens"),
-            model_output_tokens: row.get("model_output_tokens"),
-            model_cost_microusd: row.get("model_cost_microusd"),
-        })
-        .unwrap_or(CompanyModelDailyUsage {
-            window_start,
-            model_request_count: 0,
-            model_input_tokens: 0,
-            model_output_tokens: 0,
-            model_cost_microusd: 0,
-        })
     }
 
     fn insert_agent_tool_approval_request(
@@ -5722,6 +5607,14 @@ impl PlatformRepository for PostgresPlatformRepository {
     }
 
     fn list_company_conversations(&self, company_id: Uuid) -> Vec<ConversationPreview> {
+        self.list_company_conversations_result(company_id)
+            .unwrap_or_default()
+    }
+
+    fn list_company_conversations_result(
+        &self,
+        company_id: Uuid,
+    ) -> AppResult<Vec<ConversationPreview>> {
         self.with_client(|client| {
             client.query(
                 r#"
@@ -5748,18 +5641,23 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&company_id],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_conversation_preview)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_conversation_preview).collect())
     }
 
     fn get_conversation_messages(&self, conversation_id: Uuid) -> Vec<MessageView> {
+        self.get_conversation_messages_result(conversation_id)
+            .unwrap_or_default()
+    }
+
+    fn get_conversation_messages_result(
+        &self,
+        conversation_id: Uuid,
+    ) -> AppResult<Vec<MessageView>> {
         self.with_client(|client| {
             client.query(
                 r#"
                 SELECT id, conversation_id, sender_agent_id, sender_human_user_id,
-                       content_text, created_at
+                       content_text, content_json, created_at
                 FROM messages
                 WHERE conversation_id = $1
                 ORDER BY created_at ASC
@@ -5767,10 +5665,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 &[&conversation_id],
             )
         })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_message_view)
-        .collect()
+        .map(|rows| rows.into_iter().map(map_message_view).collect())
     }
 
     fn get_conversation_message_page(
@@ -5812,7 +5707,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 client.query(
                     r#"
                     SELECT id, conversation_id, sender_agent_id, sender_human_user_id,
-                           content_text, created_at
+                           content_text, content_json, created_at
                     FROM messages
                     WHERE conversation_id = $1
                       AND (created_at, id) < ($2, $3)
@@ -5830,7 +5725,7 @@ impl PlatformRepository for PostgresPlatformRepository {
                 client.query(
                     r#"
                     SELECT id, conversation_id, sender_agent_id, sender_human_user_id,
-                           content_text, created_at
+                           content_text, content_json, created_at
                     FROM messages
                     WHERE conversation_id = $1
                     ORDER BY created_at DESC, id DESC
@@ -5898,459 +5793,6 @@ impl PlatformRepository for PostgresPlatformRepository {
         })
     }
 
-    fn insert_post(&self, post: PostView) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO posts (
-                    id, author_agent_id, content_text, content_json, visibility, published_at, created_at
-                )
-                VALUES ($1, $2, $3, '{}'::jsonb, 'public', $4, $4)
-                "#,
-                &[&post.id, &post.author_agent_id, &post.content, &post.created_at],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn insert_post_comment(&self, comment: PostCommentView) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO post_comments (
-                    id, post_id, author_agent_id, content_text, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5)
-                "#,
-                &[
-                    &comment.id,
-                    &comment.post_id,
-                    &comment.author_agent_id,
-                    &comment.content,
-                    &comment.created_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn insert_diary_entry(&self, diary_entry: DiaryEntryView) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO diary_entries (
-                    id, agent_profile_id, title, content_text, content_json, mood_tag, created_at
-                )
-                VALUES ($1, $2, $3, $4, '{}'::jsonb, NULL, $5)
-                "#,
-                &[
-                    &diary_entry.id,
-                    &diary_entry.agent_profile_id,
-                    &diary_entry.title,
-                    &diary_entry.content,
-                    &diary_entry.created_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn list_posts(&self) -> Vec<PostView> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, author_agent_id, content_text, published_at
-                FROM posts
-                ORDER BY published_at DESC, created_at DESC
-                "#,
-                &[],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_post_view)
-        .collect()
-    }
-
-    fn list_post_comments(&self, post_id: Uuid) -> Vec<PostCommentView> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, post_id, author_agent_id, content_text, created_at
-                FROM post_comments
-                WHERE post_id = $1
-                ORDER BY created_at ASC
-                "#,
-                &[&post_id],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_post_comment_view)
-        .collect()
-    }
-
-    fn list_diary_entries(&self) -> Vec<DiaryEntryView> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, agent_profile_id, title, content_text, created_at
-                FROM diary_entries
-                ORDER BY created_at DESC
-                "#,
-                &[],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_diary_entry_view)
-        .collect()
-    }
-
-    fn insert_friend_request(&self, request: FriendRequestView) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO friend_requests (
-                    id, requester_agent_id, target_agent_id, message, status, acted_at, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, NULL, $6)
-                "#,
-                &[
-                    &request.id,
-                    &request.requester_agent_id,
-                    &request.target_agent_id,
-                    &request.message,
-                    &request.status,
-                    &request.created_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn list_friend_requests(&self, agent_id: Uuid) -> Vec<FriendRequestView> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, requester_agent_id, target_agent_id, message, status, created_at
-                FROM friend_requests
-                WHERE requester_agent_id = $1 OR target_agent_id = $1
-                ORDER BY created_at DESC
-                "#,
-                &[&agent_id],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_friend_request_view)
-        .collect()
-    }
-
-    fn list_all_friend_requests(&self) -> Vec<FriendRequestView> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, requester_agent_id, target_agent_id, message, status, created_at
-                FROM friend_requests
-                ORDER BY created_at DESC
-                "#,
-                &[],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_friend_request_view)
-        .collect()
-    }
-
-    fn list_friends(&self, agent_id: Uuid) -> Vec<FriendSummary> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT ap.id, ap.display_name, ap.handle
-                FROM friendships f
-                INNER JOIN agent_profiles ap
-                    ON ap.id = CASE
-                        WHEN f.agent_low_id = $1 THEN f.agent_high_id
-                        ELSE f.agent_low_id
-                    END
-                WHERE f.agent_low_id = $1 OR f.agent_high_id = $1
-                ORDER BY ap.created_at DESC
-                "#,
-                &[&agent_id],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_friend_summary)
-        .collect()
-    }
-
-    fn get_friend_request(&self, request_id: Uuid) -> Option<FriendRequestView> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, requester_agent_id, target_agent_id, message, status, created_at
-                FROM friend_requests
-                WHERE id = $1
-                "#,
-                &[&request_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_friend_request_view)
-    }
-
-    fn update_friend_request(&self, request: FriendRequestView) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE friend_requests
-                SET message = $2,
-                    status = $3,
-                    acted_at = CASE WHEN $3 = 'pending' THEN NULL ELSE NOW() END
-                WHERE id = $1
-                "#,
-                &[&request.id, &request.message, &request.status],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn link_friends(&self, left_agent_id: Uuid, right_agent_id: Uuid) -> AppResult<()> {
-        let (low, high) = ordered_pair(left_agent_id, right_agent_id);
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO friendships (id, agent_low_id, agent_high_id, created_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT (agent_low_id, agent_high_id) DO NOTHING
-                "#,
-                &[&Uuid::new_v4(), &low, &high],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_friend_profile(
-        &self,
-        owner_agent_id: Uuid,
-        friend_agent_id: Uuid,
-    ) -> Option<FriendProfileSnapshot> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT fp.owner_agent_id, fp.friend_agent_id, fp.display_name_hint,
-                       fp.capability_summary, fp.familiarity_score, fp.trust_score,
-                       fp.last_interaction_summary,
-                       COALESCE((
-                           SELECT json_agg(fpf.fact_value ORDER BY fpf.created_at)
-                           FROM friend_profile_facts fpf
-                           WHERE fpf.friend_profile_id = fp.id
-                             AND fpf.fact_type = 'interest_tag'
-                       ), '[]'::json) AS interest_tags
-                     , COALESCE((
-                           SELECT json_agg(
-                               json_build_object(
-                                   'fact_type', fpf.fact_type,
-                                   'fact_value', fpf.fact_value,
-                                   'confidence_score', fpf.confidence_score,
-                                   'source_kind', fpf.source_kind,
-                                   'source_ref_id', fpf.source_ref_id,
-                                   'last_observed_at', fpf.last_observed_at
-                               )
-                               ORDER BY fpf.created_at
-                           )
-                           FROM friend_profile_facts fpf
-                           WHERE fpf.friend_profile_id = fp.id
-                       ), '[]'::json) AS known_facts
-                FROM friend_profiles fp
-                WHERE fp.owner_agent_id = $1 AND fp.friend_agent_id = $2
-                "#,
-                &[&owner_agent_id, &friend_agent_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_friend_profile_snapshot)
-    }
-
-    fn upsert_friend_profile(&self, profile: FriendProfileSnapshot) -> AppResult<()> {
-        self.with_client(|client| {
-            let mut tx = client.transaction()?;
-            let persisted_facts = prepare_friend_profile_facts_for_storage(&profile);
-
-            let row = tx.query_one(
-                r#"
-                INSERT INTO friend_profiles (
-                    id, owner_agent_id, friend_agent_id, display_name_hint,
-                    capability_summary, familiarity_score, trust_score,
-                    last_interaction_summary, created_at, updated_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-                ON CONFLICT (owner_agent_id, friend_agent_id) DO UPDATE
-                SET display_name_hint = EXCLUDED.display_name_hint,
-                    capability_summary = EXCLUDED.capability_summary,
-                    familiarity_score = EXCLUDED.familiarity_score,
-                    trust_score = EXCLUDED.trust_score,
-                    last_interaction_summary = EXCLUDED.last_interaction_summary,
-                    updated_at = NOW()
-                RETURNING id
-                "#,
-                &[
-                    &Uuid::new_v4(),
-                    &profile.owner_agent_id,
-                    &profile.friend_agent_id,
-                    &profile.display_name_hint,
-                    &profile.capability_summary,
-                    &profile.familiarity_score,
-                    &profile.trust_score,
-                    &profile.last_interaction_summary,
-                ],
-            )?;
-
-            let friend_profile_id: Uuid = row.get("id");
-            tx.execute(
-                "DELETE FROM friend_profile_facts WHERE friend_profile_id = $1",
-                &[&friend_profile_id],
-            )?;
-
-            for fact in &persisted_facts {
-                let confidence_score = format_numeric_5_4(fact.confidence_score);
-                tx.execute(
-                    r#"
-                    INSERT INTO friend_profile_facts (
-                        id, friend_profile_id, fact_type, fact_value, confidence_score,
-                        source_kind, source_ref_id, last_observed_at, created_at
-                    )
-                    VALUES ($1, $2, $3, $4, ($5)::TEXT::NUMERIC(5,4), $6, $7, $8, NOW())
-                    "#,
-                    &[
-                        &Uuid::new_v4(),
-                        &friend_profile_id,
-                        &friend_profile_fact_type_to_str(&fact.fact_type),
-                        &fact.fact_value,
-                        &confidence_score,
-                        &friend_profile_fact_source_kind_to_str(&fact.source_kind),
-                        &fact.source_ref_id,
-                        &fact.last_observed_at,
-                    ],
-                )?;
-            }
-
-            tx.execute(
-                r#"
-                INSERT INTO relationship_states (
-                    id, owner_agent_id, target_agent_id, intimacy_score, trust_score,
-                    interaction_heat, last_contact_at, updated_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-                ON CONFLICT (owner_agent_id, target_agent_id) DO UPDATE
-                SET intimacy_score = EXCLUDED.intimacy_score,
-                    trust_score = EXCLUDED.trust_score,
-                    interaction_heat = EXCLUDED.interaction_heat,
-                    last_contact_at = EXCLUDED.last_contact_at,
-                    updated_at = NOW()
-                "#,
-                &[
-                    &Uuid::new_v4(),
-                    &profile.owner_agent_id,
-                    &profile.friend_agent_id,
-                    &profile.familiarity_score,
-                    &profile.trust_score,
-                    &profile.familiarity_score,
-                ],
-            )?;
-
-            let interest_tags_json =
-                Json(serde_json::to_value(&profile.interest_tags).unwrap_or(Value::Array(vec![])));
-            tx.execute(
-                r#"
-                INSERT INTO interaction_summaries (
-                    id, owner_agent_id, target_agent_id, window_type,
-                    summary_text, summary_json, start_at, end_at, created_at
-                )
-                VALUES ($1, $2, $3, 'rolling', $4, $5, NOW(), NOW(), NOW())
-                "#,
-                &[
-                    &Uuid::new_v4(),
-                    &profile.owner_agent_id,
-                    &profile.friend_agent_id,
-                    &profile.last_interaction_summary,
-                    &interest_tags_json,
-                ],
-            )?;
-
-            tx.commit()?;
-            Ok(())
-        })
-    }
-
-    fn find_direct_conversation(
-        &self,
-        left_agent_id: Uuid,
-        right_agent_id: Uuid,
-    ) -> Option<ConversationPreview> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT c.id,
-                       COALESCE(peer.display_name, c.title, '') AS title,
-                       c.conversation_type,
-                       latest.content_text AS last_message_preview,
-                       COALESCE(latest.created_at, c.updated_at, c.created_at) AS updated_at
-                FROM conversations c
-                INNER JOIN conversation_members cm1
-                    ON cm1.conversation_id = c.id
-                   AND cm1.agent_profile_id = $1
-                   AND cm1.left_at IS NULL
-                INNER JOIN conversation_members cm2
-                    ON cm2.conversation_id = c.id
-                   AND cm2.agent_profile_id = $2
-                   AND cm2.left_at IS NULL
-                LEFT JOIN agent_profiles peer ON peer.id = $2
-                LEFT JOIN LATERAL (
-                    SELECT content_text, created_at
-                    FROM messages
-                    WHERE conversation_id = c.id
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                ) latest ON TRUE
-                WHERE c.conversation_type = 'direct'
-                ORDER BY updated_at DESC
-                LIMIT 1
-                "#,
-                &[&left_agent_id, &right_agent_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_conversation_preview)
-    }
-
-    fn find_direct_conversation_peer(&self, conversation_id: Uuid, agent_id: Uuid) -> Option<Uuid> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT cm.agent_profile_id
-                FROM conversations c
-                INNER JOIN conversation_members cm ON cm.conversation_id = c.id
-                WHERE c.id = $1
-                  AND c.conversation_type = 'direct'
-                  AND cm.left_at IS NULL
-                  AND cm.agent_profile_id <> $2
-                LIMIT 1
-                "#,
-                &[&conversation_id, &agent_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(|row| row.get(0))
-    }
-
     fn conversation_exists(&self, conversation_id: Uuid) -> bool {
         self.with_client(|client| {
             client
@@ -6380,317 +5822,6 @@ impl PlatformRepository for PostgresPlatformRepository {
         .unwrap_or_default()
         .into_iter()
         .map(map_agent_action_log)
-        .collect()
-    }
-
-    fn insert_problem_workspace(&self, workspace: ProblemWorkspace) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO problem_workspaces (
-                    id, owner_agent_id, title, problem_statement, status,
-                    pressure_level, conversation_id, participant_agent_ids,
-                    summary_text, created_at, updated_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                "#,
-                &[
-                    &workspace.id,
-                    &workspace.owner_agent_id,
-                    &workspace.title,
-                    &workspace.problem_statement,
-                    &workspace.status,
-                    &workspace.pressure_level,
-                    &workspace.conversation_id,
-                    &workspace.participant_agent_ids,
-                    &workspace.summary_text,
-                    &workspace.created_at,
-                    &workspace.updated_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn update_problem_workspace(&self, workspace: ProblemWorkspace) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE problem_workspaces
-                SET title = $2,
-                    problem_statement = $3,
-                    status = $4,
-                    pressure_level = $5,
-                    conversation_id = $6,
-                    participant_agent_ids = $7,
-                    summary_text = $8,
-                    updated_at = $9
-                WHERE id = $1
-                "#,
-                &[
-                    &workspace.id,
-                    &workspace.title,
-                    &workspace.problem_statement,
-                    &workspace.status,
-                    &workspace.pressure_level,
-                    &workspace.conversation_id,
-                    &workspace.participant_agent_ids,
-                    &workspace.summary_text,
-                    &workspace.updated_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_problem_workspace(&self, workspace_id: Uuid) -> Option<ProblemWorkspace> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, owner_agent_id, title, problem_statement, status,
-                       pressure_level, conversation_id, participant_agent_ids,
-                       summary_text, created_at, updated_at
-                FROM problem_workspaces
-                WHERE id = $1
-                "#,
-                &[&workspace_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_problem_workspace)
-    }
-
-    fn list_problem_workspaces(&self, agent_id: Uuid, limit: usize) -> Vec<ProblemWorkspace> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, owner_agent_id, title, problem_statement, status,
-                       pressure_level, conversation_id, participant_agent_ids,
-                       summary_text, created_at, updated_at
-                FROM problem_workspaces
-                WHERE owner_agent_id = $1 OR $1 = ANY(participant_agent_ids)
-                ORDER BY updated_at DESC
-                LIMIT $2
-                "#,
-                &[&agent_id, &(limit as i64)],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_problem_workspace)
-        .collect()
-    }
-
-    fn insert_problem_workspace_invitation(
-        &self,
-        invitation: ProblemWorkspaceInvitation,
-    ) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO problem_workspace_invitations (
-                    id, workspace_id, inviter_agent_id, invitee_agent_id,
-                    message, status, created_at, responded_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                "#,
-                &[
-                    &invitation.id,
-                    &invitation.workspace_id,
-                    &invitation.inviter_agent_id,
-                    &invitation.invitee_agent_id,
-                    &invitation.message,
-                    &invitation.status,
-                    &invitation.created_at,
-                    &invitation.responded_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn get_problem_workspace_invitation(
-        &self,
-        invitation_id: Uuid,
-    ) -> Option<ProblemWorkspaceInvitation> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, workspace_id, inviter_agent_id, invitee_agent_id,
-                       message, status, created_at, responded_at
-                FROM problem_workspace_invitations
-                WHERE id = $1
-                "#,
-                &[&invitation_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_problem_workspace_invitation)
-    }
-
-    fn update_problem_workspace_invitation(
-        &self,
-        invitation: ProblemWorkspaceInvitation,
-    ) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE problem_workspace_invitations
-                SET message = $2,
-                    status = $3,
-                    responded_at = $4
-                WHERE id = $1
-                "#,
-                &[
-                    &invitation.id,
-                    &invitation.message,
-                    &invitation.status,
-                    &invitation.responded_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn list_problem_workspace_invitations(
-        &self,
-        agent_id: Uuid,
-        workspace_id: Option<Uuid>,
-        limit: usize,
-    ) -> Vec<ProblemWorkspaceInvitation> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, workspace_id, inviter_agent_id, invitee_agent_id,
-                       message, status, created_at, responded_at
-                FROM problem_workspace_invitations
-                WHERE (inviter_agent_id = $1 OR invitee_agent_id = $1)
-                  AND ($2::uuid IS NULL OR workspace_id = $2)
-                ORDER BY created_at DESC
-                LIMIT $3
-                "#,
-                &[&agent_id, &workspace_id, &(limit as i64)],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_problem_workspace_invitation)
-        .collect()
-    }
-
-    fn insert_problem_workspace_progress_record(
-        &self,
-        record: ProblemWorkspaceProgressRecord,
-    ) -> AppResult<()> {
-        self.with_client(|client| {
-            let mut tx = client.transaction()?;
-            tx.execute(
-                r#"
-                INSERT INTO problem_workspace_progress_records (
-                    id, workspace_id, author_agent_id, record_type,
-                    content_text, artifact_ref, task_status, assignee_agent_id, due_at, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                "#,
-                &[
-                    &record.id,
-                    &record.workspace_id,
-                    &record.author_agent_id,
-                    &record.record_type,
-                    &record.content,
-                    &record.artifact_ref,
-                    &record.task_status,
-                    &record.assignee_agent_id,
-                    &record.due_at,
-                    &record.created_at,
-                ],
-            )?;
-            tx.execute(
-                r#"
-                UPDATE problem_workspaces
-                SET updated_at = $2
-                WHERE id = $1
-                "#,
-                &[&record.workspace_id, &record.created_at],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-    }
-
-    fn get_problem_workspace_progress_record(
-        &self,
-        record_id: Uuid,
-    ) -> Option<ProblemWorkspaceProgressRecord> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, workspace_id, author_agent_id, record_type,
-                       content_text, artifact_ref, task_status, assignee_agent_id, due_at, created_at
-                FROM problem_workspace_progress_records
-                WHERE id = $1
-                "#,
-                &[&record_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_problem_workspace_progress_record)
-    }
-
-    fn update_problem_workspace_progress_record(
-        &self,
-        record: ProblemWorkspaceProgressRecord,
-    ) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE problem_workspace_progress_records
-                SET record_type = $2,
-                    content_text = $3,
-                    artifact_ref = $4,
-                    task_status = $5,
-                    assignee_agent_id = $6,
-                    due_at = $7
-                WHERE id = $1
-                "#,
-                &[
-                    &record.id,
-                    &record.record_type,
-                    &record.content,
-                    &record.artifact_ref,
-                    &record.task_status,
-                    &record.assignee_agent_id,
-                    &record.due_at,
-                ],
-            )?;
-            Ok(())
-        })
-    }
-
-    fn list_problem_workspace_progress_records(
-        &self,
-        workspace_id: Uuid,
-        limit: usize,
-    ) -> Vec<ProblemWorkspaceProgressRecord> {
-        self.with_client(|client| {
-            client.query(
-                r#"
-                SELECT id, workspace_id, author_agent_id, record_type,
-                       content_text, artifact_ref, task_status, assignee_agent_id, due_at, created_at
-                FROM problem_workspace_progress_records
-                WHERE workspace_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                "#,
-                &[&workspace_id, &(limit as i64)],
-            )
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_problem_workspace_progress_record)
         .collect()
     }
 }
@@ -6738,136 +5869,15 @@ fn insert_agent_staffing_action(
     Ok(())
 }
 
-fn upsert_agent_runtime_config(
-    client: &mut impl GenericClient,
-    config: &AgentRuntimeConfig,
-) -> Result<(), postgres::Error> {
-    client.execute(
-        r#"
-        INSERT INTO agent_runtime_configs (
-            id, company_id, agent_profile_id, runtime_template_id, executor_kind, status,
-            interval_seconds, max_events, daily_run_budget, daily_action_budget,
-            daily_model_input_token_budget, daily_model_output_token_budget,
-            daily_model_cost_budget_microusd,
-            model_input_price_microusd_per_million_tokens,
-            model_output_price_microusd_per_million_tokens,
-            daily_approval_request_budget,
-            company_message_policy, auto_start_assigned_tasks,
-            auto_announce_project_membership, context_max_projects,
-            context_max_conversations, context_max_inbox_events,
-            system_prompt, model_name, model_provider, provider_secret_ref,
-            allowed_model_actions, approval_required_model_actions,
-            approval_request_ttl_minutes, model_max_output_tokens, model_timeout_seconds,
-            model_max_retries, fallback_to_rules_v1, next_run_at,
-            last_run_at, last_success_at, last_error_at, last_error,
-            created_by_human_user_id, updated_by_human_user_id, created_at, updated_at,
-            model_price_catalog_entry_id
-        )
-        VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-            $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-            $22, $23, $24, $25, $26, $27, $28, $29, $30, $31,
-            $32, $33, $34, $35, $36, $37, $38, $39, $40,
-            $41, $42, $43
-        )
-        ON CONFLICT (id) DO UPDATE
-        SET executor_kind = EXCLUDED.executor_kind,
-            status = EXCLUDED.status,
-            runtime_template_id = EXCLUDED.runtime_template_id,
-            model_price_catalog_entry_id = EXCLUDED.model_price_catalog_entry_id,
-            interval_seconds = EXCLUDED.interval_seconds,
-            max_events = EXCLUDED.max_events,
-            daily_run_budget = EXCLUDED.daily_run_budget,
-            daily_action_budget = EXCLUDED.daily_action_budget,
-            daily_model_input_token_budget = EXCLUDED.daily_model_input_token_budget,
-            daily_model_output_token_budget = EXCLUDED.daily_model_output_token_budget,
-            daily_model_cost_budget_microusd = EXCLUDED.daily_model_cost_budget_microusd,
-            model_input_price_microusd_per_million_tokens = EXCLUDED.model_input_price_microusd_per_million_tokens,
-            model_output_price_microusd_per_million_tokens = EXCLUDED.model_output_price_microusd_per_million_tokens,
-            daily_approval_request_budget = EXCLUDED.daily_approval_request_budget,
-            company_message_policy = EXCLUDED.company_message_policy,
-            auto_start_assigned_tasks = EXCLUDED.auto_start_assigned_tasks,
-            auto_announce_project_membership = EXCLUDED.auto_announce_project_membership,
-            context_max_projects = EXCLUDED.context_max_projects,
-            context_max_conversations = EXCLUDED.context_max_conversations,
-            context_max_inbox_events = EXCLUDED.context_max_inbox_events,
-            system_prompt = EXCLUDED.system_prompt,
-            model_name = EXCLUDED.model_name,
-            model_provider = EXCLUDED.model_provider,
-            provider_secret_ref = EXCLUDED.provider_secret_ref,
-            allowed_model_actions = EXCLUDED.allowed_model_actions,
-            approval_required_model_actions = EXCLUDED.approval_required_model_actions,
-            approval_request_ttl_minutes = EXCLUDED.approval_request_ttl_minutes,
-            model_max_output_tokens = EXCLUDED.model_max_output_tokens,
-            model_timeout_seconds = EXCLUDED.model_timeout_seconds,
-            model_max_retries = EXCLUDED.model_max_retries,
-            fallback_to_rules_v1 = EXCLUDED.fallback_to_rules_v1,
-            next_run_at = EXCLUDED.next_run_at,
-            last_run_at = EXCLUDED.last_run_at,
-            last_success_at = EXCLUDED.last_success_at,
-            last_error_at = EXCLUDED.last_error_at,
-            last_error = EXCLUDED.last_error,
-            updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
-            updated_at = EXCLUDED.updated_at
-        "#,
-        &[
-            &config.id,
-            &config.company_id,
-            &config.agent_profile_id,
-            &config.runtime_template_id,
-            &config.executor_kind,
-            &config.status,
-            &config.interval_seconds,
-            &config.max_events,
-            &config.daily_run_budget,
-            &config.daily_action_budget,
-            &config.daily_model_input_token_budget,
-            &config.daily_model_output_token_budget,
-            &config.daily_model_cost_budget_microusd,
-            &config.model_input_price_microusd_per_million_tokens,
-            &config.model_output_price_microusd_per_million_tokens,
-            &config.daily_approval_request_budget,
-            &config.company_message_policy,
-            &config.auto_start_assigned_tasks,
-            &config.auto_announce_project_membership,
-            &config.context_max_projects,
-            &config.context_max_conversations,
-            &config.context_max_inbox_events,
-            &config.system_prompt,
-            &config.model_name,
-            &config.model_provider,
-            &config.provider_secret_ref,
-            &Json(config.allowed_model_actions.clone()),
-            &Json(config.approval_required_model_actions.clone()),
-            &config.approval_request_ttl_minutes,
-            &config.model_max_output_tokens,
-            &config.model_timeout_seconds,
-            &config.model_max_retries,
-            &config.fallback_to_rules_v1,
-            &config.next_run_at,
-            &config.last_run_at,
-            &config.last_success_at,
-            &config.last_error_at,
-            &config.last_error,
-            &config.created_by_human_user_id,
-            &config.updated_by_human_user_id,
-            &config.created_at,
-            &config.updated_at,
-            &config.model_price_catalog_entry_id,
-        ],
-    )?;
-    Ok(())
-}
-
 fn map_postgres_error(error: postgres::Error) -> AppError {
     if let Some(db_error) = error.as_db_error() {
         match db_error.code().code() {
             "23505" => AppError::Conflict(db_error.message().to_string()),
             "23503" | "23514" => AppError::Validation(db_error.message().to_string()),
-            _ => AppError::Validation(db_error.message().to_string()),
+            code => AppError::Internal(format!("postgres error {code}: {}", db_error.message())),
         }
     } else {
-        AppError::Validation(error.to_string())
+        AppError::Internal(format!("postgres client error: {error}"))
     }
 }
 
@@ -6884,6 +5894,24 @@ fn map_human_credential(row: Row) -> HumanCredential {
     HumanCredential {
         human_user_id: row.get("human_user_id"),
         password_hash: row.get("password_hash"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn map_human_harness_account(row: Row) -> HumanHarnessAccount {
+    HumanHarnessAccount {
+        human_user_id: row.get("human_user_id"),
+        provider_mode: row.get("provider_mode"),
+        harness_base_url: row.get("harness_base_url"),
+        harness_uid: row.get("harness_uid"),
+        harness_email: row.get("harness_email"),
+        space_identifier: row.get("space_identifier"),
+        status: row.get("status"),
+        attempt_count: row.get("attempt_count"),
+        last_error: row.get("last_error"),
+        last_attempt_at: row.get("last_attempt_at"),
+        provisioned_at: row.get("provisioned_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -7023,11 +6051,20 @@ fn map_agent_staffing_action(row: Row) -> AgentStaffingAction {
 }
 
 fn map_company_project(row: Row) -> CompanyProject {
+    let project_type_evidence = row
+        .try_get::<_, serde_json::Value>("project_type_evidence")
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
     CompanyProject {
         id: row.get("id"),
         company_id: row.get("company_id"),
         name: row.get("name"),
         description: row.get("description"),
+        project_type: row.get("project_type"),
+        project_type_source: row.get("project_type_source"),
+        project_type_confidence: row.get("project_type_confidence"),
+        project_type_evidence,
         status: row.get("status"),
         owner_agent_id: row.get("owner_agent_id"),
         project_group_conversation_id: row.get("project_group_conversation_id"),
@@ -7087,6 +6124,42 @@ fn map_company_project_asset(row: Row) -> CompanyProjectAsset {
     }
 }
 
+fn map_agent_memory(row: Row) -> AgentMemory {
+    let tags: Value = row.get("tags");
+    let source_refs: Value = row.get("source_refs");
+    AgentMemory {
+        id: row.get("id"),
+        company_id: row.get("company_id"),
+        owner_agent_id: row.get("owner_agent_id"),
+        scope: row.get("scope"),
+        project_id: row.get("project_id"),
+        memory_tier: row.get("memory_tier"),
+        memory_type: row.get("memory_type"),
+        topic_key: row.get("topic_key"),
+        title: row.get("title"),
+        summary: row.get("summary"),
+        when_to_use: row.get("when_to_use"),
+        tags: serde_json::from_value(tags).unwrap_or_default(),
+        importance: row.get("importance"),
+        confidence: row.get("confidence"),
+        pinned: row.get("pinned"),
+        status: row.get("status"),
+        source_refs: serde_json::from_value::<Vec<AgentMemorySourceRef>>(source_refs)
+            .unwrap_or_default(),
+        supersedes_memory_id: row.get("supersedes_memory_id"),
+        expires_at: row.get("expires_at"),
+        verified_by_agent_id: row.get("verified_by_agent_id"),
+        verified_by_human_user_id: row.get("verified_by_human_user_id"),
+        verified_at: row.get("verified_at"),
+        created_by_agent_id: row.get("created_by_agent_id"),
+        created_by_human_user_id: row.get("created_by_human_user_id"),
+        updated_by_agent_id: row.get("updated_by_agent_id"),
+        updated_by_human_user_id: row.get("updated_by_human_user_id"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
 fn map_company_project_asset_refresh_config(row: Row) -> CompanyProjectAssetRefreshConfig {
     CompanyProjectAssetRefreshConfig {
         project_id: row.get("project_id"),
@@ -7112,13 +6185,59 @@ fn map_company_codex_runner_profile(row: Row) -> CompanyCodexRunnerProfile {
         codex_profile: row.get("codex_profile"),
         model: row.get("model"),
         reasoning_effort: row.get("reasoning_effort"),
+        reasoning_summary: row.get("reasoning_summary"),
+        verbosity: row.get("verbosity"),
+        personality: row.get("personality"),
+        service_tier: row.get("service_tier"),
         sandbox_mode: row.get("sandbox_mode"),
         approval_policy: row.get("approval_policy"),
+        network_access: row.get("network_access"),
+        web_search: row.get("web_search"),
+        feature_multi_agent: row.get("feature_multi_agent"),
+        feature_remote_plugin: row.get("feature_remote_plugin"),
+        feature_hooks: row.get("feature_hooks"),
+        feature_goals: row.get("feature_goals"),
+        feature_shell_tool: row.get("feature_shell_tool"),
         max_run_seconds: row.get("max_run_seconds"),
         is_default: row.get("is_default"),
         created_by_human_user_id: row.get("created_by_human_user_id"),
         updated_by_human_user_id: row.get("updated_by_human_user_id"),
         created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn map_codex_plugin_catalog_snapshot(row: Row) -> CodexPluginCatalogSnapshot {
+    CodexPluginCatalogSnapshot {
+        runner_id: row.get("runner_id"),
+        hostname: row.get("hostname"),
+        codex_version: row.get("codex_version"),
+        fingerprint: row.get("fingerprint"),
+        installed: row.get::<_, Json<Value>>("installed").0,
+        available: row.get::<_, Json<Value>>("available").0,
+        marketplaces: row.get::<_, Json<Value>>("marketplaces").0,
+        discovered_at: row.get("discovered_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn map_codex_plugin_operation(row: Row) -> CodexPluginOperation {
+    CodexPluginOperation {
+        id: row.get("id"),
+        company_id: row.get("company_id"),
+        target_runner_id: row.get("target_runner_id"),
+        operation: row.get("operation"),
+        plugin_id: row.get("plugin_id"),
+        status: row.get("status"),
+        requested_by_human_user_id: row.get("requested_by_human_user_id"),
+        lease_owner: row.get("lease_owner"),
+        lease_expires_at: row.get("lease_expires_at"),
+        attempt_count: row.get("attempt_count"),
+        error_message: row.get("error_message"),
+        result: row.get::<_, Json<Value>>("result").0,
+        requested_at: row.get("requested_at"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
         updated_at: row.get("updated_at"),
     }
 }
@@ -7133,8 +6252,19 @@ fn map_agent_codex_trigger_config(row: Row) -> AgentCodexTriggerConfig {
         codex_profile: row.get("codex_profile"),
         model: row.get("model"),
         reasoning_effort: row.get("reasoning_effort"),
+        reasoning_summary: row.get("reasoning_summary"),
+        verbosity: row.get("verbosity"),
+        personality: row.get("personality"),
+        service_tier: row.get("service_tier"),
         sandbox_mode: row.get("sandbox_mode"),
         approval_policy: row.get("approval_policy"),
+        network_access: row.get("network_access"),
+        web_search: row.get("web_search"),
+        feature_multi_agent: row.get("feature_multi_agent"),
+        feature_remote_plugin: row.get("feature_remote_plugin"),
+        feature_hooks: row.get("feature_hooks"),
+        feature_goals: row.get("feature_goals"),
+        feature_shell_tool: row.get("feature_shell_tool"),
         max_run_seconds: row.get("max_run_seconds"),
         next_run_at: row.get("next_run_at"),
         lease_owner: row.get("lease_owner"),
@@ -7286,128 +6416,6 @@ fn map_company_realtime_event(row: Row) -> CompanyRealtimeEvent {
     }
 }
 
-fn map_agent_runtime_config(row: Row) -> AgentRuntimeConfig {
-    AgentRuntimeConfig {
-        id: row.get("id"),
-        company_id: row.get("company_id"),
-        agent_profile_id: row.get("agent_profile_id"),
-        runtime_template_id: row.get("runtime_template_id"),
-        model_price_catalog_entry_id: row.get("model_price_catalog_entry_id"),
-        executor_kind: row.get("executor_kind"),
-        status: row.get("status"),
-        interval_seconds: row.get("interval_seconds"),
-        max_events: row.get("max_events"),
-        daily_run_budget: row.get("daily_run_budget"),
-        daily_action_budget: row.get("daily_action_budget"),
-        daily_model_input_token_budget: row.get("daily_model_input_token_budget"),
-        daily_model_output_token_budget: row.get("daily_model_output_token_budget"),
-        daily_model_cost_budget_microusd: row.get("daily_model_cost_budget_microusd"),
-        model_input_price_microusd_per_million_tokens: row
-            .get("model_input_price_microusd_per_million_tokens"),
-        model_output_price_microusd_per_million_tokens: row
-            .get("model_output_price_microusd_per_million_tokens"),
-        daily_approval_request_budget: row.get("daily_approval_request_budget"),
-        company_message_policy: row.get("company_message_policy"),
-        auto_start_assigned_tasks: row.get("auto_start_assigned_tasks"),
-        auto_announce_project_membership: row.get("auto_announce_project_membership"),
-        context_max_projects: row.get("context_max_projects"),
-        context_max_conversations: row.get("context_max_conversations"),
-        context_max_inbox_events: row.get("context_max_inbox_events"),
-        system_prompt: row.get("system_prompt"),
-        model_name: row.get("model_name"),
-        model_provider: row.get("model_provider"),
-        provider_secret_ref: row.get("provider_secret_ref"),
-        allowed_model_actions: row.get::<_, Json<Vec<String>>>("allowed_model_actions").0,
-        approval_required_model_actions: row
-            .get::<_, Json<Vec<String>>>("approval_required_model_actions")
-            .0,
-        approval_request_ttl_minutes: row.get("approval_request_ttl_minutes"),
-        model_max_output_tokens: row.get("model_max_output_tokens"),
-        model_timeout_seconds: row.get("model_timeout_seconds"),
-        model_max_retries: row.get("model_max_retries"),
-        fallback_to_rules_v1: row.get("fallback_to_rules_v1"),
-        next_run_at: row.get("next_run_at"),
-        last_run_at: row.get("last_run_at"),
-        last_success_at: row.get("last_success_at"),
-        last_error_at: row.get("last_error_at"),
-        last_error: row.get("last_error"),
-        created_by_human_user_id: row.get("created_by_human_user_id"),
-        updated_by_human_user_id: row.get("updated_by_human_user_id"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
-}
-
-fn map_agent_runtime_template(row: Row) -> AgentRuntimeTemplate {
-    let Json(settings): Json<AgentRuntimeTemplateSettings> = row.get("settings");
-    AgentRuntimeTemplate {
-        id: row.get("id"),
-        company_id: row.get("company_id"),
-        name: row.get("name"),
-        description: row.get("description"),
-        status: row.get("status"),
-        settings,
-        source_agent_profile_id: row.get("source_agent_profile_id"),
-        created_by_human_user_id: row.get("created_by_human_user_id"),
-        updated_by_human_user_id: row.get("updated_by_human_user_id"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
-}
-
-fn map_agent_model_price_catalog_entry(row: Row) -> AgentModelPriceCatalogEntry {
-    AgentModelPriceCatalogEntry {
-        id: row.get("id"),
-        company_id: row.get("company_id"),
-        model_provider: row.get("model_provider"),
-        model_name: row.get("model_name"),
-        version: row.get("version"),
-        status: row.get("status"),
-        input_price_microusd_per_million_tokens: row.get("input_price_microusd_per_million_tokens"),
-        output_price_microusd_per_million_tokens: row
-            .get("output_price_microusd_per_million_tokens"),
-        notes: row.get("notes"),
-        source_agent_profile_id: row.get("source_agent_profile_id"),
-        created_by_human_user_id: row.get("created_by_human_user_id"),
-        updated_by_human_user_id: row.get("updated_by_human_user_id"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
-}
-
-fn map_agent_runtime_run(row: Row) -> AgentRuntimeRun {
-    let Json(input_payload): Json<Value> = row.get("input_payload");
-    let Json(output_payload): Json<Value> = row.get("output_payload");
-    AgentRuntimeRun {
-        id: row.get("id"),
-        runtime_config_id: row.get("runtime_config_id"),
-        company_id: row.get("company_id"),
-        agent_profile_id: row.get("agent_profile_id"),
-        trigger_type: row.get("trigger_type"),
-        executor_kind: row.get("executor_kind"),
-        status: row.get("status"),
-        input_event_count: row.get("input_event_count"),
-        processed_event_count: row.get("processed_event_count"),
-        action_count: row.get("action_count"),
-        approval_request_count: row.get("approval_request_count"),
-        model_request_count: row.get("model_request_count"),
-        model_input_tokens: row.get("model_input_tokens"),
-        model_output_tokens: row.get("model_output_tokens"),
-        model_cost_microusd: row.get("model_cost_microusd"),
-        model_input_price_microusd_per_million_tokens: row
-            .get("model_input_price_microusd_per_million_tokens"),
-        model_output_price_microusd_per_million_tokens: row
-            .get("model_output_price_microusd_per_million_tokens"),
-        model_pricing_status: row.get("model_pricing_status"),
-        remaining_pending_count: row.get("remaining_pending_count"),
-        input_payload,
-        output_payload,
-        error_message: row.get("error_message"),
-        started_at: row.get("started_at"),
-        finished_at: row.get("finished_at"),
-    }
-}
-
 fn map_agent_tool_approval_request(row: Row) -> AgentToolApprovalRequest {
     let Json(arguments): Json<Value> = row.get("arguments");
     let Json(execution_result): Json<Value> = row.get("execution_result");
@@ -7535,50 +6543,6 @@ fn map_agent_idempotency_record(row: Row) -> AgentIdempotencyRecord {
     }
 }
 
-fn map_problem_workspace(row: Row) -> ProblemWorkspace {
-    ProblemWorkspace {
-        id: row.get("id"),
-        owner_agent_id: row.get("owner_agent_id"),
-        title: row.get("title"),
-        problem_statement: row.get("problem_statement"),
-        status: row.get("status"),
-        pressure_level: row.get("pressure_level"),
-        conversation_id: row.get("conversation_id"),
-        participant_agent_ids: row.get("participant_agent_ids"),
-        summary_text: row.get("summary_text"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
-}
-
-fn map_problem_workspace_invitation(row: Row) -> ProblemWorkspaceInvitation {
-    ProblemWorkspaceInvitation {
-        id: row.get("id"),
-        workspace_id: row.get("workspace_id"),
-        inviter_agent_id: row.get("inviter_agent_id"),
-        invitee_agent_id: row.get("invitee_agent_id"),
-        message: row.get("message"),
-        status: row.get("status"),
-        created_at: row.get("created_at"),
-        responded_at: row.get("responded_at"),
-    }
-}
-
-fn map_problem_workspace_progress_record(row: Row) -> ProblemWorkspaceProgressRecord {
-    ProblemWorkspaceProgressRecord {
-        id: row.get("id"),
-        workspace_id: row.get("workspace_id"),
-        author_agent_id: row.get("author_agent_id"),
-        record_type: row.get("record_type"),
-        content: row.get("content_text"),
-        artifact_ref: row.get("artifact_ref"),
-        task_status: row.get("task_status"),
-        assignee_agent_id: row.get("assignee_agent_id"),
-        due_at: row.get("due_at"),
-        created_at: row.get("created_at"),
-    }
-}
-
 fn map_agent_inbox_event(row: Row) -> AgentInboxEvent {
     AgentInboxEvent {
         id: row.get("id"),
@@ -7606,41 +6570,18 @@ fn map_conversation_preview(row: Row) -> ConversationPreview {
 }
 
 fn map_message_view(row: Row) -> MessageView {
+    let content_json = row.get::<_, serde_json::Value>("content_json");
     MessageView {
         id: row.get("id"),
         conversation_id: row.get("conversation_id"),
         sender_agent_id: row.get("sender_agent_id"),
         sender_human_user_id: row.get("sender_human_user_id"),
         content: row.get("content_text"),
-        created_at: row.get("created_at"),
-    }
-}
-
-fn map_post_view(row: Row) -> PostView {
-    PostView {
-        id: row.get("id"),
-        author_agent_id: row.get("author_agent_id"),
-        content: row.get("content_text"),
-        created_at: row.get("published_at"),
-    }
-}
-
-fn map_post_comment_view(row: Row) -> PostCommentView {
-    PostCommentView {
-        id: row.get("id"),
-        post_id: row.get("post_id"),
-        author_agent_id: row.get("author_agent_id"),
-        content: row.get("content_text"),
-        created_at: row.get("created_at"),
-    }
-}
-
-fn map_diary_entry_view(row: Row) -> DiaryEntryView {
-    DiaryEntryView {
-        id: row.get("id"),
-        agent_profile_id: row.get("agent_profile_id"),
-        title: row.get("title"),
-        content: row.get("content_text"),
+        attachments: content_json
+            .get("attachments")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default(),
         created_at: row.get("created_at"),
     }
 }
@@ -7658,157 +6599,6 @@ fn map_social_proof_submission(row: Row) -> SocialProofSubmission {
         verification_evidence: row.get("verification_evidence"),
         raw_payload,
         created_at: row.get("created_at"),
-    }
-}
-
-fn map_friend_request_view(row: Row) -> FriendRequestView {
-    FriendRequestView {
-        id: row.get("id"),
-        requester_agent_id: row.get("requester_agent_id"),
-        target_agent_id: row.get("target_agent_id"),
-        message: row.get("message"),
-        status: row.get("status"),
-        created_at: row.get("created_at"),
-    }
-}
-
-fn map_friend_summary(row: Row) -> FriendSummary {
-    FriendSummary {
-        agent_id: row.get("id"),
-        display_name: row.get("display_name"),
-        handle: row.get("handle"),
-    }
-}
-
-fn map_friend_profile_snapshot(row: Row) -> FriendProfileSnapshot {
-    let interest_tags_json: Value = row.get("interest_tags");
-    let interest_tags =
-        serde_json::from_value::<Vec<String>>(interest_tags_json).unwrap_or_default();
-    let known_facts_json: Value = row.get("known_facts");
-    let known_facts = serde_json::from_value::<Vec<FriendProfileFactRow>>(known_facts_json)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|fact| FriendProfileFact {
-            fact_type: friend_profile_fact_type_from_str(&fact.fact_type),
-            fact_value: fact.fact_value,
-            confidence_score: fact.confidence_score as f32,
-            source_kind: friend_profile_fact_source_kind_from_str(&fact.source_kind),
-            source_ref_id: fact.source_ref_id,
-            last_observed_at: fact.last_observed_at,
-        })
-        .collect();
-
-    FriendProfileSnapshot {
-        owner_agent_id: row.get("owner_agent_id"),
-        friend_agent_id: row.get("friend_agent_id"),
-        display_name_hint: row.get("display_name_hint"),
-        capability_summary: row.get("capability_summary"),
-        interest_tags,
-        known_facts,
-        familiarity_score: row.get("familiarity_score"),
-        trust_score: row.get("trust_score"),
-        last_interaction_summary: row.get("last_interaction_summary"),
-    }
-}
-
-fn prepare_friend_profile_facts_for_storage(
-    profile: &FriendProfileSnapshot,
-) -> Vec<FriendProfileFact> {
-    let mut persisted_facts = Vec::new();
-
-    for fact in &profile.known_facts {
-        push_unique_friend_profile_fact(&mut persisted_facts, fact.clone());
-    }
-
-    for tag in &profile.interest_tags {
-        push_unique_friend_profile_fact(
-            &mut persisted_facts,
-            FriendProfileFact {
-                fact_type: FriendProfileFactType::InterestTag,
-                fact_value: tag.clone(),
-                confidence_score: 0.80,
-                source_kind: FriendProfileFactSourceKind::System,
-                source_ref_id: None,
-                last_observed_at: Utc::now(),
-            },
-        );
-    }
-
-    persisted_facts
-}
-
-fn push_unique_friend_profile_fact(
-    target: &mut Vec<FriendProfileFact>,
-    mut candidate: FriendProfileFact,
-) {
-    candidate.fact_value = candidate.fact_value.trim().to_string();
-    if candidate.fact_value.is_empty() {
-        return;
-    }
-
-    let is_duplicate = target.iter().any(|existing| {
-        std::mem::discriminant(&existing.fact_type) == std::mem::discriminant(&candidate.fact_type)
-            && existing
-                .fact_value
-                .eq_ignore_ascii_case(candidate.fact_value.as_str())
-    });
-
-    if !is_duplicate {
-        target.push(candidate);
-    }
-}
-
-fn format_numeric_5_4(value: f32) -> String {
-    format!("{value:.4}")
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct FriendProfileFactRow {
-    fact_type: String,
-    fact_value: String,
-    confidence_score: f64,
-    source_kind: String,
-    source_ref_id: Option<Uuid>,
-    last_observed_at: chrono::DateTime<Utc>,
-}
-
-fn friend_profile_fact_type_to_str(value: &FriendProfileFactType) -> &'static str {
-    match value {
-        FriendProfileFactType::DisplayName => "display_name",
-        FriendProfileFactType::Capability => "capability",
-        FriendProfileFactType::InterestTag => "interest_tag",
-        FriendProfileFactType::RecentFocus => "recent_focus",
-    }
-}
-
-fn friend_profile_fact_type_from_str(value: &str) -> FriendProfileFactType {
-    match value {
-        "display_name" => FriendProfileFactType::DisplayName,
-        "capability" => FriendProfileFactType::Capability,
-        "recent_focus" => FriendProfileFactType::RecentFocus,
-        _ => FriendProfileFactType::InterestTag,
-    }
-}
-
-fn friend_profile_fact_source_kind_to_str(value: &FriendProfileFactSourceKind) -> &'static str {
-    match value {
-        FriendProfileFactSourceKind::Manual => "manual",
-        FriendProfileFactSourceKind::Chat => "chat",
-        FriendProfileFactSourceKind::Post => "post",
-        FriendProfileFactSourceKind::Group => "group",
-        FriendProfileFactSourceKind::Workspace => "workspace",
-        FriendProfileFactSourceKind::System => "system",
-    }
-}
-
-fn friend_profile_fact_source_kind_from_str(value: &str) -> FriendProfileFactSourceKind {
-    match value {
-        "manual" => FriendProfileFactSourceKind::Manual,
-        "chat" => FriendProfileFactSourceKind::Chat,
-        "post" => FriendProfileFactSourceKind::Post,
-        "group" => FriendProfileFactSourceKind::Group,
-        "workspace" => FriendProfileFactSourceKind::Workspace,
-        _ => FriendProfileFactSourceKind::System,
     }
 }
 
@@ -7931,90 +6721,5 @@ fn conversation_type_from_str(value: &str) -> ConversationType {
     match value {
         "group" => ConversationType::Group,
         _ => ConversationType::Direct,
-    }
-}
-
-fn ordered_pair(left: Uuid, right: Uuid) -> (Uuid, Uuid) {
-    if left.as_bytes() <= right.as_bytes() {
-        (left, right)
-    } else {
-        (right, left)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prepare_friend_profile_facts_for_storage_merges_interest_tags_without_duplicates() {
-        let observed_at = Utc::now();
-        let profile = FriendProfileSnapshot {
-            owner_agent_id: Uuid::new_v4(),
-            friend_agent_id: Uuid::new_v4(),
-            display_name_hint: "Friend".into(),
-            capability_summary: "擅长知识整理".into(),
-            interest_tags: vec!["摄影".into(), "旅行".into()],
-            known_facts: vec![
-                FriendProfileFact {
-                    fact_type: FriendProfileFactType::InterestTag,
-                    fact_value: "摄影".into(),
-                    confidence_score: 0.91,
-                    source_kind: FriendProfileFactSourceKind::Chat,
-                    source_ref_id: None,
-                    last_observed_at: observed_at,
-                },
-                FriendProfileFact {
-                    fact_type: FriendProfileFactType::Capability,
-                    fact_value: "知识整理".into(),
-                    confidence_score: 0.84,
-                    source_kind: FriendProfileFactSourceKind::System,
-                    source_ref_id: None,
-                    last_observed_at: observed_at,
-                },
-            ],
-            familiarity_score: 1,
-            trust_score: 1,
-            last_interaction_summary: "最近一次互动：与 Friend 的私聊提到了摄影".into(),
-        };
-
-        let facts = prepare_friend_profile_facts_for_storage(&profile);
-
-        assert_eq!(
-            facts
-                .iter()
-                .filter(|fact| {
-                    matches!(fact.fact_type, FriendProfileFactType::InterestTag)
-                        && fact.fact_value == "摄影"
-                })
-                .count(),
-            1
-        );
-        assert_eq!(
-            facts
-                .iter()
-                .filter(|fact| {
-                    matches!(fact.fact_type, FriendProfileFactType::InterestTag)
-                        && fact.fact_value == "旅行"
-                })
-                .count(),
-            1
-        );
-        assert!(facts.iter().any(|fact| {
-            matches!(fact.fact_type, FriendProfileFactType::InterestTag)
-                && fact.fact_value == "摄影"
-                && matches!(fact.source_kind, FriendProfileFactSourceKind::Chat)
-        }));
-        assert!(facts.iter().any(|fact| {
-            matches!(fact.fact_type, FriendProfileFactType::Capability)
-                && fact.fact_value == "知识整理"
-        }));
-    }
-
-    #[test]
-    fn format_numeric_5_4_keeps_postgres_friendly_precision() {
-        assert_eq!(format_numeric_5_4(0.8), "0.8000");
-        assert_eq!(format_numeric_5_4(0.91234), "0.9123");
-        assert_eq!(format_numeric_5_4(1.0), "1.0000");
     }
 }

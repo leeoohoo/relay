@@ -4,21 +4,27 @@ use ai_chat_application::{
     AddCompanyProjectMemberInput, AgentStaffingHireInput, AgentStaffingStatusInput,
     BatchUpdateCompanyProjectTasksInput, ChangeCompanyProjectTaskDependencyInput,
     CompanyProjectAssetInput, CreateCompanyGroupConversationInput, CreateCompanyProjectInput,
-    CreateCompanyProjectStatusUpdateInput, CreateCompanyProjectTaskInput,
+    CreateCompanyProjectStatusUpdateInput, CreateCompanyProjectTaskInput, GetAgentMemoryInput,
     GetCompanyAgentContextInput, GetCompanyProjectInput, ListCompanyGroupUnreadInput,
     MarkCompanyGroupReadInput, MarkInboxEventProcessedInput, OpenCompanyDirectConversationInput,
-    OwnershipProofVerifier, PlatformApp, PlatformRepository, RemoveCompanyProjectMemberInput,
-    ReplaceCompanyProjectAssetsInput, ReplyCompanyInboxMessageInput,
-    SendCompanyMessageWithMentionsInput, UpdateCompanyAgentWorkProfileInput,
+    OwnershipProofVerifier, PlatformApp, PlatformRepository, RememberAgentMemoryInput,
+    RemoveCompanyProjectMemberInput, ReplaceCompanyProjectAssetsInput,
+    ReplyCompanyInboxMessageInput, SearchAgentMemoriesInput, SendCompanyMessageWithMentionsInput,
+    SetAgentMemoryStateInput, UpdateAgentMemoryInput, UpdateCompanyAgentWorkProfileInput,
     UpdateCompanyProjectInput, UpdateCompanyProjectRuleInput, UpdateCompanyProjectTaskInput,
+    UpsertCompanyProjectGitInput,
 };
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
-    company_profession_by_key, infer_company_profession, COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE,
+    company_profession_by_key, infer_company_profession, AgentMemorySourceRef,
+    AGENT_MEMORY_STATUS_ARCHIVED, AGENT_MEMORY_STATUS_SUPERSEDED,
     COMPANY_PERMISSION_PROJECT_CREATE, COMPANY_PERMISSION_PROJECT_MANAGE,
-    COMPANY_PERMISSION_PROJECT_RULES_MANAGE, COMPANY_PERMISSION_STAFF_HIRE,
-    COMPANY_PERMISSION_STAFF_SUSPEND, COMPANY_PERMISSION_STAFF_TERMINATE,
-    COMPANY_PERMISSION_TASK_ASSIGN, COMPANY_PERMISSION_TASK_UPDATE,
+    COMPANY_PERMISSION_STAFF_HIRE, COMPANY_PERMISSION_STAFF_SUSPEND,
+    COMPANY_PERMISSION_STAFF_TERMINATE, COMPANY_PERMISSION_TASK_ASSIGN,
+    COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
+};
+use ai_chat_infrastructure::gitness::{
+    ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
 };
 use ai_chat_shared::{AppError, AppResult};
 use chrono::{DateTime, Utc};
@@ -50,6 +56,7 @@ pub struct McpInvocation {
 pub struct McpGateway<R: PlatformRepository, V: OwnershipProofVerifier> {
     platform: PlatformApp<R, V>,
     fallback_agent_key: Option<String>,
+    project_git_provisioner: Option<Arc<dyn ProjectGitProvisioner>>,
 }
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
@@ -57,7 +64,54 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
         Self {
             platform,
             fallback_agent_key,
+            project_git_provisioner: None,
         }
+    }
+
+    pub fn with_project_git_provisioner(
+        mut self,
+        provisioner: Option<Arc<dyn ProjectGitProvisioner>>,
+    ) -> Self {
+        self.project_git_provisioner = provisioner;
+        self
+    }
+
+    fn provision_project_git(
+        &self,
+        agent_id: Uuid,
+        company_id: Uuid,
+        project: &ai_chat_application::CompanyProjectView,
+        repository_identifier: Option<String>,
+        is_public: bool,
+    ) -> AppResult<ProvisionedProjectGit> {
+        if project.project.status == PROJECT_STATUS_PAUSED {
+            return Err(AppError::Conflict(
+                "project is paused; resume it before provisioning Git".into(),
+            ));
+        }
+        let provisioner = self.project_git_provisioner.as_ref().ok_or_else(|| {
+            AppError::Validation("automatic Git provider is not configured".into())
+        })?;
+        let provisioned = provisioner.provision(ProjectGitProvisionRequest {
+            project_id: project.project.id,
+            project_name: project.project.name.clone(),
+            description: project.project.description.clone(),
+            repository_identifier,
+            is_public,
+        })?;
+        self.platform
+            .upsert_company_project_git(UpsertCompanyProjectGitInput {
+                actor_agent_id: agent_id,
+                company_id,
+                project_id: project.project.id,
+                remote_url: provisioned.remote_url.clone(),
+                host_local_path: None,
+                default_branch: Some(provisioned.default_branch.clone()),
+                auth_profile: Some(provisioned.auth_profile.clone()),
+                allow_agent_push: Some(true),
+                branch_prefix: Some("relay/".into()),
+            })?;
+        Ok(provisioned)
     }
 
     pub fn invoke(
@@ -214,6 +268,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     .collect::<Vec<_>>();
                 let pending_inbox = self.platform.list_agent_inbox_events(agent_id, true, 50)?;
                 let profession = infer_company_profession(Some(&membership.job_title));
+                let memory_overview =
+                    self.platform
+                        .agent_memory_overview(agent_id, membership.company_id, None)?;
                 let unread_group_messages = self.platform.list_company_group_unread_messages(
                     ListCompanyGroupUnreadInput {
                         actor_agent_id: agent_id,
@@ -224,6 +281,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                 )?;
                 let mut next_tools = vec![
                     "agent.profile.update",
+                    "agent.memory",
                     "agent.inbox.wait",
                     "agent.inbox.ack",
                     "company.chat",
@@ -258,6 +316,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     "conversations": context.conversations,
                     "projects": context.projects,
                     "pending_inbox": pending_inbox,
+                    "memory_overview": memory_overview,
                     "unread_group_messages": unread_group_messages,
                     "next_tools": next_tools
                 }))
@@ -297,6 +356,183 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     },
                 )?;
                 Ok(json!({ "work_profile": work_profile }))
+            }
+            "agent.memory" => {
+                let input: AgentMemoryToolInput = parse_input(input)?;
+                let _ = input.idempotency_key;
+                match input.operation {
+                    AgentMemoryOperation::Overview {
+                        company_id,
+                        project_id,
+                    } => {
+                        let overview = self
+                            .platform
+                            .agent_memory_overview(agent_id, company_id, project_id)?;
+                        Ok(json!({ "overview": overview }))
+                    }
+                    AgentMemoryOperation::Search {
+                        company_id,
+                        project_id,
+                        query,
+                        memory_tiers,
+                        memory_types,
+                        tags,
+                        status,
+                        limit,
+                    } => {
+                        let memories =
+                            self.platform
+                                .search_agent_memories(SearchAgentMemoriesInput {
+                                    actor_agent_id: agent_id,
+                                    company_id,
+                                    project_id,
+                                    query,
+                                    memory_tiers,
+                                    memory_types,
+                                    tags,
+                                    status,
+                                    limit,
+                                })?;
+                        Ok(json!({ "memories": memories }))
+                    }
+                    AgentMemoryOperation::Get {
+                        company_id,
+                        memory_id,
+                    } => {
+                        let memory = self.platform.get_agent_memory(GetAgentMemoryInput {
+                            actor_agent_id: agent_id,
+                            company_id,
+                            memory_id,
+                        })?;
+                        Ok(json!({ "memory": memory }))
+                    }
+                    AgentMemoryOperation::Remember {
+                        company_id,
+                        project_id,
+                        memory_tier,
+                        memory_type,
+                        topic_key,
+                        title,
+                        summary,
+                        when_to_use,
+                        tags,
+                        importance,
+                        confidence,
+                        source_refs,
+                        expires_at,
+                        supersedes_memory_id,
+                    } => {
+                        let memory =
+                            self.platform
+                                .remember_agent_memory(RememberAgentMemoryInput {
+                                    actor_agent_id: agent_id,
+                                    company_id,
+                                    project_id,
+                                    memory_tier,
+                                    memory_type,
+                                    topic_key,
+                                    title,
+                                    summary,
+                                    when_to_use,
+                                    tags,
+                                    importance,
+                                    confidence,
+                                    source_refs: source_refs
+                                        .into_iter()
+                                        .map(AgentMemorySourceRef::from)
+                                        .collect(),
+                                    expires_at,
+                                    supersedes_memory_id,
+                                })?;
+                        Ok(json!({ "memory": memory }))
+                    }
+                    AgentMemoryOperation::Update {
+                        company_id,
+                        memory_id,
+                        memory_tier,
+                        title,
+                        summary,
+                        when_to_use,
+                        tags,
+                        importance,
+                        confidence,
+                        expires_at,
+                        clear_expires_at,
+                    } => {
+                        let memory = self.platform.update_agent_memory(UpdateAgentMemoryInput {
+                            actor_agent_id: agent_id,
+                            company_id,
+                            memory_id,
+                            memory_tier,
+                            title,
+                            summary,
+                            when_to_use,
+                            tags,
+                            importance,
+                            confidence,
+                            expires_at,
+                            clear_expires_at,
+                        })?;
+                        Ok(json!({ "memory": memory }))
+                    }
+                    AgentMemoryOperation::Archive {
+                        company_id,
+                        memory_id,
+                    } => {
+                        let memory =
+                            self.platform
+                                .set_agent_memory_state(SetAgentMemoryStateInput {
+                                    actor_agent_id: agent_id,
+                                    company_id,
+                                    memory_id,
+                                    status: Some(AGENT_MEMORY_STATUS_ARCHIVED.into()),
+                                    pinned: Some(false),
+                                })?;
+                        Ok(json!({ "memory": memory }))
+                    }
+                    AgentMemoryOperation::Supersede {
+                        company_id,
+                        memory_id,
+                    } => {
+                        let memory =
+                            self.platform
+                                .set_agent_memory_state(SetAgentMemoryStateInput {
+                                    actor_agent_id: agent_id,
+                                    company_id,
+                                    memory_id,
+                                    status: Some(AGENT_MEMORY_STATUS_SUPERSEDED.into()),
+                                    pinned: Some(false),
+                                })?;
+                        Ok(json!({ "memory": memory }))
+                    }
+                    AgentMemoryOperation::Pin {
+                        company_id,
+                        memory_id,
+                        pinned,
+                    } => {
+                        let memory =
+                            self.platform
+                                .set_agent_memory_state(SetAgentMemoryStateInput {
+                                    actor_agent_id: agent_id,
+                                    company_id,
+                                    memory_id,
+                                    status: None,
+                                    pinned: Some(pinned),
+                                })?;
+                        Ok(json!({ "memory": memory }))
+                    }
+                    AgentMemoryOperation::Forget {
+                        company_id,
+                        memory_id,
+                    } => {
+                        self.platform.forget_agent_memory(GetAgentMemoryInput {
+                            actor_agent_id: agent_id,
+                            company_id,
+                            memory_id,
+                        })?;
+                        Ok(json!({ "forgotten": true, "memory_id": memory_id }))
+                    }
+                }
             }
             "agent.inbox.list" => {
                 let input: AgentInboxListInput = parse_input(input)?;
@@ -483,6 +719,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         name,
                         description,
                         member_agent_ids,
+                        provision_git,
                     } => {
                         let project =
                             self.platform
@@ -493,7 +730,58 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                     description,
                                     member_agent_ids,
                                 })?;
-                        Ok(json!({ "project": project }))
+                        let git_provisioning = if provision_git.unwrap_or(true) {
+                            match self
+                                .provision_project_git(agent_id, company_id, &project, None, false)
+                            {
+                                Ok(git) => json!({ "status": "ready", "git": git }),
+                                Err(error) => json!({
+                                    "status": "failed",
+                                    "code": error.code(),
+                                    "message": error.to_string(),
+                                    "retry_action": "git_provision"
+                                }),
+                            }
+                        } else {
+                            json!({ "status": "skipped" })
+                        };
+                        let project =
+                            self.platform.get_company_project(GetCompanyProjectInput {
+                                actor_agent_id: agent_id,
+                                company_id,
+                                project_id: project.project.id,
+                            })?;
+                        Ok(json!({
+                            "project": project,
+                            "git_provisioning": git_provisioning
+                        }))
+                    }
+                    CompanyProjectOperation::GitProvision {
+                        company_id,
+                        project_id,
+                        repository_identifier,
+                        is_public,
+                    } => {
+                        let project =
+                            self.platform.get_company_project(GetCompanyProjectInput {
+                                actor_agent_id: agent_id,
+                                company_id,
+                                project_id,
+                            })?;
+                        let git = self.provision_project_git(
+                            agent_id,
+                            company_id,
+                            &project,
+                            repository_identifier,
+                            is_public.unwrap_or(false),
+                        )?;
+                        let project =
+                            self.platform.get_company_project(GetCompanyProjectInput {
+                                actor_agent_id: agent_id,
+                                company_id,
+                                project_id,
+                            })?;
+                        Ok(json!({ "project": project, "git": git }))
                     }
                     CompanyProjectOperation::Update {
                         company_id,
@@ -1487,11 +1775,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                 Implementation::new("ai-chat", env!("CARGO_PKG_VERSION"))
                     .with_title("Agent Company Network")
                     .with_description(
-                        "Company identity, coworker directory, inbox, messaging, projects, and staffing tools for external AI agents.",
+                        "Company identity, private Agent memory, coworker directory, inbox, messaging, projects, and staffing tools for external AI agents.",
                     ),
             )
             .with_instructions(
-                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. Start with agent.bootstrap. Use the action field on company.chat, company.project, company.task, and company.staff. Every Relay tool response may include inbox_notice when new messages are pending; treat attention_required=true as an interrupt, call agent.inbox.wait, handle the messages, then call agent.inbox.ack. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
+                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. Start with agent.bootstrap. Each Agent owns an isolated memory set. Long-term memories are injected into that Agent's generated Skill on every wake-up; short-term memories are retrieved on demand with agent.memory search. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets, and search by topic before remembering. Every Relay tool response may include inbox_notice when new messages are pending; treat attention_required=true as an interrupt, call agent.inbox.wait, handle the messages, then call agent.inbox.ack. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
             )
     }
 
@@ -1687,6 +1975,10 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
             "agent.profile.update",
             "Update the authenticated Agent's structured responsibilities, skills, current focus, or collaboration preference so coworkers can discover what this Agent does.",
         ),
+        action_tool::<AgentMemoryToolInput>(
+            "agent.memory",
+            "Maintain this Agent's isolated two-tier memory. long_term memories are injected into the Agent-specific Skill on every Codex wake-up; short_term memories are searched on demand. Available actions: overview, search, get, remember, update, archive, supersede, pin, and forget. Store concise reusable conclusions, never raw chat, task text, logs, or secrets.",
+        ),
         read_only_tool::<AgentInboxWaitInput>(
             "agent.inbox.wait",
             "List or wait up to 25 seconds for inbox events. Set timeout_seconds to 0 for an immediate query and pending_only to false for history.",
@@ -1700,30 +1992,32 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
 }
 
 fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
-    let mut project_actions = vec!["get", "list", "status_update"];
+    // Keep delegated project-content actions in the schema even before the
+    // permission is granted. A Human can grant these permissions while a
+    // Codex turn is already running, but Codex does not refresh the MCP tool
+    // schema in the middle of that turn. Execution still rechecks the live
+    // permission in PlatformApp, so visibility here does not grant access.
+    let mut project_actions = vec![
+        "get",
+        "list",
+        "status_update",
+        "rule_update",
+        "assets_replace",
+    ];
     if permissions
         .iter()
         .any(|permission| permission == COMPANY_PERMISSION_PROJECT_CREATE)
     {
-        project_actions.push("create");
+        project_actions.extend(["create", "git_provision"]);
     }
     let can_manage_projects = permissions
         .iter()
         .any(|permission| permission == COMPANY_PERMISSION_PROJECT_MANAGE);
     if can_manage_projects {
         project_actions.extend(["update", "member_add", "member_remove"]);
-    }
-    if permissions
-        .iter()
-        .any(|permission| permission == COMPANY_PERMISSION_PROJECT_RULES_MANAGE)
-    {
-        project_actions.push("rule_update");
-    }
-    if permissions
-        .iter()
-        .any(|permission| permission == COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE)
-    {
-        project_actions.push("assets_replace");
+        if !project_actions.contains(&"git_provision") {
+            project_actions.push("git_provision");
+        }
     }
     let project_schema = tailored_action_schema::<CompanyProjectToolInput>(
         &project_actions,
@@ -1788,7 +2082,10 @@ fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         ),
         action_tool_with_schema(
             "company.project",
-            format!("Project actions available to this Agent: {}.", project_actions.join(", ")),
+            format!(
+                "Project actions visible to this Agent: {}. rule_update and assets_replace remain visible so a Human can grant their permissions during an active turn; every call is authorized against the Agent's current live permissions.",
+                project_actions.join(", ")
+            ),
             project_schema,
         ),
         read_only_tool::<CompanyEventsToolInput>(
@@ -2067,6 +2364,7 @@ fn is_public_tool_name(tool: &str) -> bool {
         tool,
         "agent.bootstrap"
             | "agent.profile.update"
+            | "agent.memory"
             | "agent.inbox.wait"
             | "agent.inbox.ack"
             | "company.chat"
@@ -2084,6 +2382,7 @@ fn input_action(input: &Value) -> Option<&str> {
 fn is_mutating_tool(tool: &str, input: &Value) -> bool {
     match tool {
         "agent.profile.update" | "agent.inbox.ack" => true,
+        "agent.memory" => !matches!(input_action(input), Some("overview" | "search" | "get")),
         "company.chat" => !matches!(input_action(input), Some("history" | "unread")),
         "company.project" => !matches!(input_action(input), Some("get" | "list")),
         "company.task" => !matches!(input_action(input), Some("get" | "list" | "my")),
@@ -2105,6 +2404,9 @@ fn success_target_ref(tool: &str, input: &Value, output: &Value) -> Option<Strin
         "agent.inbox.ack" => {
             nested_id(output, &["event", "id"]).map(|value| format!("agent_inbox:{value}"))
         }
+        "agent.memory" => nested_id(output, &["memory", "id"])
+            .or_else(|| nested_id(input, &["memory_id"]))
+            .map(|value| format!("agent_memory:{value}")),
         "company.chat" => match input_action(input) {
             Some("direct_open" | "group_create") => {
                 nested_id(output, &["conversation", "preview", "id"])
@@ -2123,7 +2425,7 @@ fn success_target_ref(tool: &str, input: &Value, output: &Value) -> Option<Strin
             }
             Some("status_update") => nested_id(output, &["status_update", "project_id"])
                 .map(|value| format!("project:{value}")),
-            Some("rule_update" | "assets_replace") => {
+            Some("rule_update" | "assets_replace" | "git_provision") => {
                 nested_id(input, &["project_id"]).map(|value| format!("project:{value}"))
             }
             _ => None,
@@ -2157,6 +2459,9 @@ fn failure_target_ref(tool: &str, input: &Value) -> Option<String> {
         "agent.inbox.ack" => {
             nested_id(input, &["event_id"]).map(|value| format!("agent_inbox:{value}"))
         }
+        "agent.memory" => nested_id(input, &["memory_id"])
+            .map(|value| format!("agent_memory:{value}"))
+            .or_else(|| nested_id(input, &["company_id"]).map(|value| format!("company:{value}"))),
         "company.chat" => match input_action(input) {
             Some("direct_open") => {
                 nested_id(input, &["target_agent_id"]).map(|value| format!("agent:{value}"))
@@ -2220,7 +2525,9 @@ fn action_status_for_error(error: &AppError) -> AgentActionStatus {
         AppError::Conflict(_) | AppError::Unauthorized(_) | AppError::RateLimited(_) => {
             AgentActionStatus::Blocked
         }
-        AppError::Validation(_) | AppError::NotFound(_) => AgentActionStatus::Failed,
+        AppError::Validation(_) | AppError::NotFound(_) | AppError::Internal(_) => {
+            AgentActionStatus::Failed
+        }
     }
 }
 
@@ -2243,6 +2550,121 @@ struct AgentProfileUpdateToolInput {
     collaboration_preference: Option<String>,
     #[schemars(description = "Optional retry key for this profile update.")]
     idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AgentMemoryToolInput {
+    #[serde(flatten)]
+    operation: AgentMemoryOperation,
+    #[schemars(description = "Optional retry key for mutating memory actions.")]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum AgentMemoryOperation {
+    Overview {
+        company_id: Uuid,
+        project_id: Option<Uuid>,
+    },
+    Search {
+        company_id: Uuid,
+        project_id: Option<Uuid>,
+        query: Option<String>,
+        #[serde(default)]
+        memory_tiers: Vec<String>,
+        #[serde(default)]
+        memory_types: Vec<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        status: Option<String>,
+        limit: Option<usize>,
+    },
+    Get {
+        company_id: Uuid,
+        memory_id: Uuid,
+    },
+    Remember {
+        company_id: Uuid,
+        project_id: Option<Uuid>,
+        #[schemars(
+            description = "Memory tier: long_term is injected into this Agent's generated Skill on every wake-up; short_term is retrieved on demand through MCP search."
+        )]
+        memory_tier: String,
+        #[schemars(
+            description = "Distilled knowledge type: fact, decision, lesson, preference, procedure, relationship, or handoff."
+        )]
+        memory_type: String,
+        #[schemars(
+            description = "Stable ASCII topic identifier used to merge knowledge instead of creating duplicates."
+        )]
+        topic_key: String,
+        title: String,
+        #[schemars(
+            description = "A concise, reusable conclusion. Never copy raw chat, task text, logs, credentials, or secrets."
+        )]
+        summary: String,
+        #[schemars(
+            description = "Describe the future situations where this memory should be applied."
+        )]
+        when_to_use: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        importance: Option<i32>,
+        confidence: Option<i32>,
+        #[serde(default)]
+        source_refs: Vec<AgentMemorySourceRefToolInput>,
+        expires_at: Option<DateTime<Utc>>,
+        supersedes_memory_id: Option<Uuid>,
+    },
+    Update {
+        company_id: Uuid,
+        memory_id: Uuid,
+        memory_tier: Option<String>,
+        title: Option<String>,
+        summary: Option<String>,
+        when_to_use: Option<String>,
+        tags: Option<Vec<String>>,
+        importance: Option<i32>,
+        confidence: Option<i32>,
+        expires_at: Option<DateTime<Utc>>,
+        #[serde(default)]
+        clear_expires_at: bool,
+    },
+    Archive {
+        company_id: Uuid,
+        memory_id: Uuid,
+    },
+    Supersede {
+        company_id: Uuid,
+        memory_id: Uuid,
+    },
+    Pin {
+        company_id: Uuid,
+        memory_id: Uuid,
+        pinned: bool,
+    },
+    Forget {
+        company_id: Uuid,
+        memory_id: Uuid,
+    },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AgentMemorySourceRefToolInput {
+    source_type: String,
+    source_id: Uuid,
+    label: Option<String>,
+}
+
+impl From<AgentMemorySourceRefToolInput> for AgentMemorySourceRef {
+    fn from(value: AgentMemorySourceRefToolInput) -> Self {
+        Self {
+            source_type: value.source_type,
+            source_id: value.source_id,
+            label: value.label,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2355,6 +2777,19 @@ enum CompanyProjectOperation {
         name: String,
         description: Option<String>,
         member_agent_ids: Vec<Uuid>,
+        #[schemars(
+            description = "Automatically create a private repository and project token. Defaults to true when omitted."
+        )]
+        provision_git: Option<bool>,
+    },
+    GitProvision {
+        company_id: Uuid,
+        project_id: Uuid,
+        #[schemars(
+            description = "Optional safe repository identifier. Relay generates one from the project name and UUID when omitted."
+        )]
+        repository_identifier: Option<String>,
+        is_public: Option<bool>,
     },
     Update {
         company_id: Uuid,
@@ -2822,19 +3257,23 @@ mod tests {
     use ai_chat_application::{
         CreateCompanyAgentInput, CreateCompanyInput, DevLoginInput, MemoryPlatformRepository,
     };
-    use ai_chat_domain::company::{COMPANY_AGENT_ROLE_MANAGER, COMPANY_AGENT_ROLE_MEMBER};
+    use ai_chat_domain::company::{
+        COMPANY_AGENT_ROLE_MANAGER, COMPANY_AGENT_ROLE_MEMBER,
+        COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE, COMPANY_PERMISSION_PROJECT_RULES_MANAGE,
+    };
 
     #[test]
-    fn standard_surface_has_four_identity_profile_and_inbox_tools() {
+    fn standard_surface_has_five_identity_profile_memory_and_inbox_tools() {
         let tools = standard_mcp_tools();
         let names = tools
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<Vec<_>>();
 
-        assert_eq!(names.len(), 4);
+        assert_eq!(names.len(), 5);
         assert!(names.contains(&"agent.bootstrap"));
         assert!(names.contains(&"agent.profile.update"));
+        assert!(names.contains(&"agent.memory"));
         assert!(names.contains(&"agent.inbox.wait"));
         assert!(names.contains(&"agent.inbox.ack"));
         assert!(tools.iter().all(|tool| {
@@ -2846,7 +3285,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_surface_exposes_eight_tools_and_hides_legacy_names() {
+    fn compact_surface_exposes_nine_tools_and_hides_legacy_names() {
         let mut tools = standard_mcp_tools();
         tools.extend(company_mcp_tools(&[
             COMPANY_PERMISSION_PROJECT_CREATE.into(),
@@ -2858,7 +3297,7 @@ mod tests {
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
         assert!(names.contains(&"company.chat"));
         assert!(names.contains(&"company.project"));
         assert!(names.contains(&"company.task"));
@@ -3031,7 +3470,7 @@ mod tests {
     }
 
     #[test]
-    fn company_action_schemas_only_expose_authorized_project_and_task_actions() {
+    fn company_action_schemas_keep_hot_grant_project_actions_visible() {
         let member_tools = company_mcp_tools(&[COMPANY_PERMISSION_TASK_UPDATE.into()]);
         let member_project = member_tools
             .iter()
@@ -3040,10 +3479,16 @@ mod tests {
         let member_project_actions = tool_schema_actions(member_project);
         assert_eq!(
             member_project_actions,
-            ["get", "list", "status_update"]
-                .into_iter()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
+            [
+                "assets_replace",
+                "get",
+                "list",
+                "rule_update",
+                "status_update",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
         );
         let member_project_schema = serde_json::to_string(&member_project.input_schema)
             .expect("member project schema should serialize");
@@ -3108,6 +3553,7 @@ mod tests {
         let manager_project_actions = tool_schema_actions(manager_project);
         for action in [
             "create",
+            "git_provision",
             "update",
             "member_add",
             "member_remove",

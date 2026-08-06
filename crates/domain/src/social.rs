@@ -41,154 +41,30 @@ impl ConversationType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageAttachmentView {
+    pub id: Uuid,
+    pub kind: String,
+    pub file_name: String,
+    pub relative_path: Option<String>,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub local_path: Option<String>,
+    #[serde(default)]
+    pub directory_entries: Vec<String>,
+    #[serde(default)]
+    pub purpose: Option<String>,
+    #[serde(default)]
+    pub storage_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageView {
     pub id: Uuid,
     pub conversation_id: Uuid,
     pub sender_agent_id: Option<Uuid>,
     pub sender_human_user_id: Option<Uuid>,
     pub content: String,
+    #[serde(default)]
+    pub attachments: Vec<MessageAttachmentView>,
     pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostView {
-    pub id: Uuid,
-    pub author_agent_id: Uuid,
-    pub content: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostCommentView {
-    pub id: Uuid,
-    pub post_id: Uuid,
-    pub author_agent_id: Uuid,
-    pub content: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiaryEntryView {
-    pub id: Uuid,
-    pub agent_profile_id: Uuid,
-    pub title: Option<String>,
-    pub content: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FriendSummary {
-    pub agent_id: Uuid,
-    pub display_name: String,
-    pub handle: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FriendRequestView {
-    pub id: Uuid,
-    pub requester_agent_id: Uuid,
-    pub target_agent_id: Uuid,
-    pub message: String,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FriendRequestDirection {
-    Incoming,
-    Outgoing,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FriendRequestObservationView {
-    pub request: FriendRequestView,
-    pub direction: FriendRequestDirection,
-    pub counterpart_agent_id: Uuid,
-    pub counterpart_display_name: String,
-    pub counterpart_handle: String,
-    pub counterpart_persona: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedItemView {
-    pub post_id: Uuid,
-    pub author_agent_id: Uuid,
-    pub author_display_name: String,
-    pub content: String,
-    pub created_at: DateTime<Utc>,
-    pub comments: Vec<FeedCommentView>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedCommentView {
-    pub comment_id: Uuid,
-    pub post_id: Uuid,
-    pub author_agent_id: Uuid,
-    pub author_display_name: String,
-    pub content: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedDiscoveryCandidateView {
-    pub candidate_agent_id: Uuid,
-    pub candidate_display_name: String,
-    pub candidate_handle: String,
-    pub candidate_persona: String,
-    pub source_post_id: Uuid,
-    pub source_post_content: String,
-    pub shared_interest_tags: Vec<String>,
-    pub match_score: i32,
-    pub reason_summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveryFriendRequestView {
-    pub candidate: FeedDiscoveryCandidateView,
-    pub request: FriendRequestView,
-    pub generated_message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FriendProfileFactType {
-    DisplayName,
-    Capability,
-    InterestTag,
-    RecentFocus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FriendProfileFactSourceKind {
-    Manual,
-    Chat,
-    Post,
-    Group,
-    Workspace,
-    System,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FriendProfileFact {
-    pub fact_type: FriendProfileFactType,
-    pub fact_value: String,
-    pub confidence_score: f32,
-    pub source_kind: FriendProfileFactSourceKind,
-    pub source_ref_id: Option<Uuid>,
-    pub last_observed_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FriendProfileSnapshot {
-    pub owner_agent_id: Uuid,
-    pub friend_agent_id: Uuid,
-    pub display_name_hint: String,
-    pub capability_summary: String,
-    pub interest_tags: Vec<String>,
-    pub known_facts: Vec<FriendProfileFact>,
-    pub familiarity_score: i32,
-    pub trust_score: i32,
-    pub last_interaction_summary: String,
 }

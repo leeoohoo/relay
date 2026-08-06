@@ -2,7 +2,8 @@ use std::{
     collections::HashSet,
     fs,
     panic::{catch_unwind, AssertUnwindSafe},
-    path::Path,
+    path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
     time::Duration as StdDuration,
 };
@@ -10,37 +11,41 @@ use std::{
 use async_trait::async_trait;
 use chrono::Duration;
 use futures_util::{stream::FuturesUnordered, StreamExt};
+use tokio::{io::AsyncWriteExt, process::Command};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 use ai_chat_application::{
-    CompleteAgentCodexTriggerLeaseInput, CreateCodexApprovalRequestInput, PlatformApp,
+    CompleteAgentCodexTriggerLeaseInput, CreateCodexApprovalRequestInput, GetCompanyProjectInput,
+    PlatformApp,
 };
 use ai_chat_domain::{
     agent_identity::AgentProfile,
     company::{
-        infer_company_profession, AgentCodexRunActivity, AgentCodexSession,
-        AgentCodexTriggerConfig, AgentCodexTriggerRun, AGENT_CODEX_RUN_STATUS_FAILED,
+        company_profession_by_key, company_project_type_by_key, infer_company_profession,
+        AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
+        AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation, CompanyProject,
+        CompanyProjectRule, AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
         AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
-        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
-        AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXPIRED,
-        AGENT_TOOL_APPROVAL_STATUS_FAILED, AGENT_TOOL_APPROVAL_STATUS_REJECTED,
-        COMPANY_PROFESSION_BACKEND_ENGINEER, COMPANY_PROFESSION_BUSINESS_ANALYST,
-        COMPANY_PROFESSION_DATA_ENGINEER, COMPANY_PROFESSION_DEVOPS_ENGINEER,
-        COMPANY_PROFESSION_DOMAIN_EXPERT, COMPANY_PROFESSION_FRONTEND_ENGINEER,
-        COMPANY_PROFESSION_GENERAL_MEMBER, COMPANY_PROFESSION_IMPLEMENTATION_CONSULTANT,
-        COMPANY_PROFESSION_MOBILE_ENGINEER, COMPANY_PROFESSION_OPERATIONS_SPECIALIST,
-        COMPANY_PROFESSION_PRODUCT_DESIGNER, COMPANY_PROFESSION_PRODUCT_MANAGER,
-        COMPANY_PROFESSION_PROJECT_MANAGER, COMPANY_PROFESSION_QA_ENGINEER,
-        COMPANY_PROFESSION_SOFTWARE_ENGINEER, COMPANY_PROFESSION_SOLUTION_ARCHITECT,
-        COMPANY_PROFESSION_TECHNICAL_MANAGER, COMPANY_PROFESSION_UI_DESIGNER,
-        COMPANY_PROFESSION_UX_DESIGNER,
+        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SETTING_INHERIT,
+        AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
+        AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
+        AGENT_TOOL_APPROVAL_STATUS_REJECTED, CODEX_PLUGIN_OPERATION_REFRESH,
+        COMPANY_SKILL_LANGUAGE_EN,
     },
 };
 use ai_chat_infrastructure::{
+    build_repository,
+    codex_control::{
+        agent_trigger_batch_size_from_env, ClaimedCodexControlRequest, CodexControlRequestKind,
+        CodexControlStore, CodexDefaultConfigSummary, CompanyCodexCliSettings,
+        CODEX_CLI_OPERATION_FAILED, CODEX_CLI_OPERATION_IDLE, CODEX_DEFAULT_AUTH_STATUS_UNKNOWN,
+        CODEX_INSTALLER_POSIX_SHELL, CODEX_INSTALLER_POWERSHELL,
+    },
     codex_trigger::{
-        CodexApprovalDecision, CodexApprovalHandler, CodexApprovalRequest, CodexProgressEvent,
-        CodexProgressHandler, CodexRunRequest, CodexRunStatus, CodexTriggerRunner,
+        CodexApprovalDecision, CodexApprovalHandler, CodexApprovalRequest,
+        CodexCancellationHandler, CodexModelCatalogFile, CodexProgressEvent, CodexProgressHandler,
+        CodexRunRequest, CodexRunStatus, CodexTriggerRunner,
     },
     config::ApiConfig,
     git_workspace::{GitWorkspaceManager, PreparedGitWorkspace},
@@ -49,56 +54,34 @@ use ai_chat_infrastructure::{
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
 type TriggerPlatform = PlatformApp<RepositoryAdapter>;
-const CODEX_SESSION_POLICY_VERSION: &str = "relay-skills-v4";
+const CODEX_SESSION_POLICY_VERSION: &str = "relay-skills-v8";
 const EMPLOYEE_SKILL_TEMPLATE: &str =
     include_str!("../../../skills/relay-company-employee/SKILL.md");
+const EMPLOYEE_SKILL_TEMPLATE_EN: &str =
+    include_str!("../../../skills/relay-company-employee/references/en.md");
 const STAFFING_SKILL_TEMPLATE: &str =
     include_str!("../../../skills/relay-company-staffing-manager/SKILL.md");
-const PROJECT_MANAGER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-project-manager/SKILL.md");
-const PRODUCT_MANAGER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-product-manager/SKILL.md");
-const TECHNICAL_MANAGER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-technical-manager/SKILL.md");
-const SOLUTION_ARCHITECT_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-solution-architect/SKILL.md");
-const SOFTWARE_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-software-engineer/SKILL.md");
-const FRONTEND_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-frontend-engineer/SKILL.md");
-const BACKEND_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-backend-engineer/SKILL.md");
-const MOBILE_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-mobile-engineer/SKILL.md");
-const DATA_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-data-engineer/SKILL.md");
-const DEVOPS_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-devops-engineer/SKILL.md");
-const QA_ENGINEER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-qa-engineer/SKILL.md");
-const PRODUCT_DESIGNER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-product-designer/SKILL.md");
-const UI_DESIGNER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-ui-designer/SKILL.md");
-const UX_DESIGNER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-ux-designer/SKILL.md");
-const BUSINESS_ANALYST_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-business-analyst/SKILL.md");
-const IMPLEMENTATION_CONSULTANT_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-implementation-consultant/SKILL.md");
-const DOMAIN_EXPERT_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-domain-expert/SKILL.md");
-const OPERATIONS_SPECIALIST_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-operations-specialist/SKILL.md");
-const GENERAL_MEMBER_SKILL_TEMPLATE: &str =
-    include_str!("../../../skills/relay-profession-general-member/SKILL.md");
+const STAFFING_SKILL_TEMPLATE_EN: &str =
+    include_str!("../../../skills/relay-company-staffing-manager/references/en.md");
 
 #[derive(Debug, Clone)]
 struct TriggerServiceConfig {
     lease_owner: String,
+    plugin_host_id: String,
+    hostname: String,
     poll_interval: StdDuration,
     batch_size: usize,
     run_once: bool,
+    model_catalog_path: PathBuf,
+    model_discovery_profiles: Vec<String>,
+    model_discovery_interval: StdDuration,
+    default_auth_discovery_interval: StdDuration,
+    mcp_discovery_interval: StdDuration,
+    plugin_discovery_interval: StdDuration,
+    codex_auto_install: bool,
+    codex_install_url: String,
+    codex_update_registry_url: String,
+    codex_update_check_interval: StdDuration,
 }
 
 #[derive(Debug)]
@@ -107,11 +90,32 @@ struct TriggerExecution {
     error_message: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct EffectiveCodexCliSettings {
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    reasoning_summary: Option<String>,
+    verbosity: Option<String>,
+    personality: Option<String>,
+    service_tier: Option<String>,
+    sandbox_mode: String,
+    approval_policy: String,
+    network_access: bool,
+    web_search: String,
+    feature_multi_agent: bool,
+    feature_remote_plugin: bool,
+    feature_hooks: bool,
+    feature_goals: bool,
+    feature_shell_tool: bool,
+}
+
 #[derive(Debug)]
 struct PreparedRelaySkills {
     employee_name: String,
     profession_name: String,
+    project_name: Option<String>,
     staffing_name: Option<String>,
+    #[cfg(test)]
     version_hash: String,
 }
 
@@ -128,6 +132,28 @@ struct PlatformCodexApprovalHandler {
 struct PlatformCodexProgressHandler {
     platform: TriggerPlatform,
     run_id: Uuid,
+}
+
+#[derive(Clone)]
+struct PlatformProjectCancellationHandler {
+    platform: TriggerPlatform,
+    project_id: Uuid,
+}
+
+impl CodexCancellationHandler for PlatformProjectCancellationHandler {
+    fn should_cancel(&self) -> bool {
+        match self.platform.is_company_project_paused(self.project_id) {
+            Ok(paused) => paused,
+            Err(error) => {
+                tracing::error!(
+                    project_id = %self.project_id,
+                    error = %error,
+                    "failed to read project pause state; cancelling the Codex run defensively"
+                );
+                true
+            }
+        }
+    }
 }
 
 impl CodexProgressHandler for PlatformCodexProgressHandler {
@@ -222,8 +248,9 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let api_config = ApiConfig::from_env();
-    let platform = PlatformApp::new(RepositoryAdapter::build(&api_config)?);
+    let platform = PlatformApp::new(build_repository(&api_config)?);
     let workspace_manager = GitWorkspaceManager::from_env()?;
+    let codex_control = CodexControlStore::from_env()?;
     let codex_runner = CodexTriggerRunner::from_env()?;
     let config = TriggerServiceConfig::from_env()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -233,6 +260,7 @@ fn main() -> anyhow::Result<()> {
         &platform,
         &workspace_manager,
         &codex_runner,
+        &codex_control,
         &config,
     ))
 }
@@ -241,18 +269,108 @@ async fn run_trigger_loop(
     platform: &TriggerPlatform,
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
+    codex_control: &CodexControlStore,
     config: &TriggerServiceConfig,
 ) -> anyhow::Result<()> {
+    let initial_batch_size = effective_agent_trigger_batch_size(codex_control, config.batch_size)
+        .unwrap_or(config.batch_size);
     tracing::info!(
         lease_owner = %config.lease_owner,
         poll_interval_seconds = config.poll_interval.as_secs(),
-        batch_size = config.batch_size,
+        environment_batch_size = config.batch_size,
+        effective_batch_size = initial_batch_size,
         "local Codex Agent Trigger started"
     );
 
     let mut running = FuturesUnordered::new();
+    let mut plugin_operations = FuturesUnordered::new();
+    let mut shutdown = Box::pin(shutdown_signal());
+    let mut next_model_discovery = tokio::time::Instant::now();
+    let mut next_default_auth_discovery = tokio::time::Instant::now();
+    let mut next_mcp_discovery = tokio::time::Instant::now();
+    let mut next_plugin_discovery = tokio::time::Instant::now();
+    let mut next_update_check = tokio::time::Instant::now();
+    publish_codex_runtime_probe(codex_control, codex_runner)?;
+    if codex_runner.detect_version().is_none() && config.codex_auto_install {
+        let runtime = codex_control.runtime()?;
+        if matches!(
+            runtime.operation_status.as_str(),
+            CODEX_CLI_OPERATION_IDLE | CODEX_CLI_OPERATION_FAILED
+        ) {
+            if let Err(error) = codex_control.enqueue_cli_install() {
+                tracing::warn!(error = %sanitize_error(&error.to_string()), "cannot queue managed Codex CLI installation");
+            }
+        }
+    }
     loop {
-        let available_slots = config.batch_size.saturating_sub(running.len());
+        if running.is_empty() && plugin_operations.is_empty() {
+            if let Some(request) = codex_control.claim_next_request()? {
+                process_codex_control_request(codex_control, codex_runner, config, request).await;
+                publish_codex_runtime_probe(codex_control, codex_runner)?;
+                next_model_discovery = tokio::time::Instant::now();
+            }
+        }
+        if tokio::time::Instant::now() >= next_update_check {
+            refresh_codex_latest_version(codex_control, codex_runner, config).await;
+            next_update_check = tokio::time::Instant::now() + config.codex_update_check_interval;
+        }
+        if tokio::time::Instant::now() >= next_model_discovery {
+            if let Err(error) =
+                refresh_codex_model_catalog(codex_control, codex_runner, config).await
+            {
+                tracing::warn!(
+                    error = %sanitize_error(&error.to_string()),
+                    "failed to refresh the local Codex model catalog"
+                );
+            }
+            next_model_discovery = tokio::time::Instant::now() + config.model_discovery_interval;
+        }
+        if tokio::time::Instant::now() >= next_default_auth_discovery {
+            refresh_codex_default_auth(codex_control, codex_runner).await;
+            next_default_auth_discovery =
+                tokio::time::Instant::now() + config.default_auth_discovery_interval;
+        }
+        if tokio::time::Instant::now() >= next_mcp_discovery {
+            refresh_codex_mcp_catalog(codex_control, codex_runner).await;
+            next_mcp_discovery = tokio::time::Instant::now() + config.mcp_discovery_interval;
+        }
+        if tokio::time::Instant::now() >= next_plugin_discovery {
+            if let Err(error) = refresh_codex_plugin_catalog(platform, codex_runner, config).await {
+                tracing::warn!(
+                    error = %sanitize_error(&error.to_string()),
+                    "failed to refresh the local Codex plugin catalog"
+                );
+            }
+            next_plugin_discovery = tokio::time::Instant::now() + config.plugin_discovery_interval;
+        }
+        if plugin_operations.is_empty() {
+            let claimed = platform
+                .claim_codex_plugin_operations(&config.plugin_host_id, &config.lease_owner, 1)
+                .map_err(anyhow::Error::msg)?;
+            for operation in claimed {
+                plugin_operations.push(process_codex_plugin_operation(
+                    platform,
+                    codex_runner,
+                    config,
+                    operation,
+                ));
+            }
+        }
+        let effective_batch_size = match effective_agent_trigger_batch_size(
+            codex_control,
+            config.batch_size,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    error = %sanitize_error(&error.to_string()),
+                    environment_batch_size = config.batch_size,
+                    "cannot read managed Agent Trigger batch size; using the environment default"
+                );
+                config.batch_size
+            }
+        };
+        let available_slots = effective_batch_size.saturating_sub(running.len());
         if available_slots > 0 {
             let claimed = platform
                 .claim_due_agent_codex_triggers(&config.lease_owner, available_slots)
@@ -262,6 +380,7 @@ async fn run_trigger_loop(
                     platform,
                     workspace_manager,
                     codex_runner,
+                    codex_control,
                     config,
                     trigger,
                 ));
@@ -270,19 +389,71 @@ async fn run_trigger_loop(
 
         if config.run_once {
             while running.next().await.is_some() {}
+            while plugin_operations.next().await.is_some() {}
             break;
         }
 
-        if running.is_empty() {
-            tokio::time::sleep(config.poll_interval).await;
+        let shutdown_requested = if running.is_empty() && plugin_operations.is_empty() {
+            tokio::select! {
+                _ = tokio::time::sleep(config.poll_interval) => false,
+                _ = &mut shutdown => true,
+            }
         } else {
             tokio::select! {
-                _ = tokio::time::sleep(config.poll_interval) => {}
-                _ = running.next() => {}
+                _ = tokio::time::sleep(config.poll_interval) => false,
+                _ = running.next(), if !running.is_empty() => false,
+                _ = plugin_operations.next(), if !plugin_operations.is_empty() => false,
+                _ = &mut shutdown => true,
             }
+        };
+        if shutdown_requested {
+            tracing::info!(
+                lease_owner = %config.lease_owner,
+                running_cycles = running.len(),
+                "local Codex Agent Trigger is shutting down"
+            );
+            drop(running);
+            match platform.abandon_agent_codex_trigger_leases(&config.lease_owner) {
+                Ok(abandoned_runs) => tracing::info!(
+                    lease_owner = %config.lease_owner,
+                    abandoned_runs,
+                    "released Codex trigger leases during shutdown"
+                ),
+                Err(error) => tracing::error!(
+                    lease_owner = %config.lease_owner,
+                    error = %sanitize_error(&error.to_string()),
+                    "failed to release Codex trigger leases during shutdown"
+                ),
+            }
+            break;
         }
     }
     Ok(())
+}
+
+fn effective_agent_trigger_batch_size(
+    codex_control: &CodexControlStore,
+    environment_default: usize,
+) -> AppResult<usize> {
+    Ok(codex_control
+        .agent_trigger_preferences(environment_default)?
+        .batch_size)
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 impl TriggerServiceConfig {
@@ -297,34 +468,737 @@ impl TriggerServiceConfig {
             ));
         }
         let host = whoami::fallible::hostname().unwrap_or_else(|_| "unknown-host".into());
+        let os_user = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_else(|_| "unknown-user".into());
+        let plugin_host_id = std::env::var("AGENT_TRIGGER_PLUGIN_HOST_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("{host}:{os_user}"));
+        if plugin_host_id.chars().count() > 160 || plugin_host_id.chars().any(char::is_control) {
+            return Err(AppError::Validation(
+                "AGENT_TRIGGER_PLUGIN_HOST_ID is invalid".into(),
+            ));
+        }
         let poll_interval_seconds = std::env::var("AGENT_TRIGGER_POLL_INTERVAL_SECONDS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .map(|value| value.clamp(1, 60))
             .unwrap_or(2);
-        let batch_size = std::env::var("AGENT_TRIGGER_BATCH_SIZE")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .map(|value| value.clamp(1, 100))
-            .unwrap_or(10);
+        let batch_size = agent_trigger_batch_size_from_env();
         let run_once = bool_env("AGENT_TRIGGER_RUN_ONCE", false);
+        let model_catalog_path = std::env::var("AGENT_TRIGGER_MODEL_CATALOG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(".relay-agent-trigger/codex-models.json"));
+        let model_discovery_profiles = std::env::var("AGENT_TRIGGER_MODEL_DISCOVERY_PROFILES")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|profiles| !profiles.is_empty())
+            .unwrap_or_else(|| vec!["default".into()]);
+        let model_discovery_interval = StdDuration::from_secs(
+            std::env::var("AGENT_TRIGGER_MODEL_DISCOVERY_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(60, 86_400))
+                .unwrap_or(900),
+        );
+        let default_auth_discovery_interval = StdDuration::from_secs(
+            std::env::var("AGENT_TRIGGER_CODEX_AUTH_DISCOVERY_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(15, 3_600))
+                .unwrap_or(60),
+        );
+        let mcp_discovery_interval = StdDuration::from_secs(
+            std::env::var("AGENT_TRIGGER_MCP_DISCOVERY_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(15, 3_600))
+                .unwrap_or(60),
+        );
+        let plugin_discovery_interval = StdDuration::from_secs(
+            std::env::var("AGENT_TRIGGER_PLUGIN_DISCOVERY_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(30, 86_400))
+                .unwrap_or(300),
+        );
+        let codex_auto_install = bool_env("AGENT_TRIGGER_CODEX_AUTO_INSTALL", false);
+        let codex_install_url = std::env::var("AGENT_TRIGGER_CODEX_INSTALL_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| default_codex_install_url(std::env::consts::OS).into());
+        if !codex_install_url.starts_with("https://") {
+            return Err(AppError::Validation(
+                "AGENT_TRIGGER_CODEX_INSTALL_URL must use https".into(),
+            ));
+        }
+        let codex_update_registry_url = std::env::var("AGENT_TRIGGER_CODEX_UPDATE_REGISTRY_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "https://registry.npmjs.org/@openai%2Fcodex/latest".into());
+        if !codex_update_registry_url.starts_with("https://") {
+            return Err(AppError::Validation(
+                "AGENT_TRIGGER_CODEX_UPDATE_REGISTRY_URL must use https".into(),
+            ));
+        }
+        let codex_update_check_interval = StdDuration::from_secs(
+            std::env::var("AGENT_TRIGGER_CODEX_UPDATE_CHECK_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(300, 86_400))
+                .unwrap_or(3_600),
+        );
         Ok(Self {
             lease_owner: format!("{host}:{instance}"),
+            plugin_host_id,
+            hostname: host,
             poll_interval: StdDuration::from_secs(poll_interval_seconds),
             batch_size,
             run_once,
+            model_catalog_path,
+            model_discovery_profiles,
+            model_discovery_interval,
+            default_auth_discovery_interval,
+            mcp_discovery_interval,
+            plugin_discovery_interval,
+            codex_auto_install,
+            codex_install_url,
+            codex_update_registry_url,
+            codex_update_check_interval,
         })
     }
+}
+
+fn publish_codex_runtime_probe(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+) -> AppResult<()> {
+    codex_control.publish_runtime_probe(
+        codex_runner.detect_version(),
+        codex_runner.executable_source(),
+        codex_runner.executable_path(),
+    )?;
+    Ok(())
+}
+
+async fn refresh_codex_default_auth(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+) {
+    let result = codex_runner.probe_default_auth().await;
+    let publish_result = match result {
+        Ok(probe) => codex_control.publish_default_auth_probe(
+            &probe.status,
+            probe.method,
+            probe.config,
+            None,
+        ),
+        Err(error) => codex_control.publish_default_auth_probe(
+            CODEX_DEFAULT_AUTH_STATUS_UNKNOWN,
+            None,
+            CodexDefaultConfigSummary::default(),
+            Some(sanitize_error(&error.to_string())),
+        ),
+    };
+    if let Err(error) = publish_result {
+        tracing::warn!(
+            error = %sanitize_error(&error.to_string()),
+            "failed to publish the host Codex authentication status"
+        );
+    }
+}
+
+async fn refresh_codex_mcp_catalog(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+) {
+    let selectors = match codex_control.list_mcp_target_selectors() {
+        Ok(selectors) => selectors,
+        Err(error) => {
+            tracing::warn!(error = %sanitize_error(&error.to_string()), "failed to list Codex MCP target environments");
+            return;
+        }
+    };
+    for selector in selectors {
+        refresh_codex_mcp_environment(codex_control, codex_runner, &selector).await;
+    }
+}
+
+async fn refresh_codex_mcp_environment(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    selector: &str,
+) {
+    let result = codex_runner.discover_mcp_servers(selector).await;
+    let publish_result = match result {
+        Ok(servers) => codex_control.publish_mcp_snapshot(selector, servers, None),
+        Err(error) => codex_control.publish_mcp_snapshot(
+            selector,
+            Vec::new(),
+            Some(sanitize_error(&error.to_string())),
+        ),
+    };
+    if let Err(error) = publish_result {
+        tracing::warn!(
+            selector,
+            error = %sanitize_error(&error.to_string()),
+            "failed to publish the Codex MCP catalog"
+        );
+    }
+}
+
+async fn process_codex_control_request(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+    claimed: ClaimedCodexControlRequest,
+) {
+    if let Err(error) = codex_control.mark_request_processing(&claimed.request) {
+        tracing::error!(error = %sanitize_error(&error.to_string()), "cannot mark Codex control request as processing");
+        return;
+    }
+    let result =
+        execute_codex_control_request(codex_control, codex_runner, config, &claimed.request).await;
+    match result {
+        Ok(()) => {
+            if let Err(error) = codex_control.finish_request(claimed) {
+                tracing::error!(error = %sanitize_error(&error.to_string()), "cannot finish Codex control request");
+            }
+        }
+        Err(error) => {
+            let message = sanitize_error(&error.to_string());
+            tracing::warn!(error = %message, "Codex control request failed");
+            if let Err(store_error) = codex_control.fail_request(claimed, &message) {
+                tracing::error!(error = %sanitize_error(&store_error.to_string()), "cannot persist Codex control request failure");
+            }
+        }
+    }
+}
+
+async fn execute_codex_control_request(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+    request: &ai_chat_infrastructure::codex_control::CodexControlRequest,
+) -> AppResult<()> {
+    match request.kind {
+        CodexControlRequestKind::InstallCli => {
+            let version = if let Some(version) = codex_runner.detect_version() {
+                version
+            } else {
+                install_managed_codex(codex_control, codex_runner, config).await?
+            };
+            codex_control.mark_cli_operation_succeeded(
+                version,
+                codex_runner.executable_source(),
+                codex_runner.executable_path(),
+            )?;
+        }
+        CodexControlRequestKind::UpdateCli => {
+            let version = codex_runner.update_cli().await?;
+            codex_control.mark_cli_operation_succeeded(
+                version,
+                codex_runner.executable_source(),
+                codex_runner.executable_path(),
+            )?;
+        }
+        CodexControlRequestKind::ProvisionAuth => {
+            if codex_runner.detect_version().is_none() {
+                if !config.codex_auto_install {
+                    return Err(AppError::Conflict(
+                        "Codex CLI is not installed; install it before configuring an API key"
+                            .into(),
+                    ));
+                }
+                let version = install_managed_codex(codex_control, codex_runner, config).await?;
+                codex_control.mark_cli_operation_succeeded(
+                    version,
+                    codex_runner.executable_source(),
+                    codex_runner.executable_path(),
+                )?;
+            }
+            let profile_id = request.profile_id.ok_or_else(|| {
+                AppError::Internal("Codex authentication request has no profile id".into())
+            })?;
+            if request.api_key.is_none() && request.base_url.is_none() {
+                return Err(AppError::Internal(
+                    "Codex authentication request has no configuration changes".into(),
+                ));
+            }
+            codex_runner
+                .provision_auth_profile(
+                    profile_id,
+                    request.api_key.as_deref(),
+                    request.base_url.as_deref(),
+                )
+                .await?;
+            codex_control.mark_auth_profile_active(profile_id)?;
+        }
+        CodexControlRequestKind::DeleteAuth => {
+            let profile_id = request.profile_id.ok_or_else(|| {
+                AppError::Internal("Codex authentication deletion has no profile id".into())
+            })?;
+            let home = codex_control.managed_profile_home(profile_id);
+            if home.exists() {
+                tokio::fs::remove_dir_all(&home).await.map_err(|error| {
+                    AppError::Internal(format!("cannot remove managed Codex profile: {error}"))
+                })?;
+            }
+            codex_control.remove_auth_profile(profile_id)?;
+        }
+        CodexControlRequestKind::RefreshMcp => {
+            let selector = request.target_selector.as_deref().ok_or_else(|| {
+                AppError::Internal("Codex MCP refresh has no target selector".into())
+            })?;
+            refresh_codex_mcp_environment(codex_control, codex_runner, selector).await;
+            let snapshot = codex_control
+                .environment_for_company(request.company_id.ok_or_else(|| {
+                    AppError::Internal("Codex MCP refresh has no company id".into())
+                })?)?
+                .mcp_environments
+                .into_iter()
+                .find(|snapshot| snapshot.selector == selector)
+                .ok_or_else(|| AppError::Internal("Codex MCP refresh was not published".into()))?;
+            if snapshot.status == "failed" {
+                return Err(AppError::Internal(
+                    snapshot
+                        .last_error
+                        .unwrap_or_else(|| "Codex MCP refresh failed".into()),
+                ));
+            }
+        }
+        CodexControlRequestKind::AddMcp => {
+            let input = request.mcp_server.as_ref().ok_or_else(|| {
+                AppError::Internal("Codex MCP add request has no server configuration".into())
+            })?;
+            codex_runner.add_mcp_server(input).await?;
+            refresh_codex_mcp_environment(codex_control, codex_runner, &input.target_selector)
+                .await;
+        }
+        CodexControlRequestKind::RemoveMcp => {
+            let selector = request.target_selector.as_deref().ok_or_else(|| {
+                AppError::Internal("Codex MCP removal has no target selector".into())
+            })?;
+            let server_name = request
+                .mcp_server_name
+                .as_deref()
+                .ok_or_else(|| AppError::Internal("Codex MCP removal has no server name".into()))?;
+            codex_runner
+                .remove_mcp_server(selector, server_name)
+                .await?;
+            refresh_codex_mcp_environment(codex_control, codex_runner, selector).await;
+        }
+    }
+    Ok(())
+}
+
+async fn install_managed_codex(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+) -> AppResult<String> {
+    if codex_runner.executable_source() != "managed" {
+        return Err(AppError::Validation(format!(
+            "configured Codex executable {} is unavailable; clear AGENT_TRIGGER_CODEX_BIN to use Relay managed installation",
+            codex_runner.executable_path().display()
+        )));
+    }
+    let response = reqwest::Client::builder()
+        .connect_timeout(StdDuration::from_secs(15))
+        .timeout(StdDuration::from_secs(60))
+        .build()
+        .map_err(|error| {
+            AppError::Internal(format!("cannot create Codex installer client: {error}"))
+        })?
+        .get(&config.codex_install_url)
+        .send()
+        .await
+        .map_err(|error| AppError::Internal(format!("cannot download Codex installer: {error}")))?
+        .error_for_status()
+        .map_err(|error| AppError::Internal(format!("Codex installer download failed: {error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > 5 * 1024 * 1024)
+    {
+        return Err(AppError::Internal(
+            "Codex installer is unexpectedly large".into(),
+        ));
+    }
+    let installer = response
+        .bytes()
+        .await
+        .map_err(|error| AppError::Internal(format!("cannot read Codex installer: {error}")))?;
+    if installer.len() > 5 * 1024 * 1024 {
+        return Err(AppError::Internal(
+            "Codex installer is unexpectedly large".into(),
+        ));
+    }
+    tokio::fs::create_dir_all(codex_control.managed_cli_bin_dir())
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("cannot create Codex install directory: {error}"))
+        })?;
+    tokio::fs::create_dir_all(codex_control.managed_cli_home())
+        .await
+        .map_err(|error| AppError::Internal(format!("cannot create Codex home: {error}")))?;
+
+    let installer_command = codex_installer_command(std::env::consts::OS)?;
+    tracing::info!(
+        host_os = std::env::consts::OS,
+        host_arch = std::env::consts::ARCH,
+        installer_kind = installer_command.kind,
+        "installing the Relay-managed Codex CLI"
+    );
+    let mut command = Command::new(installer_command.program);
+    command
+        .args(installer_command.arguments)
+        .env("CODEX_HOME", codex_control.managed_cli_home())
+        .env("CODEX_INSTALL_DIR", codex_control.managed_cli_bin_dir())
+        .env("CODEX_NON_INTERACTIVE", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().map_err(|error| {
+        AppError::Internal(format!("cannot start official Codex installer: {error}"))
+    })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| {
+        AppError::Internal("official Codex installer stdin is unavailable".into())
+    })?;
+    stdin.write_all(&installer).await.map_err(|error| {
+        AppError::Internal(format!("cannot provide official Codex installer: {error}"))
+    })?;
+    drop(stdin);
+    let output = tokio::time::timeout(StdDuration::from_secs(300), child.wait_with_output())
+        .await
+        .map_err(|_| AppError::Internal("official Codex installation timed out".into()))?
+        .map_err(|error| AppError::Internal(format!("official Codex installer failed: {error}")))?;
+    if !output.status.success() {
+        return Err(AppError::Internal(format!(
+            "official Codex installer failed: {}",
+            sanitize_error(&String::from_utf8_lossy(&output.stderr))
+        )));
+    }
+    codex_runner.detect_version().ok_or_else(|| {
+        AppError::Internal(format!(
+            "Codex installer completed but {} is unavailable",
+            codex_runner.executable_path().display()
+        ))
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexInstallerCommand {
+    program: &'static str,
+    arguments: &'static [&'static str],
+    kind: &'static str,
+}
+
+fn default_codex_install_url(host_os: &str) -> &'static str {
+    match host_os {
+        "windows" => "https://chatgpt.com/codex/install.ps1",
+        _ => "https://chatgpt.com/codex/install.sh",
+    }
+}
+
+fn codex_installer_command(host_os: &str) -> AppResult<CodexInstallerCommand> {
+    match host_os {
+        "macos" | "linux" => Ok(CodexInstallerCommand {
+            program: "sh",
+            arguments: &["-s"],
+            kind: CODEX_INSTALLER_POSIX_SHELL,
+        }),
+        "windows" => Ok(CodexInstallerCommand {
+            program: "powershell.exe",
+            arguments: &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "-",
+            ],
+            kind: CODEX_INSTALLER_POWERSHELL,
+        }),
+        other => Err(AppError::Validation(format!(
+            "Relay managed Codex installation does not support host operating system {other}"
+        ))),
+    }
+}
+
+async fn refresh_codex_latest_version(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+) {
+    if codex_runner.detect_version().is_none() {
+        return;
+    }
+    let result = async {
+        let response = reqwest::Client::builder()
+            .connect_timeout(StdDuration::from_secs(10))
+            .timeout(StdDuration::from_secs(20))
+            .build()
+            .map_err(|error| AppError::Internal(format!("cannot create update client: {error}")))?
+            .get(&config.codex_update_registry_url)
+            .send()
+            .await
+            .map_err(|error| AppError::Internal(format!("cannot check Codex updates: {error}")))?
+            .error_for_status()
+            .map_err(|error| AppError::Internal(format!("Codex update check failed: {error}")))?;
+        let body = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("invalid Codex update response: {error}"))
+            })?;
+        body.get("version")
+            .and_then(serde_json::Value::as_str)
+            .filter(|version| !version.is_empty() && version.len() <= 80)
+            .map(str::to_string)
+            .ok_or_else(|| AppError::Internal("Codex update response has no version".into()))
+    }
+    .await;
+    match result {
+        Ok(version) => {
+            if let Err(error) = codex_control.publish_latest_version(Some(version), None) {
+                tracing::warn!(error = %sanitize_error(&error.to_string()), "cannot publish Codex latest version");
+            }
+        }
+        Err(error) => {
+            let message = sanitize_error(&error.to_string());
+            if let Err(store_error) = codex_control.publish_latest_version(None, Some(message)) {
+                tracing::warn!(error = %sanitize_error(&store_error.to_string()), "cannot publish Codex update check failure");
+            }
+        }
+    }
+}
+
+async fn refresh_codex_model_catalog(
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+) -> AppResult<()> {
+    let mut catalog = CodexModelCatalogFile::default();
+    let mut profiles = config.model_discovery_profiles.clone();
+    profiles.extend(codex_control.list_active_profile_selectors()?);
+    profiles.sort();
+    profiles.dedup();
+    for profile in &profiles {
+        for bundled in [false, true] {
+            match codex_runner.discover_models(profile, bundled).await {
+                Ok(snapshot) => catalog.catalogs.push(snapshot),
+                Err(error) if bundled => tracing::debug!(
+                    codex_profile = profile,
+                    error = %sanitize_error(&error.to_string()),
+                    "bundled Codex model discovery is unavailable"
+                ),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    let parent = config
+        .model_catalog_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent).await.map_err(|error| {
+        AppError::Internal(format!(
+            "cannot create Codex model catalog directory: {error}"
+        ))
+    })?;
+    let bytes = serde_json::to_vec_pretty(&catalog).map_err(|error| {
+        AppError::Internal(format!("cannot serialize Codex model catalog: {error}"))
+    })?;
+    let temporary_path = config.model_catalog_path.with_extension("json.tmp");
+    tokio::fs::write(&temporary_path, bytes)
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("cannot write Codex model catalog: {error}"))
+        })?;
+    tokio::fs::rename(&temporary_path, &config.model_catalog_path)
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("cannot publish Codex model catalog: {error}"))
+        })?;
+    tracing::info!(
+        path = %config.model_catalog_path.display(),
+        catalogs = catalog.catalogs.len(),
+        "local Codex model catalog refreshed by Trigger"
+    );
+    Ok(())
+}
+
+async fn refresh_codex_plugin_catalog(
+    platform: &TriggerPlatform,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+) -> AppResult<String> {
+    let discovery = codex_runner.discover_plugins().await?;
+    let fingerprint = codex_plugin_fingerprint(&discovery.installed);
+    let installed = public_codex_plugin_items(&discovery.installed);
+    let available = public_codex_plugin_items(&discovery.available);
+    let marketplaces = public_codex_marketplaces(&discovery.marketplaces);
+    let now = now_utc();
+    platform.save_codex_plugin_catalog_snapshot(CodexPluginCatalogSnapshot {
+        runner_id: config.plugin_host_id.clone(),
+        hostname: config.hostname.clone(),
+        codex_version: codex_runner.detect_version(),
+        fingerprint: fingerprint.clone(),
+        installed,
+        available,
+        marketplaces,
+        discovered_at: now,
+        updated_at: now,
+    })?;
+    tracing::info!(
+        runner_id = %config.plugin_host_id,
+        fingerprint = %fingerprint,
+        "local Codex plugin catalog refreshed by Trigger"
+    );
+    Ok(fingerprint)
+}
+
+async fn process_codex_plugin_operation(
+    platform: &TriggerPlatform,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+    operation: CodexPluginOperation,
+) {
+    let command_result = codex_runner
+        .apply_plugin_operation(&operation.operation, operation.plugin_id.as_deref())
+        .await;
+    let (succeeded, mut result, error_message) = match command_result {
+        Ok(result) => (true, result, None),
+        Err(error) => (
+            false,
+            serde_json::json!({}),
+            Some(sanitize_error(&error.to_string())),
+        ),
+    };
+    let mut final_succeeded = succeeded;
+    let mut final_error = error_message;
+    if succeeded {
+        match refresh_codex_plugin_catalog(platform, codex_runner, config).await {
+            Ok(fingerprint) => {
+                if let Some(object) = result.as_object_mut() {
+                    object.insert("catalog_fingerprint".into(), fingerprint.into());
+                }
+            }
+            Err(error) if operation.operation == CODEX_PLUGIN_OPERATION_REFRESH => {
+                final_succeeded = false;
+                final_error = Some(sanitize_error(&error.to_string()));
+            }
+            Err(error) => {
+                if let Some(object) = result.as_object_mut() {
+                    object.insert(
+                        "catalog_refresh_error".into(),
+                        sanitize_error(&error.to_string()).into(),
+                    );
+                }
+            }
+        }
+    }
+    if let Err(error) = platform.finish_codex_plugin_operation(
+        operation.id,
+        &config.lease_owner,
+        final_succeeded,
+        result,
+        final_error,
+    ) {
+        tracing::error!(
+            operation_id = %operation.id,
+            error = %sanitize_error(&error.to_string()),
+            "failed to finish Codex plugin operation"
+        );
+    }
+}
+
+fn codex_plugin_fingerprint(installed: &serde_json::Value) -> String {
+    let mut plugins = installed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|plugin| plugin.get("enabled").and_then(serde_json::Value::as_bool) != Some(false))
+        .filter_map(|plugin| {
+            let plugin_id = plugin.get("pluginId")?.as_str()?;
+            let version = plugin
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            Some(format!("{plugin_id}@{version}"))
+        })
+        .collect::<Vec<_>>();
+    plugins.sort();
+    hash_secret(&plugins.join("\n")).chars().take(24).collect()
+}
+
+fn public_codex_plugin_items(items: &serde_json::Value) -> serde_json::Value {
+    serde_json::Value::Array(
+        items
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|plugin| {
+                Some(serde_json::json!({
+                    "pluginId": plugin.get("pluginId")?.as_str()?,
+                    "name": plugin.get("name")?.as_str()?,
+                    "marketplaceName": plugin.get("marketplaceName")?.as_str()?,
+                    "version": plugin.get("version").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                    "installed": plugin.get("installed").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                    "enabled": plugin.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                    "installPolicy": plugin.get("installPolicy").and_then(serde_json::Value::as_str),
+                    "authPolicy": plugin.get("authPolicy").and_then(serde_json::Value::as_str),
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn public_codex_marketplaces(items: &serde_json::Value) -> serde_json::Value {
+    serde_json::Value::Array(
+        items
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|marketplace| {
+                Some(serde_json::json!({
+                    "name": marketplace.get("name")?.as_str()?,
+                    "sourceType": marketplace
+                        .get("marketplaceSource")
+                        .and_then(|source| source.get("sourceType"))
+                        .and_then(serde_json::Value::as_str),
+                }))
+            })
+            .collect(),
+    )
 }
 
 async fn process_claimed_trigger(
     platform: &TriggerPlatform,
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
+    codex_control: &CodexControlStore,
     service_config: &TriggerServiceConfig,
     trigger: AgentCodexTriggerConfig,
 ) {
-    let execution = execute_trigger(platform, workspace_manager, codex_runner, &trigger).await;
+    let execution = execute_trigger(
+        platform,
+        workspace_manager,
+        codex_runner,
+        codex_control,
+        &trigger,
+    )
+    .await;
     let finished_at = now_utc();
     let completion = match execution {
         Ok(execution) => execution,
@@ -366,6 +1240,61 @@ async fn process_claimed_trigger(
     }
 }
 
+fn resolve_effective_cli_settings(
+    trigger: &AgentCodexTriggerConfig,
+    company: &CompanyCodexCliSettings,
+) -> EffectiveCodexCliSettings {
+    EffectiveCodexCliSettings {
+        model: trigger.model.clone().or_else(|| company.model.clone()),
+        reasoning_effort: trigger
+            .reasoning_effort
+            .clone()
+            .or_else(|| company.reasoning_effort.clone()),
+        reasoning_summary: trigger
+            .reasoning_summary
+            .clone()
+            .or_else(|| Some(company.reasoning_summary.clone())),
+        verbosity: trigger
+            .verbosity
+            .clone()
+            .or_else(|| company.verbosity.clone()),
+        personality: trigger
+            .personality
+            .clone()
+            .or_else(|| company.personality.clone()),
+        service_tier: trigger
+            .service_tier
+            .clone()
+            .or_else(|| company.service_tier.clone()),
+        sandbox_mode: if trigger.sandbox_mode == AGENT_CODEX_SETTING_INHERIT {
+            company.sandbox_mode.clone()
+        } else {
+            trigger.sandbox_mode.clone()
+        },
+        approval_policy: if trigger.approval_policy == AGENT_CODEX_SETTING_INHERIT {
+            company.approval_policy.clone()
+        } else {
+            trigger.approval_policy.clone()
+        },
+        network_access: trigger.network_access.unwrap_or(company.network_access),
+        web_search: trigger
+            .web_search
+            .clone()
+            .unwrap_or_else(|| company.web_search.clone()),
+        feature_multi_agent: trigger
+            .feature_multi_agent
+            .unwrap_or(company.feature_multi_agent),
+        feature_remote_plugin: trigger
+            .feature_remote_plugin
+            .unwrap_or(company.feature_remote_plugin),
+        feature_hooks: trigger.feature_hooks.unwrap_or(company.feature_hooks),
+        feature_goals: trigger.feature_goals.unwrap_or(company.feature_goals),
+        feature_shell_tool: trigger
+            .feature_shell_tool
+            .unwrap_or(company.feature_shell_tool),
+    }
+}
+
 fn next_trigger_run_at(
     trigger: &AgentCodexTriggerConfig,
     finished_at: chrono::DateTime<chrono::Utc>,
@@ -386,8 +1315,11 @@ async fn execute_trigger(
     platform: &TriggerPlatform,
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
+    codex_control: &CodexControlStore,
     trigger: &AgentCodexTriggerConfig,
 ) -> AppResult<TriggerExecution> {
+    let company_settings = codex_control.company_cli_settings(trigger.company_id)?;
+    let effective_settings = resolve_effective_cli_settings(trigger, &company_settings);
     let decision = protect_trigger_decision(|| platform.decide_agent_codex_work(trigger))?;
     if !decision.should_run {
         return Ok(TriggerExecution {
@@ -419,11 +1351,29 @@ async fn execute_trigger(
         _ => workspace_manager
             .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?,
     };
+    let long_term_memories =
+        platform.agent_long_term_memories(trigger.agent_profile_id, trigger.company_id)?;
+    let project_view = decision
+        .project
+        .as_ref()
+        .map(|project| {
+            platform.get_company_project(GetCompanyProjectInput {
+                actor_agent_id: trigger.agent_profile_id,
+                company_id: trigger.company_id,
+                project_id: project.id,
+            })
+        })
+        .transpose()?;
+    let skill_language = platform.effective_company_skill_language(trigger.company_id);
     let relay_skills = prepare_relay_skills(
         &workspace.path,
         &agent,
         &membership.job_title,
         &membership.permissions,
+        &long_term_memories,
+        project_view.as_ref().map(|view| &view.project),
+        project_view.as_ref().and_then(|view| view.rule.as_ref()),
+        &skill_language,
     )?;
     let started_at = now_utc();
     let initial_activity = AgentCodexRunActivity {
@@ -463,11 +1413,11 @@ async fn execute_trigger(
             return Err(error);
         }
     };
-    let session_key = codex_session_key(&workspace, &relay_skills.version_hash);
+    let session_key = codex_session_key(&workspace);
     let existing_thread_id = platform
         .get_agent_codex_session(trigger.agent_profile_id)
         .and_then(|session| {
-            if session.worktree_key == session_key {
+            if codex_session_key_matches(&session.worktree_key, &session_key) {
                 Some(session.codex_thread_id)
             } else {
                 tracing::info!(
@@ -480,10 +1430,21 @@ async fn execute_trigger(
     let request = CodexRunRequest {
         cwd: workspace.path.clone(),
         codex_profile: trigger.codex_profile.clone(),
-        model: trigger.model.clone(),
-        reasoning_effort: trigger.reasoning_effort.clone(),
-        sandbox_mode: trigger.sandbox_mode.clone(),
-        approval_policy: trigger.approval_policy.clone(),
+        model: effective_settings.model.clone(),
+        reasoning_effort: effective_settings.reasoning_effort.clone(),
+        reasoning_summary: effective_settings.reasoning_summary.clone(),
+        verbosity: effective_settings.verbosity.clone(),
+        personality: effective_settings.personality.clone(),
+        service_tier: effective_settings.service_tier.clone(),
+        sandbox_mode: effective_settings.sandbox_mode.clone(),
+        approval_policy: effective_settings.approval_policy.clone(),
+        network_access: effective_settings.network_access,
+        web_search: effective_settings.web_search.clone(),
+        feature_multi_agent: effective_settings.feature_multi_agent,
+        feature_remote_plugin: effective_settings.feature_remote_plugin,
+        feature_hooks: effective_settings.feature_hooks,
+        feature_goals: effective_settings.feature_goals,
+        feature_shell_tool: effective_settings.feature_shell_tool,
         max_run_seconds: trigger.max_run_seconds as u64,
         prompt: build_wakeup_prompt(WakeupPromptContext {
             agent: &agent,
@@ -501,7 +1462,7 @@ async fn execute_trigger(
         existing_thread_id,
         run_token: token.plaintext_token,
         environment: workspace.auth_environment.clone(),
-        approval_handler: (trigger.approval_policy == "on-request").then(|| {
+        approval_handler: (effective_settings.approval_policy == "on-request").then(|| {
             Arc::new(PlatformCodexApprovalHandler {
                 platform: platform.clone(),
                 company_id: trigger.company_id,
@@ -514,6 +1475,12 @@ async fn execute_trigger(
             platform: platform.clone(),
             run_id: run.id,
         }) as Arc<dyn CodexProgressHandler>),
+        cancellation_handler: decision.project.as_ref().map(|project| {
+            Arc::new(PlatformProjectCancellationHandler {
+                platform: platform.clone(),
+                project_id: project.id,
+            }) as Arc<dyn CodexCancellationHandler>
+        }),
     };
     let result = codex_runner.run(request).await;
     let revoke_result = platform.revoke_agent_codex_run_tokens(run.id);
@@ -542,6 +1509,7 @@ async fn execute_trigger(
         CodexRunStatus::Succeeded => AGENT_CODEX_RUN_STATUS_SUCCEEDED,
         CodexRunStatus::Failed => AGENT_CODEX_RUN_STATUS_FAILED,
         CodexRunStatus::TimedOut => AGENT_CODEX_RUN_STATUS_TIMED_OUT,
+        CodexRunStatus::Cancelled => AGENT_CODEX_RUN_STATUS_CANCELLED,
     }
     .into();
     if result.status == CodexRunStatus::Succeeded {
@@ -567,6 +1535,7 @@ async fn execute_trigger(
         CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
         CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
         CodexRunStatus::TimedOut => ("timed_out", "Codex 本轮执行超时"),
+        CodexRunStatus::Cancelled => ("cancelled", "项目已暂停，Codex 本轮已停止"),
     };
     record_run_activity(
         platform,
@@ -576,8 +1545,13 @@ async fn execute_trigger(
         run.codex_thread_id.clone(),
     );
     Ok(TriggerExecution {
-        succeeded: result.status == CodexRunStatus::Succeeded,
-        error_message: result.error_message,
+        succeeded: matches!(
+            result.status,
+            CodexRunStatus::Succeeded | CodexRunStatus::Cancelled
+        ),
+        error_message: (result.status != CodexRunStatus::Cancelled)
+            .then_some(result.error_message)
+            .flatten(),
     })
 }
 
@@ -590,11 +1564,12 @@ fn protect_trigger_decision<T>(decision: impl FnOnce() -> AppResult<T>) -> AppRe
     })?
 }
 
-fn codex_session_key(workspace: &PreparedGitWorkspace, skill_version_hash: &str) -> String {
-    format!(
-        "{CODEX_SESSION_POLICY_VERSION}:{}:{}",
-        workspace.worktree_key, skill_version_hash
-    )
+fn codex_session_key(workspace: &PreparedGitWorkspace) -> String {
+    format!("{CODEX_SESSION_POLICY_VERSION}:{}", workspace.worktree_key)
+}
+
+fn codex_session_key_matches(saved_key: &str, current_key: &str) -> bool {
+    saved_key == current_key || saved_key.starts_with(&format!("{current_key}:"))
 }
 
 fn fail_run(
@@ -677,11 +1652,18 @@ fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         .as_deref()
         .map(|name| format!("，并在涉及人员管理时同时使用 `${name}`"))
         .unwrap_or_default();
+    let project_skill = relay_skills
+        .project_name
+        .as_deref()
+        .map(|name| format!("，处理当前项目时还必须使用 `${name}`"))
+        .unwrap_or_default();
     format!(
         "你是 Relay 公司 Agent @{handle}（{display_name}），这是定时触发器对同一个 Codex 会话的一次唤醒。{project_context}\n\
          当前工作目录是本次分配的隔离工作区，worktree key 为 {worktree_key}，当前 Agent 分支为 {branch}。触发器只负责唤醒，不会替你理解或处理业务。\n\
-         本工作区已经生成与你当前身份、职业和权限一致的最新版 Relay Skill。必须先使用 `${employee_skill}` 和 `${profession_skill}`{staffing_skill}；Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限和项目 Rule 为准。\n\
+         本工作区已经生成与你当前身份、职业、项目类型和权限一致的最新版 Relay Skill。必须先使用 `${employee_skill}` 和 `${profession_skill}`{staffing_skill}{project_skill}；Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准；Human 项目 Rule 不得弱化系统项目类型规则。\n\
+         宿主机 Codex CLI 已加载管理员启用的插件。当前任务需要浏览器、文档、表格、设计、安全扫描或外部服务能力时，优先使用匹配的已安装插件及其 Skill/MCP；不要假设未安装的插件可用，也不要自行绕过插件认证策略。\n\
          请先调用 required Relay MCP 的 agent.bootstrap，再调用 company.task 的 my 区分可执行任务和等待前置任务，然后调用 agent.inbox.wait（不要无限等待）读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。\n\
+         你的长期记忆已经固化在 `${employee_skill}` 的“Agent 固化长期记忆”章节中，本轮必须遵循；短期记忆不会自动进入上下文，只有当前任务需要历史线索时才调用 agent.memory search。结束前只有在产生可跨会话长期指导工作的稳定规则时才保存为 long_term，一般阶段性结论保存为 short_term。写入前先按 topic_key 搜索并更新已有记忆，禁止保存原始聊天、任务正文、运行日志、临时进度或任何凭证。没有新知识就不要写记忆。\n\
          {asset_refresh_context}\n\
          由你自行查看消息、项目和任务，完成必要的代码修改与测试；仅在消息明确 @/私聊要求你回应、正式任务要求沟通，或你掌握能立即避免当前交付失败或解除已确认阻塞的新证据时，才通过 Relay MCP 发消息。普通优化想法、字段补充和命名建议不要在无任务时主动群发。不要发送纯粹的“收到”“暂无待办”“还没轮到我”或等待状态。\n\
          需要共享的代码或文档应提交到当前 Agent 分支并执行 git push；不要直接提交或推送受保护的默认分支。首次 push 可以直接使用 git push，工作区已配置自动建立远端上游分支。\n\
@@ -694,14 +1676,20 @@ fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         branch = workspace.branch,
         employee_skill = relay_skills.employee_name,
         profession_skill = relay_skills.profession_name,
+        project_skill = project_skill,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_relay_skills(
     workspace_path: &Path,
     agent: &AgentProfile,
     job_title: &str,
     permissions: &[String],
+    long_term_memories: &[AgentMemory],
+    project: Option<&CompanyProject>,
+    project_rule: Option<&CompanyProjectRule>,
+    skill_language: &str,
 ) -> AppResult<PreparedRelaySkills> {
     let profession = infer_company_profession(Some(job_title));
     let identity_token = relay_skill_identity_token(agent);
@@ -715,25 +1703,62 @@ fn prepare_relay_skills(
         .iter()
         .any(|permission| permission.starts_with("agent.staff."))
         .then(|| format!("{managed_prefix}staffing"));
+    let project_name = project.map(|project| {
+        format!(
+            "{managed_prefix}project-{}",
+            project
+                .id
+                .to_string()
+                .replace('-', "")
+                .chars()
+                .take(8)
+                .collect::<String>()
+        )
+    });
 
-    let employee_content = bind_relay_skill(
-        &tailor_relay_skill_to_permissions(EMPLOYEE_SKILL_TEMPLATE, permissions),
+    let employee_template = if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+        EMPLOYEE_SKILL_TEMPLATE_EN
+    } else {
+        EMPLOYEE_SKILL_TEMPLATE
+    };
+    let staffing_template = if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+        STAFFING_SKILL_TEMPLATE_EN
+    } else {
+        STAFFING_SKILL_TEMPLATE
+    };
+    let employee_base_content = bind_relay_skill(
+        &tailor_relay_skill_to_permissions(employee_template, permissions),
         &employee_name,
         agent,
         &employee_name,
+        skill_language,
     );
+    let employee_content =
+        append_agent_long_term_memories(&employee_base_content, long_term_memories, skill_language);
+    let profession_template = profession_skill_template(&profession.key, skill_language);
     let profession_content = bind_relay_skill(
-        profession_skill_template(&profession.key),
+        &profession_template,
         &profession_name,
         agent,
         &employee_name,
+        skill_language,
     );
     let staffing_content = staffing_name.as_ref().map(|name| {
         bind_relay_skill(
-            &tailor_relay_skill_to_permissions(STAFFING_SKILL_TEMPLATE, permissions),
+            &tailor_relay_skill_to_permissions(staffing_template, permissions),
             name,
             agent,
             &employee_name,
+            skill_language,
+        )
+    });
+    let project_content = project.zip(project_name.as_deref()).map(|(project, name)| {
+        bind_relay_skill(
+            &build_project_skill_template(project, project_rule, skill_language),
+            name,
+            agent,
+            &employee_name,
+            skill_language,
         )
     });
 
@@ -750,20 +1775,144 @@ fn prepare_relay_skills(
     if let (Some(name), Some(content)) = (staffing_name.as_deref(), staffing_content.as_deref()) {
         write_managed_skill(&skills_root, name, content)?;
     }
+    if let (Some(name), Some(content)) = (project_name.as_deref(), project_content.as_deref()) {
+        write_managed_skill(&skills_root, name, content)?;
+    }
     exclude_managed_skills_from_git(workspace_path, &managed_prefix)?;
 
+    #[cfg(test)]
     let version_source = format!(
-        "{employee_name}\n{employee_content}\n{profession_name}\n{profession_content}\n{}\n{}",
+        "{employee_name}\n{employee_base_content}\n{profession_name}\n{profession_content}\n{}\n{}\n{}\n{}",
         staffing_name.as_deref().unwrap_or_default(),
-        staffing_content.as_deref().unwrap_or_default()
+        staffing_content.as_deref().unwrap_or_default(),
+        project_name.as_deref().unwrap_or_default(),
+        project_content.as_deref().unwrap_or_default()
     );
+    #[cfg(test)]
     let version_hash = hash_secret(&version_source).chars().take(16).collect();
     Ok(PreparedRelaySkills {
         employee_name,
         profession_name,
+        project_name,
         staffing_name,
+        #[cfg(test)]
         version_hash,
     })
+}
+
+fn build_project_skill_template(
+    project: &CompanyProject,
+    rule: Option<&CompanyProjectRule>,
+    skill_language: &str,
+) -> String {
+    let definition = company_project_type_by_key(&project.project_type)
+        .or_else(|| company_project_type_by_key("general"))
+        .expect("general project type must exist");
+    let custom_rule = rule
+        .map(|rule| rule.content.trim())
+        .filter(|content| !content.is_empty())
+        .unwrap_or(if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+            "No additional Human project Rule is currently configured."
+        } else {
+            "当前没有 Human 补充 Rule。"
+        });
+    if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+        format!(
+            "---\nname: relay-project-context\ndescription: Mandatory system project-type Rules plus additional Human project Rules for the current Relay project. Use for every task in this project.\n---\n\n# Project Skill: {project_name}\n\n## Project Identity\n\n- Project ID: `{project_id}`\n- Project type: {project_type_label} (`{project_type}`)\n- Type source: `{project_type_source}`; inference confidence: {confidence}%\n- System project-type Rules are mandatory. Human Rules may add stricter constraints but cannot remove, weaken, or bypass them.\n\n{system_rules}\n\n## Additional Human Project Rules\n\n{custom_rule}\n",
+            project_name = project.name,
+            project_id = project.id,
+            project_type_label = definition.label_en,
+            project_type = project.project_type,
+            project_type_source = project.project_type_source,
+            confidence = project.project_type_confidence,
+            system_rules = definition.rule_markdown_en,
+        )
+    } else {
+        format!(
+        "---\nname: relay-project-context\ndescription: Relay 当前项目的系统类型规则与 Human 补充规则。每次处理本项目都必须使用。\n---\n\n# 项目 Skill：{project_name}\n\n## 项目身份\n\n- 项目 ID：`{project_id}`\n- 项目类型：{project_type_label}（`{project_type}`）\n- 类型来源：`{project_type_source}`；识别置信度：{confidence}%\n- 本 Skill 的系统类型规则是强制基线，Human 补充 Rule 只能增加约束，不能删除、弱化或绕过系统规则。\n\n{system_rules}\n\n## Human 项目补充 Rule\n\n{custom_rule}\n",
+        project_name = project.name,
+        project_id = project.id,
+        project_type_label = definition.label,
+        project_type = project.project_type,
+        project_type_source = project.project_type_source,
+        confidence = project.project_type_confidence,
+        system_rules = definition.rule_markdown,
+        )
+    }
+}
+
+fn append_agent_long_term_memories(
+    base_skill: &str,
+    memories: &[AgentMemory],
+    skill_language: &str,
+) -> String {
+    if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+        let mut section = String::from(
+            "\n\n## Distilled Long-term Agent Memory\n\nThese entries belong only to the current Agent and are loaded on every Codex wake-up. Use them as durable guidance. If they conflict with the latest Human instruction, project Rule, repository state, or MCP state, follow current verified facts and update the memory after validation.\n",
+        );
+        if memories.is_empty() {
+            section.push_str("\nNo distilled long-term memory is currently stored.\n");
+        } else {
+            let mut used_characters = section.chars().count();
+            for memory in memories {
+                let entry = format!(
+                    "\n### {}\n\n- Topic key: `{}`\n- Conclusion: {}\n- When to use: {}\n- Importance: {}/5; confidence: {}%{}\n",
+                    memory.title,
+                    memory.topic_key,
+                    memory.summary,
+                    if memory.when_to_use.is_empty() { "Any work directly related to this topic" } else { &memory.when_to_use },
+                    memory.importance,
+                    memory.confidence,
+                    if memory.tags.is_empty() { String::new() } else { format!("; tags: {}", memory.tags.join(", ")) }
+                );
+                if used_characters + entry.chars().count() > 12_000 {
+                    section.push_str("\nAdditional long-term memories were omitted because of the context budget. Archive low-value entries or reduce long-term memory volume.\n");
+                    break;
+                }
+                used_characters += entry.chars().count();
+                section.push_str(&entry);
+            }
+        }
+        return format!("{}{}\n", base_skill.trim(), section.trim_end());
+    }
+    let mut section = String::from(
+        "\n\n## Agent 固化长期记忆\n\n这些内容只属于当前 Agent，并在每次 Codex 唤醒时自动进入本 Skill。它们用于长期指导工作；如果与 Human 最新指令、项目 Rule、当前代码或 MCP 实时状态冲突，以当前事实为准，并在核验后更新记忆。\n",
+    );
+    if memories.is_empty() {
+        section.push_str("\n当前还没有固化长期记忆。\n");
+    } else {
+        let mut used_characters = section.chars().count();
+        for memory in memories {
+            let entry = format!(
+                "\n### {}\n\n- 主题键：`{}`\n- 结论：{}\n- 使用场景：{}\n- 重要度：{}/5；置信度：{}%{}\n",
+                memory.title,
+                memory.topic_key,
+                memory.summary,
+                if memory.when_to_use.is_empty() {
+                    "任何与该主题直接相关的工作"
+                } else {
+                    &memory.when_to_use
+                },
+                memory.importance,
+                memory.confidence,
+                if memory.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!("；标签：{}", memory.tags.join("、"))
+                }
+            );
+            let entry_characters = entry.chars().count();
+            if used_characters + entry_characters > 12_000 {
+                section.push_str(
+                    "\n其余长期记忆因上下文预算未注入；请归档低价值记忆或降低长期记忆数量。\n",
+                );
+                break;
+            }
+            used_characters += entry_characters;
+            section.push_str(&entry);
+        }
+    }
+    format!("{}{}\n", base_skill.trim(), section.trim_end())
 }
 
 fn relay_skill_identity_token(agent: &AgentProfile) -> String {
@@ -793,28 +1942,14 @@ fn relay_skill_identity_token(agent: &AgentProfile) -> String {
     )
 }
 
-fn profession_skill_template(profession_key: &str) -> &'static str {
-    match profession_key {
-        COMPANY_PROFESSION_PROJECT_MANAGER => PROJECT_MANAGER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_PRODUCT_MANAGER => PRODUCT_MANAGER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_TECHNICAL_MANAGER => TECHNICAL_MANAGER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_SOLUTION_ARCHITECT => SOLUTION_ARCHITECT_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_SOFTWARE_ENGINEER => SOFTWARE_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_FRONTEND_ENGINEER => FRONTEND_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_BACKEND_ENGINEER => BACKEND_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_MOBILE_ENGINEER => MOBILE_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_DATA_ENGINEER => DATA_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_DEVOPS_ENGINEER => DEVOPS_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_QA_ENGINEER => QA_ENGINEER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_PRODUCT_DESIGNER => PRODUCT_DESIGNER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_UI_DESIGNER => UI_DESIGNER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_UX_DESIGNER => UX_DESIGNER_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_BUSINESS_ANALYST => BUSINESS_ANALYST_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_IMPLEMENTATION_CONSULTANT => IMPLEMENTATION_CONSULTANT_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_DOMAIN_EXPERT => DOMAIN_EXPERT_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_OPERATIONS_SPECIALIST => OPERATIONS_SPECIALIST_SKILL_TEMPLATE,
-        COMPANY_PROFESSION_GENERAL_MEMBER => GENERAL_MEMBER_SKILL_TEMPLATE,
-        _ => GENERAL_MEMBER_SKILL_TEMPLATE,
+fn profession_skill_template(profession_key: &str, skill_language: &str) -> String {
+    let profession = company_profession_by_key(profession_key)
+        .or_else(|| company_profession_by_key("general_member"))
+        .expect("general member profession must exist");
+    if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+        profession.skill_markdown_en
+    } else {
+        profession.skill_markdown
     }
 }
 
@@ -857,6 +1992,7 @@ fn bind_relay_skill(
     skill_name: &str,
     agent: &AgentProfile,
     employee_skill_name: &str,
+    skill_language: &str,
 ) -> String {
     let mut replaced_name = false;
     let mut content = template
@@ -872,11 +2008,19 @@ fn bind_relay_skill(
         .collect::<Vec<_>>()
         .join("\n")
         .replace("relay-company-employee", employee_skill_name);
-    let identity_guide = format!(
-        "\n\n## Relay 账号绑定\n\n- 本 Skill 只代表 Relay Agent `@{}`（`{}`）。\n- 每轮先调用 `agent.bootstrap` 核对返回身份；身份不一致时立即停止。\n- 只使用本轮 MCP 返回的公司、项目、任务和权限。",
-        agent.handle.trim_start_matches('@'),
-        agent.id
-    );
+    let identity_guide = if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+        format!(
+            "\n\n## Relay Account Binding\n\n- This Skill represents only Relay Agent `@{}` (`{}`).\n- Call `agent.bootstrap` first on every cycle and stop immediately if the returned identity differs.\n- Use only company, project, task, and permission data returned by MCP in the current cycle.",
+            agent.handle.trim_start_matches('@'),
+            agent.id
+        )
+    } else {
+        format!(
+            "\n\n## Relay 账号绑定\n\n- 本 Skill 只代表 Relay Agent `@{}`（`{}`）。\n- 每轮先调用 `agent.bootstrap` 核对返回身份；身份不一致时立即停止。\n- 只使用本轮 MCP 返回的公司、项目、任务和权限。",
+            agent.handle.trim_start_matches('@'),
+            agent.id
+        )
+    };
     if let Some(heading_start) = content.find("\n# ") {
         let heading_start = heading_start + 1;
         let heading_end = content[heading_start..]
@@ -982,7 +2126,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_key_includes_execution_policy_and_skill_version() {
+    fn managed_codex_installer_supports_macos_linux_and_windows() {
+        for host_os in ["macos", "linux"] {
+            let command = codex_installer_command(host_os).expect("POSIX installer");
+            assert_eq!(command.program, "sh");
+            assert_eq!(command.arguments, &["-s"]);
+            assert_eq!(command.kind, CODEX_INSTALLER_POSIX_SHELL);
+            assert_eq!(
+                default_codex_install_url(host_os),
+                "https://chatgpt.com/codex/install.sh"
+            );
+        }
+
+        let windows = codex_installer_command("windows").expect("Windows installer");
+        assert_eq!(windows.program, "powershell.exe");
+        assert!(windows.arguments.contains(&"-NonInteractive"));
+        assert!(windows.arguments.contains(&"Bypass"));
+        assert_eq!(windows.kind, CODEX_INSTALLER_POWERSHELL);
+        assert_eq!(
+            default_codex_install_url("windows"),
+            "https://chatgpt.com/codex/install.ps1"
+        );
+    }
+
+    #[test]
+    fn managed_codex_installer_rejects_unknown_operating_systems() {
+        let error = codex_installer_command("plan9").expect_err("unsupported platform");
+        assert!(error.to_string().contains("does not support"));
+    }
+
+    #[test]
+    fn session_key_is_stable_when_skills_language_or_plugins_change() {
         let workspace = PreparedGitWorkspace {
             path: PathBuf::from("/tmp/relay-agent"),
             worktree_key: "project/agent".into(),
@@ -990,8 +2164,38 @@ mod tests {
             auth_environment: HashMap::new(),
         };
         assert_eq!(
-            codex_session_key(&workspace, "skill123"),
-            "relay-skills-v4:project/agent:skill123"
+            codex_session_key(&workspace),
+            "relay-skills-v8:project/agent"
+        );
+        assert!(codex_session_key_matches(
+            "relay-skills-v8:project/agent:old-skill-hash:old-plugin-hash",
+            "relay-skills-v8:project/agent"
+        ));
+        assert!(!codex_session_key_matches(
+            "relay-skills-v8:another-project/agent:old-skill-hash:old-plugin-hash",
+            "relay-skills-v8:project/agent"
+        ));
+    }
+
+    #[test]
+    fn plugin_fingerprint_is_stable_and_tracks_enabled_versions() {
+        let first = serde_json::json!([
+            {"pluginId": "browser@openai-bundled", "version": "2", "enabled": true},
+            {"pluginId": "github@openai-api-curated", "version": "1", "enabled": true}
+        ]);
+        let reordered = serde_json::json!([
+            {"pluginId": "github@openai-api-curated", "version": "1", "enabled": true},
+            {"pluginId": "browser@openai-bundled", "version": "2", "enabled": true}
+        ]);
+        assert_eq!(
+            codex_plugin_fingerprint(&first),
+            codex_plugin_fingerprint(&reordered)
+        );
+        assert_ne!(
+            codex_plugin_fingerprint(&first),
+            codex_plugin_fingerprint(&serde_json::json!([
+                {"pluginId": "browser@openai-bundled", "version": "3", "enabled": true}
+            ]))
         );
     }
 
@@ -1021,9 +2225,17 @@ mod tests {
             status: AgentStatus::Active,
             created_at: now_utc(),
         };
-        let prepared =
-            prepare_relay_skills(&workspace, &agent, "软件工程师", &["task.update".into()])
-                .expect("managed skills should be generated");
+        let prepared = prepare_relay_skills(
+            &workspace,
+            &agent,
+            "软件工程师",
+            &["task.update".into()],
+            &[],
+            None,
+            None,
+            "zh-CN",
+        )
+        .expect("managed skills should be generated");
         assert!(workspace
             .join(".agents/skills")
             .join(&prepared.employee_name)
@@ -1036,6 +2248,178 @@ mod tests {
             .is_file());
         assert!(!prepared.version_hash.is_empty());
         fs::remove_dir_all(workspace).expect("test workspace should be removed");
+    }
+
+    #[test]
+    fn english_relay_skills_are_materialized_without_chinese_operating_rules() {
+        let workspace =
+            std::env::temp_dir().join(format!("relay-skill-en-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).expect("test workspace should be created");
+        let agent = AgentProfile {
+            id: Uuid::new_v4(),
+            owner_user_id: Uuid::new_v4(),
+            display_name: "Luna".into(),
+            handle: "luna-security".into(),
+            persona: "Own application security".into(),
+            collaboration_preference: "available".into(),
+            status: AgentStatus::Active,
+            created_at: now_utc(),
+        };
+        let prepared = prepare_relay_skills(
+            &workspace,
+            &agent,
+            "Security Engineer",
+            &["task.update".into()],
+            &[],
+            None,
+            None,
+            "en",
+        )
+        .expect("English managed skills should be generated");
+        let employee_skill = fs::read_to_string(
+            workspace
+                .join(".agents/skills")
+                .join(&prepared.employee_name)
+                .join("SKILL.md"),
+        )
+        .expect("employee skill should be readable");
+        let profession_skill = fs::read_to_string(
+            workspace
+                .join(".agents/skills")
+                .join(&prepared.profession_name)
+                .join("SKILL.md"),
+        )
+        .expect("profession skill should be readable");
+        assert!(employee_skill.contains("Relay Account Binding"));
+        assert!(profession_skill.contains("Shared Professional Operating Baseline"));
+        assert!(profession_skill.contains("Security Engineer"));
+        fs::remove_dir_all(workspace).expect("test workspace should be removed");
+    }
+
+    #[test]
+    fn long_term_memories_are_injected_without_rotating_the_codex_session() {
+        let workspace =
+            std::env::temp_dir().join(format!("relay-memory-skill-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace).expect("test workspace should be created");
+        let agent = AgentProfile {
+            id: Uuid::new_v4(),
+            owner_user_id: Uuid::new_v4(),
+            display_name: "Luna".into(),
+            handle: "luna-memory".into(),
+            persona: "负责实现".into(),
+            collaboration_preference: "available".into(),
+            status: AgentStatus::Active,
+            created_at: now_utc(),
+        };
+        let without_memory = prepare_relay_skills(
+            &workspace,
+            &agent,
+            "软件工程师",
+            &[],
+            &[],
+            None,
+            None,
+            "zh-CN",
+        )
+        .expect("base skills should be generated");
+        let now = now_utc();
+        let memory = AgentMemory {
+            id: Uuid::new_v4(),
+            company_id: Uuid::new_v4(),
+            owner_agent_id: agent.id,
+            scope: "agent".into(),
+            project_id: None,
+            memory_tier: "long_term".into(),
+            memory_type: "procedure".into(),
+            topic_key: "always-run-migrations".into(),
+            title: "发布前验证迁移".into(),
+            summary: "数据库变更发布前必须验证向前迁移和回滚路径。".into(),
+            when_to_use: "涉及数据库 schema 变更时".into(),
+            tags: vec!["database".into()],
+            importance: 5,
+            confidence: 95,
+            pinned: true,
+            status: "active".into(),
+            source_refs: Vec::new(),
+            supersedes_memory_id: None,
+            expires_at: None,
+            verified_by_agent_id: Some(agent.id),
+            verified_by_human_user_id: None,
+            verified_at: Some(now),
+            created_by_agent_id: Some(agent.id),
+            created_by_human_user_id: None,
+            updated_by_agent_id: Some(agent.id),
+            updated_by_human_user_id: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let with_memory = prepare_relay_skills(
+            &workspace,
+            &agent,
+            "软件工程师",
+            &[],
+            std::slice::from_ref(&memory),
+            None,
+            None,
+            "zh-CN",
+        )
+        .expect("memory-bound skills should be generated");
+        let employee_skill = fs::read_to_string(
+            workspace
+                .join(".agents/skills")
+                .join(&with_memory.employee_name)
+                .join("SKILL.md"),
+        )
+        .expect("employee skill should be readable");
+        assert!(employee_skill.contains("Agent 固化长期记忆"));
+        assert!(employee_skill.contains("always-run-migrations"));
+        assert!(employee_skill.contains("数据库变更发布前必须验证"));
+        assert_eq!(without_memory.version_hash, with_memory.version_hash);
+        fs::remove_dir_all(workspace).expect("test workspace should be removed");
+    }
+
+    #[test]
+    fn project_skill_places_fixed_type_rules_before_human_supplements() {
+        let now = now_utc();
+        let project = CompanyProject {
+            id: Uuid::new_v4(),
+            company_id: Uuid::new_v4(),
+            name: "Relay Web".into(),
+            description: "开发管理控制台".into(),
+            project_type: "software_development".into(),
+            project_type_source: "human".into(),
+            project_type_confidence: 100,
+            project_type_evidence: vec!["package.json".into()],
+            status: "active".into(),
+            owner_agent_id: Uuid::new_v4(),
+            project_group_conversation_id: Uuid::new_v4(),
+            created_by_agent_id: Uuid::new_v4(),
+            updated_by_agent_id: None,
+            due_at: None,
+            created_at: now,
+            updated_at: now,
+            completed_at: None,
+        };
+        let rule = CompanyProjectRule {
+            project_id: project.id,
+            content: "所有页面文案使用中文。".into(),
+            updated_by_agent_id: None,
+            updated_by_human_user_id: Some(Uuid::new_v4()),
+            created_at: now,
+            updated_at: now,
+        };
+        let skill = build_project_skill_template(&project, Some(&rule), "zh-CN");
+        let fixed_rule = skill.find("项目治理与完成定义").expect("fixed rule");
+        let supplement = skill.find("所有页面文案使用中文").expect("human rule");
+        assert!(fixed_rule < supplement);
+        assert!(skill.contains("SVG"));
+        assert!(skill.contains("不能删除、弱化或绕过系统规则"));
+
+        let english_skill = build_project_skill_template(&project, Some(&rule), "en");
+        assert!(english_skill.contains("Project Governance and Definition of Done"));
+        assert!(english_skill.contains("System project-type Rules are mandatory"));
+        assert!(english_skill.contains("Additional Human Project Rules"));
+        assert!(english_skill.contains("所有页面文案使用中文"));
     }
 
     #[test]
@@ -1056,8 +2440,19 @@ mod tests {
             codex_profile: "default".into(),
             model: None,
             reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: None,
+            personality: None,
+            service_tier: None,
             sandbox_mode: "workspace_write".into(),
             approval_policy: "never".into(),
+            network_access: None,
+            web_search: None,
+            feature_multi_agent: None,
+            feature_remote_plugin: None,
+            feature_hooks: None,
+            feature_goals: None,
+            feature_shell_tool: None,
             max_run_seconds: 1_800,
             next_run_at: now_utc(),
             lease_owner: None,
@@ -1088,5 +2483,84 @@ mod tests {
             next_trigger_run_at(&trigger, finished_at, true),
             finished_at + Duration::seconds(3_600)
         );
+    }
+
+    #[test]
+    fn runner_overrides_resolve_without_losing_company_defaults() {
+        let company_id = Uuid::new_v4();
+        let mut company = CompanyCodexCliSettings::new(company_id);
+        company.model = Some("company-model".into());
+        company.reasoning_effort = Some("medium".into());
+        company.approval_policy = "on-request".into();
+        company.network_access = false;
+        company.web_search = "indexed".into();
+        let trigger = AgentCodexTriggerConfig {
+            id: Uuid::new_v4(),
+            company_id,
+            agent_profile_id: Uuid::new_v4(),
+            status: "active".into(),
+            interval_seconds: 3_600,
+            codex_profile: "default".into(),
+            model: None,
+            reasoning_effort: Some("high".into()),
+            reasoning_summary: None,
+            verbosity: None,
+            personality: None,
+            service_tier: Some("fast".into()),
+            sandbox_mode: AGENT_CODEX_SETTING_INHERIT.into(),
+            approval_policy: AGENT_CODEX_SETTING_INHERIT.into(),
+            network_access: None,
+            web_search: Some("live".into()),
+            feature_multi_agent: None,
+            feature_remote_plugin: Some(false),
+            feature_hooks: None,
+            feature_goals: None,
+            feature_shell_tool: None,
+            max_run_seconds: 1_800,
+            next_run_at: now_utc(),
+            lease_owner: None,
+            lease_expires_at: None,
+            manual_run_requested_at: None,
+            wake_requested_at: None,
+            wake_reason: None,
+            last_run_at: None,
+            last_success_at: None,
+            last_error: None,
+            consecutive_failure_count: 0,
+            created_by_human_user_id: Uuid::new_v4(),
+            updated_by_human_user_id: None,
+            created_at: now_utc(),
+            updated_at: now_utc(),
+        };
+
+        let effective = resolve_effective_cli_settings(&trigger, &company);
+        assert_eq!(effective.model.as_deref(), Some("company-model"));
+        assert_eq!(effective.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(effective.approval_policy, "on-request");
+        assert!(!effective.network_access);
+        assert_eq!(effective.web_search, "live");
+        assert!(!effective.feature_remote_plugin);
+        assert!(effective.feature_hooks);
+    }
+
+    #[test]
+    fn managed_batch_size_overrides_the_environment_default() {
+        let root = std::env::temp_dir().join(format!(
+            "relay-trigger-batch-preferences-{}",
+            Uuid::new_v4()
+        ));
+        let store = CodexControlStore::new(root.join("codex-control")).expect("control store");
+        assert_eq!(
+            effective_agent_trigger_batch_size(&store, 8).expect("fallback batch size"),
+            8
+        );
+        store
+            .save_agent_trigger_preferences(27, Uuid::new_v4(), 8)
+            .expect("managed batch size");
+        assert_eq!(
+            effective_agent_trigger_batch_size(&store, 8).expect("managed batch size"),
+            27
+        );
+        fs::remove_dir_all(root).expect("cleanup");
     }
 }

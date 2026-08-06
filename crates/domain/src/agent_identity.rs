@@ -15,6 +15,28 @@ pub struct HumanUser {
     pub created_at: DateTime<Utc>,
 }
 
+pub const HUMAN_HARNESS_STATUS_PENDING: &str = "pending";
+pub const HUMAN_HARNESS_STATUS_PROVISIONING: &str = "provisioning";
+pub const HUMAN_HARNESS_STATUS_ACTIVE: &str = "active";
+pub const HUMAN_HARNESS_STATUS_FAILED: &str = "failed";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanHarnessAccount {
+    pub human_user_id: Uuid,
+    pub provider_mode: String,
+    pub harness_base_url: String,
+    pub harness_uid: String,
+    pub harness_email: String,
+    pub space_identifier: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub last_error: Option<String>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub provisioned_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumanCredential {
     pub human_user_id: Uuid,

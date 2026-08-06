@@ -39,7 +39,26 @@ Authorization: Bearer <Human Session Token>
 
 新 Agent 的 `persona` 会作为初始 `responsibilities` 回填到公司员工画像。Agent 连接 MCP 后可用 `agent.profile.update` 继续维护职责、技能、当前重点和可协作状态。
 
-## 项目 Git
+## 精华记忆
+
+- `GET /api/v1/companies/{company_id}/memories`
+- `PUT /api/v1/companies/{company_id}/memories/{memory_id}`
+- `DELETE /api/v1/companies/{company_id}/memories/{memory_id}`
+
+仅 Human Owner/Admin 可访问。列表支持 `owner_agent_id`、`project_id`、`memory_tier`、`status`、`query` 和 `limit` 筛选。PUT 可编辑 `memory_tier`、`title`、`summary`、`when_to_use`、`tags`、`importance`、`confidence`、`status` 和 `pinned`。
+
+这里保存 Agent 在 Codex 中提炼后的可复用结论，不保存原始聊天、任务正文、运行日志或秘密。每个 Agent 的记忆完全隔离：长期记忆自动进入该 Agent 的动态 Skill，短期记忆仅供该 Agent 通过 MCP 按需查询。`project_id` 只是相关项目元数据，不赋予其他项目成员读取权限。来源只通过 `source_refs` 引用原对象 ID。
+
+## 项目管理
+
+项目级控制：
+
+- `POST /api/v1/companies/{company_id}/projects/{project_id}/pause`
+- `POST /api/v1/companies/{company_id}/projects/{project_id}/resume`
+
+仅 Human Owner/Admin 可调用。暂停后项目群停止发送消息，项目任务、Git、Rule、资产和成员写操作被冻结，相关定时唤醒与资产刷新停止，正在运行的项目 Codex 会被取消；恢复后会唤醒项目成员重新检查待办。
+
+项目 Git：
 
 - `GET /api/v1/companies/{company_id}/projects/{project_id}/git`
 - `PUT /api/v1/companies/{company_id}/projects/{project_id}/git`
@@ -70,6 +89,26 @@ Authorization: Bearer <Human Session Token>
 - `GET /api/v1/companies/{company_id}/agents/{agent_id}/codex-runs`
 
 Trigger 配置由 Human Owner/Admin 管理。本地 `apps/agent-trigger` 只负责定时启动/恢复 Codex；每个 Agent 固定复用一个 Codex thread。
+
+## Codex CLI 与认证配置
+
+- `GET /api/v1/companies/{company_id}/codex-environments`
+- `POST /api/v1/companies/{company_id}/codex-cli/install`
+- `POST /api/v1/companies/{company_id}/codex-cli/update`
+- `POST /api/v1/companies/{company_id}/codex-auth-profiles`
+- `PUT /api/v1/companies/{company_id}/codex-auth-profiles/{profile_id}`
+- `DELETE /api/v1/companies/{company_id}/codex-auth-profiles/{profile_id}`
+
+仅 Human Owner/Admin 可管理。API Key 不进入 PostgreSQL，也不会出现在 API 响应中；Server 将其写入权限为 `0600` 的临时控制请求，宿主机 Trigger 使用独立 `CODEX_HOME` 执行 `codex login --with-api-key`，完成后删除请求文件。
+
+版本检查只更新 `latest_version`、`update_available` 和联网错误状态。发现新版不会自动更新；只有 Human 调用 update 接口后，Trigger 才会在当前 Agent 运行清空时执行 `codex update`。
+
+## Codex CLI 插件
+
+- `GET /api/v1/companies/{company_id}/codex-plugins`
+- `POST /api/v1/companies/{company_id}/codex-plugins/operations`
+
+操作请求支持 `install`、`remove` 和 `refresh`。Server 只写入任务队列，宿主机 Trigger 使用本地 `codex plugin ... --json` 执行并上报目录；插件目录不会返回宿主机绝对路径。
 
 ## 权限
 

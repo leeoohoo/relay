@@ -1,0 +1,149 @@
+use std::collections::{HashMap, HashSet};
+
+use argon2::{
+    password_hash::{PasswordHash, PasswordVerifier},
+    Argon2,
+};
+use chrono::{DateTime, Duration, Utc};
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use ai_chat_domain::agent_identity::{
+    AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,
+    AgentInboxEventStatus, AgentKeyIssueLog, AgentKeyIssueType, AgentKeyRecord, AgentOwnerBinding,
+    AgentProfile, AgentRegistrationRequest, AgentStatus, ChallengeStatus, HumanAccountToken,
+    HumanCredential, HumanSession, HumanUser, OwnershipProofChallenge, OwnershipProofProvider,
+    RegistrationStatus, SocialProofSubmission, AGENT_COLLABORATION_PREFERENCE_AVAILABLE,
+    AGENT_COLLABORATION_PREFERENCE_UNAVAILABLE,
+};
+use ai_chat_domain::company::{
+    company_profession_catalog, company_project_type_by_key, company_project_type_catalog,
+    default_company_agent_permissions_for_profession, infer_company_profession,
+    infer_company_project_type, AgentCodexRunActivity, AgentCodexRunToken, AgentCodexSession,
+    AgentCodexTriggerConfig, AgentCodexTriggerRun, AgentMemory, AgentStaffingAction,
+    AgentToolApprovalRequest, CodexPluginCatalogSnapshot, CodexPluginOperation, Company,
+    CompanyAgentMembership, CompanyCodexRunnerProfile, CompanyGovernancePolicySettings,
+    CompanyGovernancePolicyVersion, CompanyHumanMember, CompanyProject, CompanyProjectAsset,
+    CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig, CompanyProjectMember,
+    CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
+    CompanyProjectTaskDependency, CompanyRealtimeEvent, OrgUnit, AGENT_CODEX_APPROVAL_POLICY_NEVER,
+    AGENT_CODEX_APPROVAL_POLICY_ON_REQUEST, AGENT_CODEX_APPROVAL_TOOL_COMMAND,
+    AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE, AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS,
+    AGENT_CODEX_SANDBOX_READ_ONLY, AGENT_CODEX_SANDBOX_WORKSPACE_WRITE,
+    AGENT_CODEX_SETTING_INHERIT, AGENT_CODEX_TRIGGER_STATUS_ACTIVE,
+    AGENT_CODEX_TRIGGER_STATUS_PAUSED, AGENT_CODEX_TRIGGER_TYPE_ASSET_REFRESH,
+    AGENT_CODEX_TRIGGER_TYPE_MANUAL, AGENT_CODEX_TRIGGER_TYPE_MESSAGE,
+    AGENT_CODEX_TRIGGER_TYPE_SCHEDULED, AGENT_CODEX_TRIGGER_TYPE_TASK, AGENT_MEMORY_SCOPE_AGENT,
+    AGENT_MEMORY_STATUS_ACTIVE, AGENT_MEMORY_STATUS_ARCHIVED, AGENT_MEMORY_STATUS_DRAFT,
+    AGENT_MEMORY_STATUS_SUPERSEDED, AGENT_MEMORY_TIER_LONG_TERM, AGENT_MEMORY_TIER_SHORT_TERM,
+    AGENT_RUNTIME_APPROVAL_ACTION_STAFF_HIRE, AGENT_RUNTIME_APPROVAL_ACTION_STAFF_SUSPEND,
+    AGENT_RUNTIME_APPROVAL_ACTION_STAFF_TERMINATE, AGENT_RUNTIME_APPROVAL_ACTION_TASK_REASSIGN,
+    AGENT_TOOL_APPROVAL_SOURCE_CODEX, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
+    AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXECUTING,
+    AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
+    AGENT_TOOL_APPROVAL_STATUS_PENDING, AGENT_TOOL_APPROVAL_STATUS_REJECTED,
+    CODEX_PLUGIN_OPERATION_INSTALL, CODEX_PLUGIN_OPERATION_REFRESH, CODEX_PLUGIN_OPERATION_REMOVE,
+    CODEX_PLUGIN_OPERATION_STATUS_QUEUED, COMPANY_AGENT_ROLE_MANAGER, COMPANY_AGENT_ROLE_MEMBER,
+    COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE, COMPANY_PERMISSION_AGENT_COMMUNICATE,
+    COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE, COMPANY_PERMISSION_PROJECT_CREATE,
+    COMPANY_PERMISSION_PROJECT_MANAGE, COMPANY_PERMISSION_PROJECT_RULES_MANAGE,
+    COMPANY_PERMISSION_STAFF_HIRE, COMPANY_PERMISSION_STAFF_SUSPEND,
+    COMPANY_PERMISSION_STAFF_TERMINATE, COMPANY_PERMISSION_TASK_ASSIGN,
+    COMPANY_PERMISSION_TASK_UPDATE, COMPANY_ROLE_ADMIN, COMPANY_ROLE_OWNER,
+    PROJECT_MEMBER_ROLE_MEMBER, PROJECT_MEMBER_ROLE_OWNER, PROJECT_STATUS_ACTIVE,
+    PROJECT_STATUS_CANCELLED, PROJECT_STATUS_COMPLETED, PROJECT_STATUS_PAUSED,
+    PROJECT_TASK_STATUS_BLOCKED, PROJECT_TASK_STATUS_CANCELLED, PROJECT_TASK_STATUS_DONE,
+    PROJECT_TASK_STATUS_FAILED, PROJECT_TASK_STATUS_IN_PROGRESS, PROJECT_TASK_STATUS_TODO,
+    PROJECT_TYPE_SOURCE_DESCRIPTION, PROJECT_TYPE_SOURCE_FOLDER, PROJECT_TYPE_SOURCE_HUMAN,
+    PROJECT_TYPE_SOURCE_SYSTEM, STAFFING_ACTION_ACTIVATE, STAFFING_ACTION_HIRE,
+    STAFFING_ACTION_PERMISSION_UPDATE, STAFFING_ACTION_PROFESSION_UPDATE,
+    STAFFING_ACTION_REACTIVATE, STAFFING_ACTION_ROLE_UPDATE, STAFFING_ACTION_SUSPEND,
+    STAFFING_ACTION_TERMINATE, STAFFING_ACTOR_AGENT, STAFFING_ACTOR_HUMAN,
+    STAFFING_STATUS_COMPLETED,
+};
+use ai_chat_domain::social::{
+    ConversationContext, ConversationPreview, ConversationType, MessageView,
+    CONVERSATION_CONTEXT_COMPANY_ALL, CONVERSATION_CONTEXT_COMPANY_DIRECT,
+    CONVERSATION_CONTEXT_COMPANY_GROUP, CONVERSATION_CONTEXT_PROJECT_GROUP,
+};
+use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
+
+use crate::ownership_proof::{
+    OwnershipProofVerifier, OwnershipVerificationInput, StubOwnershipProofVerifier,
+};
+use crate::validation::*;
+
+use crate::contracts::*;
+use crate::service::PlatformRepository;
+
+mod auth;
+mod chat;
+mod chat_internal;
+mod codex_profiles;
+mod codex_runtime;
+mod company;
+mod memory;
+mod ownership;
+mod project;
+mod registration;
+mod security;
+mod staffing_create;
+mod staffing_status;
+mod task_access;
+mod tasks;
+
+#[derive(Clone)]
+pub struct PlatformApp<
+    R: PlatformRepository,
+    V: OwnershipProofVerifier = StubOwnershipProofVerifier,
+> {
+    pub(crate) repo: R,
+    verifier: V,
+}
+
+impl<R: PlatformRepository> PlatformApp<R, StubOwnershipProofVerifier> {
+    pub fn new(repo: R) -> Self {
+        Self {
+            repo,
+            verifier: StubOwnershipProofVerifier,
+        }
+    }
+}
+
+impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
+    pub fn with_verifier(repo: R, verifier: V) -> Self {
+        Self { repo, verifier }
+    }
+
+    pub fn health_check(&self) -> AppResult<()> {
+        self.repo.health_check()
+    }
+
+    pub fn auth(&self) -> crate::services::AuthService<'_, R> {
+        crate::services::AuthService::new(&self.repo)
+    }
+
+    pub fn companies(&self) -> crate::services::CompanyService<'_, R> {
+        crate::services::CompanyService::new(&self.repo)
+    }
+
+    pub fn chat(&self) -> crate::services::ChatService<'_, R> {
+        crate::services::ChatService::new(&self.repo)
+    }
+
+    pub fn projects(&self) -> crate::services::ProjectService<'_, R> {
+        crate::services::ProjectService::new(&self.repo)
+    }
+
+    pub fn tasks(&self) -> crate::services::TaskService<'_, R> {
+        crate::services::TaskService::new(&self.repo)
+    }
+
+    pub fn memories(&self) -> crate::services::MemoryService<'_, R> {
+        crate::services::MemoryService::new(&self.repo)
+    }
+
+    pub fn codex(&self) -> crate::services::CodexService<'_, R> {
+        crate::services::CodexService::new(&self.repo)
+    }
+}

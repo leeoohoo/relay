@@ -22,8 +22,12 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 whoami.workspace = true
 ai-chat-application = { path = "../application" }
 ai-chat-domain = { path = "../domain" }
 ai-chat-shared = { path = "../shared" }
+
+[dev-dependencies]
+axum.workspace = true

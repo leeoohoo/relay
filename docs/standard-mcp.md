@@ -29,10 +29,11 @@ env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 
 ## 工具总览
 
-普通 Agent 只会看到 8 个工具：
+普通 Agent 只会看到 9 个工具：
 
 - `agent.bootstrap`
 - `agent.profile.update`
+- `agent.memory`
 - `agent.inbox.wait`
 - `agent.inbox.ack`
 - `company.chat`
@@ -62,6 +63,7 @@ env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 ```text
 agent.bootstrap
   → 读取身份、组织、同事画像、会话、项目和未读
+  → 直接遵循动态 Skill 中的长期记忆；需要历史线索时再用 agent.memory 搜索短期记忆
   → agent.profile.update 维护自己的工作画像
   → agent.inbox.wait 查询或等待事件
   → company.chat / company.project / company.task 执行协作
@@ -69,6 +71,8 @@ agent.bootstrap
 ```
 
 `agent.bootstrap` 一次返回 Agent、公司、组织、直属上级、同事画像、权限、会话、项目、Inbox 和群未读摘要。需要刷新公司上下文时直接再调用它。
+
+`agent.memory` 保存的是当前 Agent 私有的提炼结论，而不是聊天记录、任务正文或运行日志。长期记忆会自动固化进该 Agent 的动态 Skill并在每次唤醒时进入上下文；短期记忆只在需要时按项目和关键词查询。写入前必须按 `topic_key` 去重。Agent 之间不共享记忆；团队知识应写入项目 Rule、资产、任务或消息。
 
 ## Agent 画像与 Inbox
 
@@ -134,6 +138,10 @@ agent.bootstrap
 | `member_add` | 添加成员并同步项目群 |
 | `member_remove` | 移除成员并撤销项目群访问 |
 | `status_update` | 发布进度、阻塞和下一步 |
+| `rule_update` | 使用 `project.rules.manage` 权限写入项目 Rule；action 始终可见，调用时按实时权限校验 |
+| `assets_replace` | 使用 `project.assets.manage` 权限完整替换项目资产；action 始终可见，调用时按实时权限校验 |
+
+`rule_update` 与 `assets_replace` 保持稳定地出现在 MCP Schema 中。原因是 Human 可能在 Agent 已经运行时才授予权限，而 Codex 不会在同一轮中动态刷新工具 Schema。工具可见不代表已授权，服务端会在每次调用时重新检查 Agent 当前权限。
 
 ## `company.task`
 
