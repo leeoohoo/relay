@@ -24,510 +24,96 @@ import {
 } from "../relaySkills";
 import type { Company, HumanUser, RuntimeConfig, Session, View } from "../types/appShell";
 import type { Conversation, Message } from "../types/chat";
-
-type CompanyProfession = {
-  key: string;
-  label: string;
-  label_en: string;
-  description: string;
-  description_en: string;
-  category_key: string;
-  category_label: string;
-  category_label_en: string;
-  skill_name: string;
-  skill_markdown: string;
-  skill_markdown_en: string;
-  can_create_tasks: boolean;
-};
-
-type OrgUnit = {
-  id: string;
-  parent_org_unit_id: string | null;
-  name: string;
-  unit_type: string;
-};
-
-type AgentProfile = {
-  id: string;
-  display_name: string;
-  handle: string;
-  persona: string;
-  collaboration_preference: "available" | "low_cost_only" | "unavailable";
-  status: string;
-  created_at: string;
-};
-
-type AgentMembership = {
-  id: string;
-  agent_profile_id: string;
-  org_unit_id: string;
-  job_title: string;
-  role_key: string;
-  permissions: string[];
-  responsibilities: string[];
-  skills: string[];
-  current_focus: string;
-  staffing_scope_org_unit_id: string | null;
-  employment_status: string;
-  reports_to_membership_id: string | null;
-};
-
-type AgentConnection = {
-  status: "connected" | "not_connected" | "awaiting_activation" | "suspended" | "terminated" | "key_revoked" | "key_expired" | "no_key";
-  key_prefix: string | null;
-  key_created_at: string | null;
-  key_expires_at: string | null;
-  last_used_at: string | null;
-};
-
-export type CompanyAgent = {
-  agent_profile: AgentProfile;
-  membership: AgentMembership;
-  profession?: CompanyProfession;
-  connection: AgentConnection;
-};
-
-type ProjectGitView = {
-  remote_url: string;
-  default_branch: string;
-  git_host: string;
-  push_enabled: boolean;
-  branch_prefix: string;
-  auth_configured: boolean;
-};
-
-type ProjectGitAdminView = {
-  remote_url: string;
-  default_branch: string;
-  git_host: string;
-  host_local_path: string;
-  auth_profile: string | null;
-  allow_agent_push: boolean;
-  branch_prefix: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type CompanyProjectTask = {
-  id: string;
-  project_id: string;
-  title: string;
-  description: string;
-  status: "todo" | "in_progress" | "blocked" | "done" | "failed" | "cancelled";
-  priority: "low" | "normal" | "high" | "urgent";
-  assignee_agent_id: string | null;
-  created_by_agent_id: string | null;
-  created_by_human_user_id: string | null;
-  updated_by_agent_id: string | null;
-  updated_by_human_user_id: string | null;
-  due_at: string | null;
-  completed_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type CompanyProject = {
-  project: {
-    id: string;
-    name: string;
-    description: string;
-    project_type: string;
-    project_type_source: string;
-    project_type_confidence: number;
-    project_type_evidence: string[];
-    status: string;
-  };
-  git: ProjectGitView | null;
-  rule: {
-    project_id: string;
-    content: string;
-    updated_by_agent_id: string | null;
-    updated_by_human_user_id: string | null;
-    created_at: string;
-    updated_at: string;
-  } | null;
-  assets: Array<{
-    id: string;
-    project_id: string;
-    name: string;
-    asset_type: string;
-    locator: string;
-    description: string;
-    status: "active" | "missing" | "deprecated" | "unknown";
-    metadata: Record<string, unknown>;
-    updated_by_agent_id: string | null;
-    updated_by_human_user_id: string | null;
-    created_at: string;
-    updated_at: string;
-  }>;
-  asset_refresh: {
-    project_id: string;
-    maintainer_agent_id: string;
-    interval_minutes: number;
-    enabled: boolean;
-    next_refresh_at: string;
-    last_requested_at: string | null;
-    last_completed_at: string | null;
-    created_at: string;
-    updated_at: string;
-  } | null;
-  members: Array<{
-    member: {
-      id: string;
-      project_id: string;
-      agent_profile_id: string;
-      role: string;
-      left_at: string | null;
-    };
-    agent_profile: AgentProfile;
-  }>;
-  tasks: CompanyProjectTask[];
-  task_dependencies: Array<{
-    id: string;
-    project_id: string;
-    task_id: string;
-    depends_on_task_id: string;
-  }>;
-  task_status_history: Array<{
-    id: string;
-    project_id: string;
-    task_id: string;
-    from_status: CompanyProjectTask["status"] | null;
-    to_status: CompanyProjectTask["status"];
-    changed_by_agent_id: string | null;
-    changed_by_human_user_id: string | null;
-    change_source: "agent" | "human" | "system";
-    metadata: Record<string, unknown>;
-    created_at: string;
-  }>;
-};
-
-type CompanyProjectType = {
-  key: string;
-  label: string;
-  label_en: string;
-  description: string;
-  description_en: string;
-  category_key: string;
-  category_label: string;
-  category_label_en: string;
-  rule_markdown: string;
-  rule_markdown_en: string;
-};
-
-type CodexTriggerRun = {
-  id: string;
-  trigger_type: string;
-  status: string;
-  project_id: string | null;
-  codex_thread_id: string | null;
-  started_at: string;
-  finished_at: string | null;
-  final_message_summary: string | null;
-  error_message: string | null;
-  activity_phase: string;
-  activity_summary: string | null;
-  last_activity_at: string | null;
-  activity_log: Array<{
-    at: string;
-    phase: string;
-    summary: string;
-  }>;
-};
-
-type CodexTriggerView = {
-  runner_profile_id: string | null;
-  config: {
-    id: string;
-    status: "active" | "paused" | "error";
-    interval_seconds: number;
-    codex_profile: string;
-    model: string | null;
-    reasoning_effort: CodexReasoningEffort | null;
-    reasoning_summary: CodexReasoningSummary | null;
-    verbosity: CodexVerbosity | null;
-    personality: CodexPersonality | null;
-    service_tier: "fast" | null;
-    sandbox_mode: CodexSandboxMode;
-    approval_policy: CodexApprovalPolicy;
-    network_access: boolean | null;
-    web_search: CodexWebSearch | null;
-    feature_multi_agent: boolean | null;
-    feature_remote_plugin: boolean | null;
-    feature_hooks: boolean | null;
-    feature_goals: boolean | null;
-    feature_shell_tool: boolean | null;
-    max_run_seconds: number;
-    next_run_at: string;
-    lease_owner: string | null;
-    lease_expires_at: string | null;
-    manual_run_requested_at: string | null;
-    wake_requested_at: string | null;
-    wake_reason: string | null;
-    last_run_at: string | null;
-    last_success_at: string | null;
-    last_error: string | null;
-    consecutive_failure_count: number;
-  };
-  recent_runs: CodexTriggerRun[];
-};
-
-type CodexRunnerProfileView = {
-  profile: {
-    id: string;
-    company_id: string;
-    name: string;
-    interval_seconds: number;
-    codex_profile: string;
-    model: string | null;
-    reasoning_effort: CodexReasoningEffort | null;
-    reasoning_summary: CodexReasoningSummary | null;
-    verbosity: CodexVerbosity | null;
-    personality: CodexPersonality | null;
-    service_tier: "fast" | null;
-    sandbox_mode: CodexSandboxMode;
-    approval_policy: CodexApprovalPolicy;
-    network_access: boolean | null;
-    web_search: CodexWebSearch | null;
-    feature_multi_agent: boolean | null;
-    feature_remote_plugin: boolean | null;
-    feature_hooks: boolean | null;
-    feature_goals: boolean | null;
-    feature_shell_tool: boolean | null;
-    max_run_seconds: number;
-    is_default: boolean;
-    created_at: string;
-    updated_at: string;
-  };
-  assigned_agent_count: number;
-};
-
-type CodexReasoningSummary = "auto" | "concise" | "detailed" | "none";
-type CodexVerbosity = "low" | "medium" | "high";
-type CodexPersonality = "none" | "friendly" | "pragmatic";
-type CodexWebSearch = "disabled" | "cached" | "indexed" | "live";
-type CodexSandboxMode = "inherit" | "read_only" | "workspace_write";
-type CodexApprovalPolicy = "inherit" | "never" | "on-request";
-
-type CodexCliRuntime = {
-  installed: boolean;
-  source: string;
-  executable_path: string | null;
-  installed_version: string | null;
-  latest_version: string | null;
-  update_available: boolean;
-  operation_status: "idle" | "install_pending" | "installing" | "update_pending" | "updating" | "failed";
-  last_checked_at: string | null;
-  update_check_error: string | null;
-  last_error: string | null;
-  host_os: string;
-  host_arch: string;
-  installer_kind: "posix_shell" | "powershell" | "unsupported";
-  installation_supported: boolean;
-  default_auth: CodexDefaultAuthEnvironment;
-  updated_at: string;
-};
-
-type CodexDefaultAuthEnvironment = {
-  selector: "default";
-  name: string;
-  status: "active" | "logged_out" | "unknown";
-  method: "api_key" | "chatgpt" | "configured" | null;
-  last_checked_at: string | null;
-  last_error: string | null;
-  config: {
-    codex_home: string | null;
-    config_path: string | null;
-    config_exists: boolean;
-    auth_path: string | null;
-    auth_exists: boolean;
-    credential_hint: string | null;
-    openai_base_url: string | null;
-    model_provider: string | null;
-    model: string | null;
-    reasoning_effort: string | null;
-    sandbox_mode: string | null;
-    approval_policy: string | null;
-    mcp_servers: string[];
-    named_profiles: string[];
-    trusted_project_count: number;
-    plugin_count: number;
-  };
-};
-
-type CodexAuthProfile = {
-  id: string;
-  company_id: string;
-  name: string;
-  selector: string;
-  base_url: string | null;
-  status: "pending" | "active" | "failed" | "deleting";
-  last_error: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type CodexEnvironmentView = {
-  runtime: CodexCliRuntime;
-  profiles: CodexAuthProfile[];
-  mcp_environments: CodexMcpEnvironmentSnapshot[];
-};
-
-type CodexMcpServer = {
-  name: string;
-  transport: "stdio" | "streamable_http" | string;
-  enabled: boolean;
-  auth_status: string | null;
-  address: string | null;
-  command: string | null;
-  argument_count: number;
-  bearer_token_env_var: string | null;
-  startup_timeout_sec: number | null;
-  tool_timeout_sec: number | null;
-  disabled_reason: string | null;
-  configured_by_user: boolean;
-};
-
-type CodexMcpEnvironmentSnapshot = {
-  selector: string;
-  status: "unknown" | "ready" | "failed";
-  operation_status: "idle" | "refresh_pending" | "refreshing" | "add_pending" | "adding" | "remove_pending" | "removing" | "failed";
-  pending_server_name: string | null;
-  servers: CodexMcpServer[];
-  last_checked_at: string | null;
-  last_error: string | null;
-};
-
-type CodexPluginItem = {
-  pluginId: string;
-  name: string;
-  marketplaceName: string;
-  version: string;
-  installed: boolean;
-  enabled: boolean;
-  installPolicy?: string;
-  authPolicy?: string;
-};
-
-type CodexPluginCatalog = {
-  runner_id: string;
-  hostname: string;
-  codex_version: string | null;
-  fingerprint: string;
-  installed: CodexPluginItem[];
-  available: CodexPluginItem[];
-  marketplaces: Array<{
-    name: string;
-    root?: string;
-    marketplaceSource?: { sourceType?: string; source?: string };
-  }>;
-  discovered_at: string;
-};
-
-type CodexPluginOperation = {
-  id: string;
-  target_runner_id: string;
-  operation: "install" | "remove" | "refresh";
-  plugin_id: string | null;
-  status: "queued" | "running" | "succeeded" | "failed";
-  attempt_count: number;
-  error_message: string | null;
-  requested_at: string;
-  finished_at: string | null;
-};
-
-type AgentToolApproval = {
-  id: string;
-  company_id: string;
-  approval_source: "runtime_model" | "codex";
-  runtime_config_id: string | null;
-  runtime_run_id: string | null;
-  codex_trigger_run_id: string | null;
-  requested_by_agent_id: string;
-  tool_name: string;
-  risk_level: "low" | "medium" | "high";
-  reason: string;
-  arguments: Record<string, unknown>;
-  status: "pending" | "approved" | "executing" | "executed" | "rejected" | "expired" | "failed";
-  expires_at: string;
-  reviewed_by_human_user_id: string | null;
-  review_note: string;
-  reviewed_at: string | null;
-  execution_result: Record<string, unknown>;
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-type AgentMemory = {
-  id: string;
-  company_id: string;
-  owner_agent_id: string;
-  project_id: string | null;
-  memory_tier: "short_term" | "long_term";
-  memory_type: "fact" | "decision" | "lesson" | "preference" | "procedure" | "relationship" | "handoff";
-  topic_key: string;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  tags: string[];
-  importance: number;
-  confidence: number;
-  pinned: boolean;
-  status: "draft" | "active" | "archived" | "superseded";
-  source_refs: Array<{ source_type: string; source_id: string; label: string | null }>;
-  supersedes_memory_id: string | null;
-  expires_at: string | null;
-  verified_by_agent_id: string | null;
-  verified_by_human_user_id: string | null;
-  verified_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type CompanyConsole = {
-  company: Company;
-  human_membership: { role: "owner" | "admin" | "viewer"; status: string };
-  org_units: OrgUnit[];
-  agents: CompanyAgent[];
-  conversations: Conversation[];
-  projects: CompanyProject[];
-  professions: CompanyProfession[];
-  project_types: CompanyProjectType[];
-  governance_policy: {
-    effective_settings: {
-      managed_workspace_root: string | null;
-      skill_language: RelaySkillLanguage;
-    };
-  };
-};
-
-type Credential = {
-  agent: AgentProfile;
-  key: string | null;
-  keyPrefix: string;
-  permissions: string[];
-  professionKey: string;
-  profession?: CompanyProfession;
-  skillLanguage: RelaySkillLanguage;
-};
-
-type BatchCredentialResult = {
-  credentials: Credential[];
-  failures: Array<{ agentName: string; message: string }>;
-};
+import type {
+  AgentMemory,
+  AgentMembership,
+  AgentProfile,
+  AgentToolApproval,
+  BatchCredentialResult,
+  CodexApprovalPolicy,
+  CodexAuthProfile,
+  CodexCliRuntime,
+  CodexDefaultAuthEnvironment,
+  CodexEnvironmentView,
+  CodexMcpEnvironmentSnapshot,
+  CodexMcpServer,
+  CodexPersonality,
+  CodexPluginCatalog,
+  CodexPluginOperation,
+  CodexReasoningEffort,
+  CodexReasoningSummary,
+  CodexRunnerProfileView,
+  CodexSandboxMode,
+  CodexTriggerRun,
+  CodexTriggerView,
+  CodexVerbosity,
+  CodexWebSearch,
+  CompanyAgent,
+  CompanyConsole,
+  CompanyProfession,
+  CompanyProject,
+  CompanyProjectTask,
+  CompanyProjectType,
+  Credential,
+  OrgUnit,
+  ProjectGitAdminView,
+} from "../types/platform";
+import {
+  approvalRequestDetail,
+  approvalRiskLabel,
+  approvalStatusLabel,
+  approvalToolLabel,
+  CodeBlock,
+  codexActivityPhaseLabel,
+  codexOperationalStatusLabel,
+  codexPluginOperationStatusLabel,
+  codexReasoningEffortLabel,
+  codexRunDisplayMessage,
+  codexTriggerStatusLabel,
+  codexTriggerTypeLabel,
+  collaborationPreferenceLabel,
+  companyAgentProfessionKey,
+  copyText,
+  Dialog,
+  EmptyCompany,
+  formatAgentCount,
+  formatElapsed,
+  formatInterval,
+  formatRunSeconds,
+  formatSkillBundle,
+  formatTaskDue,
+  formatTime,
+  LoadingState,
+  memoryStatusLabel,
+  memoryTierLabel,
+  memoryTypeLabel,
+  Metric,
+  persistSession,
+  projectAssetTypeLabel,
+  projectStatusLabel,
+  projectTypeLabel,
+  readSession,
+  relayAgentConnectionNames,
+  SkillCopyBlock,
+  StatusBadge,
+  taskDueClass,
+  taskPriorityLabel,
+  taskStatusLabel,
+  Toast,
+  toDateTimeLocalValue,
+} from "./app/shared";
+import {
+  BatchCredentialDialog,
+  CreateAgentDialog,
+  CreateCompanyDialog,
+  CredentialDialog,
+  OrganizationView,
+  UserPreferencesDialog,
+} from "./app/organization";
+import { PROJECT_PERMISSIONS, STAFFING_PERMISSIONS } from "./app/permissions";
 
 const SESSION_KEY = "agent_company_session";
 const CODEX_DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const STAFFING_PERMISSIONS = [
-  { key: "agent.staff.hire", label: "扩招 Agent" },
-  { key: "agent.staff.suspend", label: "暂停 Agent" },
-  { key: "agent.staff.terminate", label: "裁撤 Agent" },
-];
-const PROJECT_PERMISSIONS = [
-  { key: "project.rules.manage", label: "生成 / 更新项目 Rule" },
-  { key: "project.assets.manage", label: "维护项目资产清单" },
-];
 
 export function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
@@ -2323,8 +1909,6 @@ function CodexRunnersView(props: {
     </div>
   );
 }
-
-type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 type LocalCodexModel = {
   id: string;
@@ -4763,474 +4347,4 @@ function ProjectGitCard(props: {
       )}
     </article>
   );
-}
-
-function OrganizationView(props: {
-  companyId: string;
-  orgUnits: OrgUnit[];
-  agents: CompanyAgent[];
-  managedWorkspaceRoot: string | null;
-  token: string;
-  onChanged: () => Promise<void>;
-  onError: (error: unknown) => void;
-  onNotice: (notice: string) => void;
-}) {
-  const [name, setName] = useState("");
-  const [parentId, setParentId] = useState(props.orgUnits[0]?.id ?? "");
-  const [unitType, setUnitType] = useState("team");
-  const [busy, setBusy] = useState(false);
-  const [workspaceRoot, setWorkspaceRoot] = useState(props.managedWorkspaceRoot ?? "");
-  const [workspaceBusy, setWorkspaceBusy] = useState(false);
-  const orgPagination = usePagination(props.orgUnits, 10, props.companyId);
-
-  useEffect(() => setWorkspaceRoot(props.managedWorkspaceRoot ?? ""), [props.managedWorkspaceRoot]);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      await api(`/api/v1/companies/${props.companyId}/org-units`, {
-        method: "POST",
-        body: JSON.stringify({ name, parent_org_unit_id: parentId || null, unit_type: unitType }),
-      }, props.token);
-      setName("");
-      await props.onChanged();
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveWorkspace(event: FormEvent) {
-    event.preventDefault();
-    setWorkspaceBusy(true);
-    try {
-      await api(`/api/v1/companies/${props.companyId}/workspace-settings`, {
-        method: "POST",
-        body: JSON.stringify({ managed_workspace_root: workspaceRoot.trim() || null }),
-      }, props.token);
-      await props.onChanged();
-      props.onNotice(workspaceRoot.trim() ? "组织默认项目空间已更新" : "已恢复 ~/.relay 默认项目空间");
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setWorkspaceBusy(false);
-    }
-  }
-
-  return (
-    <div className="organization-layout">
-      <section className="section-card">
-        <div className="section-heading"><div><span className="eyebrow">DIRECTORY</span><h2>组织目录</h2><p>Agent 通过 MCP 读取这份目录来理解同事关系。</p></div></div>
-        <div className="org-list">
-          {orgPagination.pageItems.map((unit) => {
-            const count = props.agents.filter((agent) => agent.membership.org_unit_id === unit.id).length;
-            const parent = props.orgUnits.find((item) => item.id === unit.parent_org_unit_id);
-            return <div className="org-row" key={unit.id}><span className="org-icon"><Icon name="org" /></span><div><strong>{unit.name}</strong><small>{parent ? `${parent.name} / ` : ""}{unit.unit_type}</small></div><span>{count} Agent</span></div>;
-          })}
-          <Pagination {...orgPagination} onPageChange={orgPagination.setPage} />
-        </div>
-      </section>
-      <section className="section-card compact-card">
-        <div className="section-heading"><div><span className="eyebrow">NEW UNIT</span><h2>添加组织节点</h2></div></div>
-        <form className="stack-form" onSubmit={submit}>
-          <Field label="名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：产品组" required /></Field>
-          <Field label="上级节点"><select value={parentId} onChange={(event) => setParentId(event.target.value)}>{props.orgUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></Field>
-          <Field label="类型"><select value={unitType} onChange={(event) => setUnitType(event.target.value)}><option value="division">事业部</option><option value="department">部门</option><option value="team">团队</option></select></Field>
-          <button className="button primary wide" disabled={busy}>{busy ? "创建中…" : "创建节点"}</button>
-        </form>
-      </section>
-      <section className="section-card compact-card organization-workspace-card">
-        <div className="section-heading"><div><span className="eyebrow">MANAGED WORKSPACE</span><h2>组织项目空间</h2></div></div>
-        <form className="stack-form" onSubmit={saveWorkspace}>
-          <Field label="自定义根目录（可选）"><input value={workspaceRoot} onChange={(event) => setWorkspaceRoot(event.target.value)} placeholder="默认：~/.relay/companies/{company-id}" /></Field>
-          <div className="git-security-note">留空使用当前 Relay 宿主机用户目录下的 <code>~/.relay</code>。请填写宿主机上的绝对路径；每个项目会创建独立目录。</div>
-          <button className="button primary wide" disabled={workspaceBusy}>{workspaceBusy ? "保存中…" : "保存项目空间"}</button>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function CreateCompanyDialog(props: { token: string; onClose: () => void; onCreated: (id: string) => Promise<void>; onError: (error: unknown) => void }) {
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [description, setDescription] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true);
-    try {
-      const response = await api<{ company_console: CompanyConsole }>("/api/v1/companies", { method: "POST", body: JSON.stringify({ name, slug: slug || undefined, description }) }, props.token);
-      await props.onCreated(response.company_console.company.id);
-    } catch (error) { props.onError(error); } finally { setBusy(false); }
-  }
-  return <Dialog title="创建公司" description="公司是 Agent 身份、组织和通信的租户边界。" onClose={props.onClose}><form className="stack-form" onSubmit={submit}><Field label="公司名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Northstar Studio" required /></Field><Field label="唯一标识（可选）"><input value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="northstar" /></Field><Field label="简介"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="这家公司负责什么？" /></Field><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "创建中…" : "创建公司"}</button></div></form></Dialog>;
-}
-
-function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfession[]; skillLanguage: RelaySkillLanguage; token: string; onClose: () => void; onCreated: (credential: Credential) => Promise<void>; onError: (error: unknown) => void }) {
-  const hasActiveManager = props.agents.some((agent) => agent.membership.role_key === "company_manager" && agent.membership.employment_status === "active");
-  const [displayName, setDisplayName] = useState("");
-  const [handle, setHandle] = useState("");
-  const [persona, setPersona] = useState("");
-  const [professionKey, setProfessionKey] = useState(props.professions[0]?.key ?? "general_member");
-  const [orgUnitId, setOrgUnitId] = useState(props.orgUnits[0]?.id ?? "");
-  const [reportsToId, setReportsToId] = useState("");
-  const [roleKey, setRoleKey] = useState(hasActiveManager ? "member" : "company_manager");
-  const [busy, setBusy] = useState(false);
-  const professionGroups = useMemo(() => {
-    const groups = new Map<string, CompanyProfession[]>();
-    props.professions.forEach((profession) => {
-      const label = props.skillLanguage === "en" ? profession.category_label_en : profession.category_label;
-      groups.set(label, [...(groups.get(label) ?? []), profession]);
-    });
-    return Array.from(groups.entries());
-  }, [props.professions, props.skillLanguage]);
-  async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true);
-    try {
-      const response = await api<{ result: { agent_profile: AgentProfile; membership: AgentMembership; agent_key_plaintext: string; agent_key_prefix: string } }>(`/api/v1/companies/${props.company.id}/agents`, { method: "POST", body: JSON.stringify({ display_name: displayName, handle: handle.replace(/^@/, ""), persona, profession_key: professionKey, org_unit_id: orgUnitId || null, reports_to_membership_id: reportsToId || null, role_key: roleKey }) }, props.token);
-      await props.onCreated({
-        agent: response.result.agent_profile,
-        key: response.result.agent_key_plaintext,
-        keyPrefix: response.result.agent_key_prefix,
-        permissions: response.result.membership.permissions,
-        professionKey,
-        profession: props.professions.find((profession) => profession.key === professionKey),
-        skillLanguage: props.skillLanguage,
-      });
-    } catch (error) { props.onError(error); } finally { setBusy(false); }
-  }
-  const selectedProfession = props.professions.find((profession) => profession.key === professionKey);
-  return <Dialog title="创建 Agent 账号" description={`为 ${props.company.name} 中的一个外部 Agent 签发身份。`} onClose={props.onClose}><form className="stack-form" onSubmit={submit}><div className="form-grid"><Field label="显示名称"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：Maya" required /></Field><Field label="Handle"><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="maya-product" required /></Field><Field label="职业"><select value={professionKey} onChange={(event) => setProfessionKey(event.target.value)} required>{professionGroups.map(([category, professions]) => <optgroup label={category} key={category}>{professions.map((profession) => <option key={profession.key} value={profession.key}>{props.skillLanguage === "en" ? profession.label_en : profession.label}</option>)}</optgroup>)}</select>{selectedProfession ? <small>{props.skillLanguage === "en" ? selectedProfession.description_en : selectedProfession.description}{selectedProfession.can_create_tasks ? " 可创建和分配任务。" : " 只能更新自己任务的执行状态。"}</small> : null}</Field><Field label="组织"><select value={orgUnitId} onChange={(event) => setOrgUnitId(event.target.value)}>{props.orgUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></Field><Field label="公司角色"><select value={roleKey} onChange={(event) => setRoleKey(event.target.value)} disabled={!hasActiveManager}><option value="member">普通成员</option><option value="company_manager">公司管理 Agent</option></select>{!hasActiveManager ? <small>公司当前没有活跃管理 Agent，因此本账号必须成为公司管理 Agent。公司角色与职业能力分别控制。</small> : <small>公司角色负责治理；任务创建能力由职业决定。</small>}</Field><Field label="直属上级"><select value={reportsToId} onChange={(event) => setReportsToId(event.target.value)}><option value="">无</option>{props.agents.filter((agent) => agent.membership.employment_status === "active").map((agent) => <option key={agent.membership.id} value={agent.membership.id}>{agent.agent_profile.display_name}</option>)}</select></Field></div><Field label="工作说明 / Persona"><textarea value={persona} onChange={(event) => setPersona(event.target.value)} placeholder="补充这个 Agent 在当前公司的具体职责、工作边界和擅长领域。" required /></Field><div className="security-note"><Icon name="shield" /><span><strong>Key 只会显示一次</strong><small>系统只保存哈希。关闭下一步窗口后无法找回，只能轮换。</small></span></div><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "签发中…" : "创建并签发 Key"}</button></div></form></Dialog>;
-}
-
-function CredentialDialog(props: { credential: Credential; onClose: () => void }) {
-  const endpoint = `${API_BASE_URL.replace(/\/$/, "")}/mcp`;
-  const hasPlaintextKey = props.credential.key !== null;
-  const connectionNames = relayAgentConnectionNames(props.credential.agent);
-  const envCommand = `export ${connectionNames.environmentVariable}="${props.credential.key ?? "<粘贴该 Agent 的完整 Key>"}"`;
-  const config = `[mcp_servers.${connectionNames.mcpServer}]\nurl = "${endpoint}"\nenv_http_headers = { "x-agent-key" = "${connectionNames.environmentVariable}" }`;
-  const hasStaffingPermission = props.credential.permissions.some((permission) => permission.startsWith("agent.staff."));
-  const skillDocuments = getRelaySkillDocuments(props.credential.permissions, {
-    agentId: props.credential.agent.id,
-    handle: props.credential.agent.handle,
-    mcpServerName: connectionNames.mcpServer,
-  }, props.credential.professionKey, props.credential.skillLanguage, props.credential.profession);
-  const skillBundle = formatSkillBundle(skillDocuments);
-  const fullBundle = [
-    `# Relay Agent: ${props.credential.agent.display_name}`,
-    hasPlaintextKey
-      ? `## Agent Key\n${props.credential.key}`
-      : `## Agent Key\n系统只保存 Key 哈希，无法再次读取完整 Key。当前 Key 前缀：${props.credential.keyPrefix || "未知"}。如果完整 Key 已遗失，请在管理台轮换 Key。`,
-    `## 环境变量\n${envCommand}`,
-    `## Codex config.toml\n${config}`,
-    `## Agent Skill\n${skillBundle}`,
-  ].join("\n\n");
-  const title = hasPlaintextKey ? "Agent 已可连接" : "Agent 接入资料";
-  const description = hasPlaintextKey
-    ? `${props.credential.agent.display_name} 的 Key 和对应 Skill 已准备好。请现在复制，关闭后 Key 不会再次显示。`
-    : `重新查看 ${props.credential.agent.display_name} 的 MCP 配置和完整 Skill。`;
-  return <Dialog title={title} description={description} onClose={props.onClose} wide><div className="credential-stack"><div className="credential-warning"><Icon name="alert" /><p><strong>{hasPlaintextKey ? "这是唯一一次明文展示" : "完整 Key 无法再次读取"}</strong><span>Key 前缀：{props.credential.keyPrefix || "未知"} · MCP：{connectionNames.mcpServer} · {hasStaffingPermission ? "通用 + 职业 + 人员管理 Skill" : "通用 + 职业 Skill"}</span>{!hasPlaintextKey ? <small>系统只保存 Key 哈希。如果完整 Key 已遗失，请关闭本窗口后点击“轮换 Key”。</small> : null}</p></div>{hasPlaintextKey ? <CodeBlock label="1. 完整 Agent Key" value={props.credential.key ?? ""} secret /> : null}<CodeBlock label={`${hasPlaintextKey ? "2" : "1"}. Codex MCP 配置（可与其他 Agent 并存）`} value={`${envCommand}\n\n${config}`} /><SkillCopyBlock documents={skillDocuments} step={hasPlaintextKey ? "3" : "2"} /><div className="bootstrap-call"><span className="step-number">{hasPlaintextKey ? "4" : "3"}</span><div><strong>从 {connectionNames.mcpServer} 调用 agent.bootstrap</strong><p>确认返回的 handle 是 @{props.credential.agent.handle.replace(/^@/, "")}，再使用该身份处理公司消息和工作。</p></div></div><button className="button primary wide" onClick={() => void copyText(fullBundle)}><Icon name="copy" /> {hasPlaintextKey ? "复制 Key + 配置 + 完整 Skill" : "复制 MCP 配置 + 完整 Skill"}</button><button className="button ghost wide" onClick={props.onClose}>{hasPlaintextKey ? "我已安全保存" : "关闭"}</button></div></Dialog>;
-}
-
-function BatchCredentialDialog(props: { result: BatchCredentialResult; onClose: () => void }) {
-  const endpoint = `${API_BASE_URL.replace(/\/$/, "")}/mcp`;
-  const bundles = props.result.credentials.map((credential) => {
-    const names = relayAgentConnectionNames(credential.agent);
-    const envCommand = `export ${names.environmentVariable}="${credential.key}"`;
-    const config = `[mcp_servers.${names.mcpServer}]\nurl = "${endpoint}"\nenv_http_headers = { "x-agent-key" = "${names.environmentVariable}" }`;
-    const documents = getRelaySkillDocuments(credential.permissions, {
-      agentId: credential.agent.id,
-      handle: credential.agent.handle,
-      mcpServerName: names.mcpServer,
-    }, credential.professionKey, credential.skillLanguage, credential.profession);
-    return {
-      credential,
-      names,
-      envCommand,
-      config,
-      documents,
-      full: [`# Relay Agent: ${credential.agent.display_name}`, `## Agent Key\n${credential.key}`, `## 环境变量\n${envCommand}`, `## Codex config.toml\n${config}`, `## Agent Skill\n${formatSkillBundle(documents)}`].join("\n\n"),
-    };
-  });
-  const fullBundle = bundles.map((bundle) => bundle.full).join("\n\n\n----------------------------------------\n\n");
-  return <Dialog title={`已激活 ${bundles.length} 个 Agent`} description="所有明文 Key 只展示这一次。请先复制全部接入资料，再关闭窗口。" onClose={props.onClose} wide><div className="credential-stack"><div className="credential-warning"><Icon name="alert" /><p><strong>请立即保存全部 Key</strong><span>{bundles.map((bundle) => `@${bundle.credential.agent.handle.replace(/^@/, "")} · ${bundle.names.mcpServer}`).join("  /  ")}</span></p></div><button className="button primary wide" onClick={() => void copyText(fullBundle)}><Icon name="copy" /> 复制全部 Agent 的 Key + 配置 + 完整 Skill</button>{props.result.failures.length ? <div className="batch-failures"><strong>{props.result.failures.length} 个 Agent 激活失败</strong>{props.result.failures.map((failure) => <span key={failure.agentName}>{failure.agentName}：{failure.message}</span>)}</div> : null}<div className="batch-credential-list">{bundles.map((bundle) => <details className="batch-credential-card" key={bundle.credential.agent.id}><summary><span><strong>{bundle.credential.agent.display_name}</strong><small>@{bundle.credential.agent.handle.replace(/^@/, "")} · {bundle.names.mcpServer}</small></span><Icon name="chevron-down" /></summary><div><CodeBlock label="完整 Agent Key" value={bundle.credential.key ?? ""} secret /><CodeBlock label="Codex MCP 配置" value={`${bundle.envCommand}\n\n${bundle.config}`} /><SkillCopyBlock documents={bundle.documents} step="3" /><button className="button wide" onClick={() => void copyText(bundle.full)}><Icon name="copy" /> 复制这个 Agent 的全部接入资料</button></div></details>)}</div><button className="button ghost wide" onClick={props.onClose}>我已安全保存</button></div></Dialog>;
-}
-
-function UserPreferencesDialog(props: {
-  companyConsole: CompanyConsole | null;
-  token: string;
-  onChanged: () => Promise<void>;
-  onError: (error: unknown) => void;
-  onNotice: (notice: string) => void;
-  onClose: () => void;
-}) {
-  const { language, setLanguage } = useUiLanguage();
-  const currentSkillLanguage = props.companyConsole?.governance_policy.effective_settings.skill_language ?? "zh-CN";
-  const [uiLanguage, setUiLanguage] = useState<UiLanguage>(language);
-  const [skillLanguage, setSkillLanguage] = useState<RelaySkillLanguage>(currentSkillLanguage);
-  const [triggerBatchSize, setTriggerBatchSize] = useState("10");
-  const [savedTriggerBatchSize, setSavedTriggerBatchSize] = useState<number | null>(null);
-  const [triggerEnvironmentDefault, setTriggerEnvironmentDefault] = useState<number | null>(null);
-  const [loadingTriggerPreferences, setLoadingTriggerPreferences] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const canManageRuntimePreferences = Boolean(props.companyConsole && ["owner", "admin"].includes(props.companyConsole.human_membership.role));
-
-  useEffect(() => setUiLanguage(language), [language]);
-  useEffect(() => setSkillLanguage(currentSkillLanguage), [currentSkillLanguage]);
-  useEffect(() => {
-    const companyId = props.companyConsole?.company.id;
-    if (!companyId) {
-      setSavedTriggerBatchSize(null);
-      setTriggerEnvironmentDefault(null);
-      return;
-    }
-    let cancelled = false;
-    setSavedTriggerBatchSize(null);
-    setTriggerEnvironmentDefault(null);
-    setLoadingTriggerPreferences(true);
-    void api<{ preferences: { batch_size: number; environment_default: number } }>(
-      `/api/v1/companies/${companyId}/agent-trigger-preferences`,
-      {},
-      props.token,
-    ).then(({ preferences }) => {
-      if (cancelled) return;
-      setTriggerBatchSize(String(preferences.batch_size));
-      setSavedTriggerBatchSize(preferences.batch_size);
-      setTriggerEnvironmentDefault(preferences.environment_default);
-    }).catch((error) => {
-      if (!cancelled) props.onError(error);
-    }).finally(() => {
-      if (!cancelled) setLoadingTriggerPreferences(false);
-    });
-    return () => { cancelled = true; };
-  }, [props.companyConsole?.company.id, props.token]);
-
-  async function savePreferences(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      if (props.companyConsole && canManageRuntimePreferences && skillLanguage !== currentSkillLanguage) {
-        await api(`/api/v1/companies/${props.companyConsole.company.id}/skill-language`, {
-          method: "POST",
-          body: JSON.stringify({ skill_language: skillLanguage }),
-        }, props.token);
-        await props.onChanged();
-      }
-      const parsedBatchSize = Number(triggerBatchSize);
-      if (props.companyConsole && canManageRuntimePreferences && savedTriggerBatchSize !== null && parsedBatchSize !== savedTriggerBatchSize) {
-        if (!Number.isInteger(parsedBatchSize) || parsedBatchSize < 1 || parsedBatchSize > 100) {
-          throw new Error("同时运行的 Agent 数量必须是 1 到 100 之间的整数");
-        }
-        await api(`/api/v1/companies/${props.companyConsole.company.id}/agent-trigger-preferences`, {
-          method: "PUT",
-          body: JSON.stringify({ batch_size: parsedBatchSize }),
-        }, props.token);
-      }
-      setLanguage(uiLanguage);
-      props.onNotice("用户偏好已保存");
-      props.onClose();
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog title="用户偏好" onClose={props.onClose}>
-      <form className="stack-form user-preferences-form" onSubmit={savePreferences}>
-        <section className="preference-section">
-          <div><Icon name="settings" /><span><strong>界面显示</strong><small>仅影响当前用户看到的页面语言</small></span></div>
-          <Field label="界面语言"><select value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)}><option value="zh-CN">中文</option><option value="en">English</option></select></Field>
-        </section>
-        <section className="preference-section">
-          <div><Icon name="book" /><span><strong>Agent 工作上下文</strong><small>{props.companyConsole ? props.companyConsole.company.name : "尚未选择公司"}</small></span></div>
-          <Field label="当前公司的 Agent 工作语言"><select value={skillLanguage} disabled={!canManageRuntimePreferences} onChange={(event) => setSkillLanguage(event.target.value as RelaySkillLanguage)}><option value="zh-CN">中文 Skill 与 Rule</option><option value="en">English Skills and Rules</option></select></Field>
-          <p>影响当前公司全部 Agent，从下一次唤醒开始生效，不改变页面语言。</p>
-        </section>
-        <section className="preference-section">
-          <div><Icon name="network" /><span><strong>Agent 并发</strong><small>所有运行器</small></span></div>
-          <Field label="同时运行的 Agent 数量"><input type="number" min="1" max="100" step="1" value={triggerBatchSize} disabled={!canManageRuntimePreferences || loadingTriggerPreferences || savedTriggerBatchSize === null} onChange={(event) => setTriggerBatchSize(event.target.value)} /></Field>
-          <p>控制本机所有运行器同时执行的 Agent 上限，从下一轮调度开始生效。{triggerEnvironmentDefault !== null ? ` 环境默认值：${triggerEnvironmentDefault}。` : ""}</p>
-        </section>
-        <div className="dialog-actions"><button className="button" type="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy || loadingTriggerPreferences}>{busy ? "保存中…" : "保存偏好"}</button></div>
-      </form>
-    </Dialog>
-  );
-}
-
-function Dialog(props: { title: string; description?: string; onClose: () => void; children: ReactNode; wide?: boolean; extraWide?: boolean }) {
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}><div className={`dialog ${props.extraWide ? "extra-wide" : props.wide ? "wide" : ""}`} role="dialog" aria-modal="true"><div className="dialog-head"><div><h2>{props.title}</h2>{props.description ? <p>{props.description}</p> : null}</div><button className="icon-button" onClick={props.onClose}><Icon name="close" /></button></div>{props.children}</div></div>;
-}
-
-function CodeBlock(props: { label: string; value: string; secret?: boolean }) {
-  const [visible, setVisible] = useState(!props.secret);
-  return <div className="code-block"><div><span>{props.label}</span><div>{props.secret ? <button onClick={() => setVisible(!visible)}><Icon name="eye" /> {visible ? "隐藏" : "显示"}</button> : null}<button onClick={() => void copyText(props.value)}><Icon name="copy" /> 复制</button></div></div><pre>{visible ? props.value : "••••••••••••••••••••••••••••••••"}</pre></div>;
-}
-
-function SkillCopyBlock({ documents, step = "3" }: { documents: RelaySkillDocument[]; step?: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const value = formatSkillBundle(documents);
-  const compositionLabel = documents.length <= 1
-    ? "按当前权限生成通用协作 Skill"
-    : documents.length === 2
-      ? "通用协作 Skill + 职业专属 Skill"
-      : "通用协作 Skill + 职业专属 Skill + 特殊授权 Skill";
-  return <div className="skill-copy-block"><div className="skill-copy-head"><div><span>{step}. 对应的完整 Agent Skill</span><small>{compositionLabel}</small></div><div className="skill-copy-actions"><button onClick={() => setExpanded(!expanded)}><Icon name={expanded ? "chevron-up" : "chevron-down"} /> {expanded ? "收起" : "查看"}</button><button onClick={() => void copyText(value)}><Icon name="copy" /> 复制完整 Skill</button></div></div><div className="skill-file-list">{documents.map((document) => <span key={document.name}><strong>{document.title}</strong><code>{document.name}/SKILL.md</code></span>)}</div>{expanded ? <pre>{value}</pre> : null}</div>;
-}
-
-function EmptyCompany(props: { onCreate: () => void }) { return <div className="center-state"><span className="brand-mark"><Icon name="network" /></span><span className="eyebrow">START HERE</span><h1>先创建一家公司</h1><p>公司会成为外部 Agent 的身份与通信边界。创建后再添加组织和 Agent 账号。</p><button className="button primary" onClick={props.onCreate}><Icon name="plus" /> 创建公司</button></div>; }
-function LoadingState() { return <div className="center-state"><span className="loader" /><h2>正在读取公司目录</h2></div>; }
-function Metric(props: { label: string; value: string; detail: string }) { return <div className="metric"><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></div>; }
-function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
-function Toast(props: { children: ReactNode; tone?: "error"; onClose: () => void }) { return <div className={`toast ${props.tone ?? ""}`}><span>{props.children}</span><button onClick={props.onClose}><Icon name="close" /></button></div>; }
-
-function readSession(): Session | null {
-  try { const value = localStorage.getItem(SESSION_KEY); return value ? JSON.parse(value) as Session : null; } catch { return null; }
-}
-function persistSession(session: Session) { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
-async function copyText(value: string) { await navigator.clipboard.writeText(value); }
-function formatSkillBundle(documents: RelaySkillDocument[]) {
-  return documents
-    .map((document) => `===== ${document.name}/SKILL.md =====\n${document.content.trim()}`)
-    .join("\n\n");
-}
-function projectAssetTypeLabel(value: string) {
-  return {
-    code: "代码模块",
-    document: "文档",
-    api: "接口",
-    config: "配置",
-    data: "数据",
-    database: "数据库",
-    script: "脚本",
-    service: "服务",
-    test: "测试",
-  }[value] ?? value;
-}
-function relayAgentConnectionNames(agent: AgentProfile) {
-  const token = agent.handle
-    .replace(/^@/, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "") || agent.id.replace(/-/g, "").slice(0, 8).toLowerCase();
-  return {
-    environmentVariable: `RELAY_AGENT_KEY_${token.toUpperCase()}`,
-    mcpServer: `relay_${token}`,
-  };
-}
-function formatTime(value: string) { return new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
-function formatElapsed(value: string) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
-  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
-}
-function formatInterval(seconds: number) {
-  if (seconds % 86400 === 0) return `${seconds / 86400} 天`;
-  if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
-  if (seconds % 60 === 0) return `${seconds / 60} 分钟`;
-  return `${seconds} 秒`;
-}
-
-function formatRunSeconds(seconds: number, language: UiLanguage) {
-  return language === "en" ? `${seconds} seconds` : `${seconds} 秒`;
-}
-
-function formatAgentCount(count: number, language: UiLanguage) {
-  return language === "en" ? `${count} ${count === 1 ? "Agent" : "Agents"}` : `${count} Agent`;
-}
-
-function codexReasoningEffortLabel(value: CodexReasoningEffort | null, language: UiLanguage = "zh-CN") {
-  if (language === "en") {
-    if (!value) return "Model Default";
-    return ({ none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Maximum", ultra: "Ultra" } as Record<CodexReasoningEffort, string>)[value];
-  }
-  if (!value) return "跟随模型默认";
-  return ({ none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最大", ultra: "极致" } as Record<CodexReasoningEffort, string>)[value];
-}
-function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProfession[]) {
-  if (agent.profession?.key) return agent.profession.key;
-  const title = (agent.membership.job_title || "").trim().toLowerCase();
-  const exact = professions.find((profession) => profession.label.toLowerCase() === title);
-  if (exact) return exact.key;
-  if (title.includes("项目经理") || title.includes("项目负责人") || title === "project manager" || title === "pm") return "project_manager";
-  if (title.includes("产品经理") || title.includes("产品负责人") || title.includes("product manager") || title.includes("product owner")) return "product_manager";
-  if (title.includes("技术经理") || title.includes("技术负责人") || title.includes("工程经理") || title.includes("研发经理") || title.includes("技术总监") || title === "cto" || title.includes("technical manager") || title.includes("engineering manager") || title.includes("tech lead")) return "technical_manager";
-  if (title.includes("测试") || title.includes("质量") || title.includes("qa")) return "qa_engineer";
-  if (title.includes("架构师") || title.includes("solution architect") || title.includes("software architect") || title.includes("system architect")) return "solution_architect";
-  if (title.includes("前端") || title.includes("frontend") || title.includes("front-end") || title.includes("web developer") || title.includes("web engineer")) return "frontend_engineer";
-  if (title.includes("后端") || title.includes("服务端") || title.includes("backend") || title.includes("back-end") || title.includes("server engineer")) return "backend_engineer";
-  if (title.includes("移动端") || title.includes("客户端") || title.includes("mobile") || title.includes("android") || title.includes("ios") || title.includes("pda")) return "mobile_engineer";
-  if (title.includes("数据工程") || title.includes("数据平台") || title.includes("数据迁移") || title.includes("主数据") || title.includes("data engineer") || title.includes("etl")) return "data_engineer";
-  if (title.includes("devops") || title.includes("sre") || title.includes("可靠性") || title.includes("运维工程") || title.includes("平台工程")) return "devops_engineer";
-  if (title.includes("ui 设计") || title.includes("界面设计") || title.includes("视觉设计") || title.includes("ui designer") || title.includes("visual designer")) return "ui_designer";
-  if (title.includes("ux") || title.includes("用户体验") || title.includes("交互设计") || title.includes("experience designer") || title.includes("interaction designer")) return "ux_designer";
-  if (title.includes("产品设计") || title.includes("product designer")) return "product_designer";
-  if (title.includes("实施顾问") || title.includes("实施工程") || title.includes("implementation consultant") || title.includes("implementation engineer")) return "implementation_consultant";
-  if (title.includes("领域专家") || title.includes("业务专家") || title.includes("行业专家") || title.includes("subject matter expert") || title.includes("sme") || title.endsWith("专家")) return "domain_expert";
-  if (title.includes("设计") || title.includes("designer")) return "product_designer";
-  if (title.includes("分析") || title.includes("顾问") || title.includes("analyst")) return "business_analyst";
-  if (title.includes("运营") || title.includes("销售") || title.includes("operation")) return "operations_specialist";
-  if (title.includes("工程") || title.includes("开发") || title.includes("程序") || title.includes("engineer") || title.includes("developer")) return "software_engineer";
-  return "general_member";
-}
-function projectStatusLabel(value: string) { return ({ planned: "计划中", active: "进行中", paused: "已暂停", blocked: "已阻塞", completed: "已完成", cancelled: "已取消" } as Record<string, string>)[value] ?? value; }
-function projectTypeLabel(value: string, types: CompanyProjectType[], language: RelaySkillLanguage = "zh-CN") {
-  const projectType = types.find((type) => type.key === value);
-  return projectType ? language === "en" ? projectType.label_en : projectType.label : value;
-}
-function memoryTypeLabel(value: AgentMemory["memory_type"]) { return ({ fact: "事实", decision: "决策", lesson: "教训", preference: "偏好", procedure: "操作规则", relationship: "协作关系", handoff: "交接" } as Record<AgentMemory["memory_type"], string>)[value]; }
-function memoryStatusLabel(value: AgentMemory["status"]) { return ({ draft: "待验证", active: "有效", archived: "已归档", superseded: "已替代" } as Record<AgentMemory["status"], string>)[value]; }
-function memoryTierLabel(value: AgentMemory["memory_tier"]) { return value === "long_term" ? "长期" : "短期"; }
-function taskStatusLabel(value: CompanyProjectTask["status"]) { return { todo: "待处理", in_progress: "进行中", blocked: "阻塞", done: "已完成", failed: "失败", cancelled: "已取消" }[value]; }
-function taskPriorityLabel(value: CompanyProjectTask["priority"]) { return { low: "低", normal: "普通", high: "高", urgent: "紧急" }[value]; }
-function formatTaskDue(value: string) { return new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }
-function taskDueClass(task: CompanyProjectTask) { return task.due_at && !["done", "failed", "cancelled"].includes(task.status) && new Date(task.due_at).getTime() < Date.now() ? "task-due overdue" : "task-due"; }
-function toDateTimeLocalValue(value: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-function collaborationPreferenceLabel(value: AgentProfile["collaboration_preference"]) { return { available: "可协作", low_cost_only: "仅接受低成本请求", unavailable: "暂不接受请求" }[value] ?? value; }
-function codexTriggerStatusLabel(value: CodexTriggerView["config"]["status"]) { return { active: "已启用", paused: "已暂停", error: "错误" }[value]; }
-function codexOperationalStatusLabel(value: string) { return { running: "执行中", queued: "排队中", idle: "等待检查", paused: "已暂停", error: "错误" }[value] ?? value; }
-function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "整理结果", finishing: "收尾", waiting_approval: "等待审批", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value; }
-function codexTriggerTypeLabel(value: string) { return { scheduled: "定时", manual: "手动", run_now: "手动", message: "消息", task: "任务", asset_refresh: "资产维护" }[value] ?? value; }
-function codexPluginOperationStatusLabel(value: CodexPluginOperation["status"]) { return { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败" }[value]; }
-function codexRunDisplayMessage(run: CodexTriggerRun) {
-  if (run.final_message_summary) return run.final_message_summary;
-  if (run.error_message) return run.error_message;
-  return {
-    running: "本轮仍在执行，尚未完成",
-    succeeded: "Codex 已完成本轮",
-    timed_out: "本轮运行超时",
-    cancelled: "本轮已取消",
-    lease_lost: "本轮租约已失效",
-    failed: "本轮运行失败",
-  }[run.status] ?? "等待运行结果";
-}
-function approvalToolLabel(value: string) { return ({ "codex.command_execution": "执行命令", "codex.file_change": "修改受保护文件", "codex.permissions": "申请额外权限", "agent.staff.hire": "扩招 Agent", "agent.staff.suspend": "暂停 Agent", "agent.staff.terminate": "裁撤 Agent", "company.project.task.reassign": "重新分配任务" } as Record<string, string>)[value] ?? value; }
-function approvalStatusLabel(value: AgentToolApproval["status"]) { return { pending: "待审批", approved: "已批准", executing: "执行中", executed: "已执行", rejected: "已拒绝", expired: "已过期", failed: "失败" }[value]; }
-function approvalRiskLabel(value: AgentToolApproval["risk_level"]) { return { low: "低", medium: "中", high: "高" }[value]; }
-function approvalRequestDetail(approval: AgentToolApproval) {
-  const params = typeof approval.arguments.params === "object" && approval.arguments.params !== null ? approval.arguments.params as Record<string, unknown> : approval.arguments;
-  if (approval.tool_name === "codex.command_execution") {
-    const command = typeof params.command === "string" ? params.command : "";
-    const cwd = typeof params.cwd === "string" ? params.cwd : "";
-    return [command, cwd ? `cwd: ${cwd}` : ""].filter(Boolean).join("\n");
-  }
-  if (approval.tool_name === "codex.file_change") {
-    const itemId = typeof params.itemId === "string" ? params.itemId : "";
-    const grantRoot = typeof params.grantRoot === "string" ? params.grantRoot : "";
-    return [itemId ? `文件变更项：${itemId}` : "", grantRoot ? `请求写入：${grantRoot}` : ""].filter(Boolean).join("\n");
-  }
-  if (approval.tool_name === "codex.permissions") {
-    return JSON.stringify(params.permissions ?? params, null, 2);
-  }
-  return JSON.stringify(params, null, 2);
 }

@@ -8,7 +8,7 @@ import { Field, Icon } from "./ui";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import type { HumanUser } from "../types/appShell";
 import type { Conversation, Message, PendingMessageFile } from "../types/chat";
-import type { CompanyAgent, CompanyConsole } from "../pages/App";
+import type { CompanyAgent, CompanyConsole } from "../types/platform";
 
 export function MessagesView(props: {
   consoleData: CompanyConsole;
