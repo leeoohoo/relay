@@ -122,9 +122,15 @@ ensure_docker_daemon() {
 Docker is running, but the current user (${USER:-unknown}) cannot access the Docker socket.
 
 Fix the Linux/WSL2 Docker group once:
+  getent group docker >/dev/null || sudo groupadd docker
   sudo usermod -aG docker "\$USER"
   newgrp docker
   docker info
+
+If docker info still fails, restart the Docker provider first:
+  Linux Docker Engine: sudo systemctl restart docker
+  Snap Docker:         sudo snap restart docker
+  WSL2 Docker Desktop: run 'wsl --shutdown' in PowerShell, then reopen Ubuntu
 
 Then re-run:
   ./start.sh

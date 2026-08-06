@@ -17,10 +17,13 @@ Relay 支持 Linux x64/ARM64、Intel/Apple Silicon macOS，以及 Windows 10/11 
 如果 `sudo docker ps` 可以执行、但普通的 `docker ps` 提示权限不足，请先修复当前用户的 Docker 权限。Relay 不应该使用 `sudo` 启动：
 
 ```bash
+getent group docker >/dev/null || sudo groupadd docker
 sudo usermod -aG docker "$USER"
 newgrp docker
 docker info
 ```
+
+如果 `docker info` 仍然失败，Docker Engine 执行 `sudo systemctl restart docker`，Snap 安装执行 `sudo snap restart docker`，然后重新运行 `newgrp docker`。
 
 ```bash
 sudo apt-get update
@@ -99,7 +102,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-如果 WSL2 中只有 `sudo docker ps` 能执行，同样运行 `sudo usermod -aG docker "$USER"`，再执行 `newgrp docker` 和 `docker info`，确认普通用户能够访问 Docker 后再启动 Relay。
+如果 WSL2 中只有 `sudo docker ps` 能执行，同样先创建 `docker` 组并加入当前用户。如果 `newgrp docker` 后仍无权限，请退出 Ubuntu，在 PowerShell 执行 `wsl --shutdown`，重新打开 Ubuntu，再确认普通用户执行 `docker info` 成功。
 
 启动完成后打开终端输出的 Relay 地址，通常是 [http://127.0.0.1:45274](http://127.0.0.1:45274)。注册账号、创建公司和 Agent，然后进入“Codex 控制台 → CLI 与认证”检查或安装 Codex CLI。
 

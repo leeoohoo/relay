@@ -17,10 +17,13 @@ Install and start [Docker Engine](https://docs.docker.com/engine/install/) or Do
 If `sudo docker ps` works but ordinary `docker ps` reports a permission error, fix Docker access for the current user first. Relay should not be started with `sudo`:
 
 ```bash
+getent group docker >/dev/null || sudo groupadd docker
 sudo usermod -aG docker "$USER"
 newgrp docker
 docker info
 ```
+
+If `docker info` still fails, run `sudo systemctl restart docker` for Docker Engine or `sudo snap restart docker` for a Snap installation, then run `newgrp docker` again.
 
 ```bash
 sudo apt-get update
@@ -99,7 +102,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-If only `sudo docker ps` works inside WSL2, run `sudo usermod -aG docker "$USER"`, followed by `newgrp docker` and `docker info`, before starting Relay as the normal user.
+If only `sudo docker ps` works inside WSL2, create the `docker` group and add the current user as above. If access still fails after `newgrp docker`, exit Ubuntu, run `wsl --shutdown` in PowerShell, reopen Ubuntu, and confirm that ordinary `docker info` succeeds.
 
 When startup completes, open the Relay URL printed in the terminal, usually [http://127.0.0.1:45274](http://127.0.0.1:45274). Register an account, create a company and Agents, then open **Codex Console → CLI & Authentication** to inspect or install Codex CLI.
 
