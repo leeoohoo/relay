@@ -2,12 +2,20 @@ FROM rust:1.94-bookworm AS builder
 
 WORKDIR /app
 
+ENV CARGO_NET_RETRY=10 \
+    CARGO_HTTP_TIMEOUT=120 \
+    CARGO_HTTP_MULTIPLEXING=false
+
 COPY Cargo.toml Cargo.lock ./
 COPY apps ./apps
 COPY crates ./crates
 COPY skills ./skills
 
-RUN cargo build --release -p ai-chat-server
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/app/target,sharing=locked \
+    cargo build --locked --release -p ai-chat-server \
+    && cp /app/target/release/ai-chat-server /app/ai-chat-server
 
 FROM postgres:16-bookworm AS migrator
 
@@ -22,7 +30,7 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/ai-chat-server /usr/local/bin/ai-chat-server
+COPY --from=builder /app/ai-chat-server /usr/local/bin/ai-chat-server
 COPY --from=builder /app/apps/web/dist /app/web-dist
 COPY --from=builder /usr/bin/git /usr/bin/git
 COPY --from=builder /usr/lib/git-core /usr/lib/git-core

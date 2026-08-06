@@ -101,6 +101,17 @@ build_web_assets() {
   (cd "$ROOT_DIR" && pnpm --dir apps/web build)
 }
 
+prepare_docker_build_network() {
+  if [[ -z "${DOCKER_BUILD_NETWORK:-}" ]]; then
+    if [[ "$(uname -s)" == "Linux" ]]; then
+      DOCKER_BUILD_NETWORK="host"
+    else
+      DOCKER_BUILD_NETWORK="default"
+    fi
+  fi
+  export DOCKER_BUILD_NETWORK
+}
+
 existing_host_port_for() {
   local container_name="$1"
   local container_port="$2"
@@ -483,6 +494,7 @@ EOF
 case "$MODE" in
   up)
     ensure_docker_daemon
+    prepare_docker_build_network
     prepare_harness_mode
     preflight_docker_images
     build_web_assets
@@ -497,6 +509,7 @@ case "$MODE" in
     ;;
   rebuild)
     ensure_docker_daemon
+    prepare_docker_build_network
     prepare_harness_mode
     preflight_docker_images
     build_web_assets

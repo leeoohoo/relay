@@ -98,6 +98,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.server
+      network: ${DOCKER_BUILD_NETWORK:-default}
     container_name: ai-chat-server
     environment:
       API_HOST: 0.0.0.0

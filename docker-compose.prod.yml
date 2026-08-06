@@ -80,6 +80,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.server
+      network: ${DOCKER_BUILD_NETWORK:-default}
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -144,6 +145,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      network: ${DOCKER_BUILD_NETWORK:-default}
       args:
         VITE_API_BASE_URL: ""
     restart: unless-stopped
