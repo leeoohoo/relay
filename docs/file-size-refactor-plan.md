@@ -23,7 +23,7 @@
 | [ ] | 2,565 | `apps/agent-trigger/src/main.rs` | bootstrap, service loop, execution, plugins and installer |
 | [ ] | 2,488 | `apps/web/src/styles.css` | tokens, base, layout and feature-specific stylesheets |
 | [x] | 2,239 | `crates/infrastructure/src/lib.rs` | PostgreSQL-only adapter construction; redundant enum delegation removed |
-| [ ] | 2,034 | `crates/infrastructure/src/codex_control.rs` | runtime, auth profiles, MCP, CLI settings and storage |
+| [x] | 2,034 | `crates/infrastructure/src/codex_control.rs` | facade/types are now 386 lines; store, requests/runtime, MCP, persistence, validation and tests are focused modules |
 | [x] | 1,574 | `crates/infrastructure/src/git_workspace.rs` | manager, validation and Git command modules; facade/workflow is now 941 lines |
 
 The baseline excludes generated output and dependency/build directories such as `target`, `node_modules`, and `dist`.
@@ -81,7 +81,7 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 - [ ] Split PostgreSQL persistence by repository domain, with shared connection/transaction/mapping modules.
 - [x] Remove duplicated `RepositoryAdapter` delegation by standardizing runtime storage on PostgreSQL.
 - [ ] Split Codex trigger execution into runner, command, approval, progress and configuration modules.
-- [ ] Split Codex control into runtime, profiles, MCP, CLI settings and persistence modules.
+- [x] Split Codex control into store/profile settings, request/runtime, MCP, persistence, validation and focused test modules.
 - [x] Split Git workspace behavior into manager, validation and command execution modules while retaining focused worktree lifecycle code in the facade.
 
 ### 3. Runtime applications
