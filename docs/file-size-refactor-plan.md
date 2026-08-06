@@ -14,7 +14,7 @@
 | --- | ---: | --- | --- |
 | [x] | 16,634 | `crates/application/src/service.rs` | split into contracts, platform services, validation, pagination and tests; facade is now 991 lines |
 | [ ] | 6,725 | `crates/infrastructure/src/postgres.rs` | connection, transactions, domain repositories, row mapping |
-| [ ] | 5,236 | `apps/web/src/pages/App.tsx` | application shell, feature pages, dialogs, hooks and view models |
+| [x] | 5,236 | `apps/web/src/pages/App.tsx` | application shell is now 400 lines; feature pages, dialogs and view models were extracted |
 | [ ] | 4,655 | `apps/server/src/main.rs` | bootstrap, router, state, errors, DTOs and domain handlers |
 | [ ] | 3,870 | `crates/domain/src/company.rs` | company models, profession catalog, project types, skills, tests |
 | [ ] | 3,849 | `crates/mcp/src/lib.rs` | gateway, schemas, tool definitions, dispatch, audit and inputs |
@@ -24,7 +24,7 @@
 | [ ] | 2,488 | `apps/web/src/styles.css` | tokens, base, layout and feature-specific stylesheets |
 | [x] | 2,239 | `crates/infrastructure/src/lib.rs` | PostgreSQL-only adapter construction; redundant enum delegation removed |
 | [ ] | 2,034 | `crates/infrastructure/src/codex_control.rs` | runtime, auth profiles, MCP, CLI settings and storage |
-| [ ] | 1,574 | `crates/infrastructure/src/git_workspace.rs` | manager, validation, Git commands, worktrees and credentials |
+| [x] | 1,574 | `crates/infrastructure/src/git_workspace.rs` | manager, validation and Git command modules; facade/workflow is now 941 lines |
 
 The baseline excludes generated output and dependency/build directories such as `target`, `node_modules`, and `dist`.
 
@@ -48,14 +48,14 @@ The next extractions are ordered by responsibility and coupling, not only by lin
 ### Web extraction sequence
 
 - [x] Extract organization dialogs, Agent management, memory/approval views and shared platform types.
-- [ ] Finish and verify the current Skill center and chat center extraction.
+- [x] Finish and verify the current Skill center and chat center extraction.
 - [x] Extract Codex control-center navigation, MCP, plugins, runners, auth/environment, profiles and Trigger into focused files.
 - [ ] Introduce one shared Codex environment hook for loading, pending-operation refresh intervals and stale-request cancellation.
-- [ ] Extract project list/create/detail shell separately from project rule, assets and Git panels.
-- [ ] Extract task list, task dialog, status/priority presentation and task filters.
-- [ ] Reduce `App.tsx` to session/company orchestration, navigation and top-level dialogs.
+- [x] Extract project list/create/detail shell separately from project rule, assets and Git panels.
+- [x] Extract task list, task dialog, status/priority presentation and task filters.
+- [x] Reduce `App.tsx` to session/company orchestration, navigation and top-level dialogs.
 
-Current web-shell progress: `App.tsx` is 1,766 lines after the Codex extraction; the remaining oversized code is the project/task workspace rather than unrelated console logic.
+Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Git, Codex, chat, Skill, Agent and organization views now live in focused feature modules.
 
 ### Refactor rules discovered during audit
 
@@ -82,7 +82,7 @@ Current web-shell progress: `App.tsx` is 1,766 lines after the Codex extraction;
 - [x] Remove duplicated `RepositoryAdapter` delegation by standardizing runtime storage on PostgreSQL.
 - [ ] Split Codex trigger execution into runner, command, approval, progress and configuration modules.
 - [ ] Split Codex control into runtime, profiles, MCP, CLI settings and persistence modules.
-- [ ] Split Git workspace behavior into validation, command execution, worktree and credential modules.
+- [x] Split Git workspace behavior into manager, validation and command execution modules while retaining focused worktree lifecycle code in the facade.
 
 ### 3. Runtime applications
 
@@ -92,8 +92,8 @@ Current web-shell progress: `App.tsx` is 1,766 lines after the Codex extraction;
 
 ### 4. Web application
 
-- [ ] Reduce `App.tsx` to the application shell and navigation composition.
-- [ ] Move organization, skills, projects, Codex console and chat into independent feature pages/components.
+- [x] Reduce `App.tsx` to the application shell and navigation composition.
+- [x] Move organization, skills, projects, Codex console and chat into independent feature pages/components.
 - [ ] Move API calls to `api/`, remote-state behavior to hooks, and shared types to `types/`.
 - [x] Split the global stylesheet into ordered foundation, feature, theme, communication and responsive workbench stylesheets while preserving cascade behavior.
 - [ ] Preserve pagination, SSE, approval and Codex management behavior during extraction.
