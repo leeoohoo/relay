@@ -19,11 +19,13 @@ Relay 支持 Linux x64/ARM64、Intel/Apple Silicon macOS，以及 Windows 10/11 
 ```bash
 getent group docker >/dev/null || sudo groupadd docker
 sudo usermod -aG docker "$USER"
+sudo chgrp docker /var/run/docker.sock
+sudo chmod 660 /var/run/docker.sock
 newgrp docker
 docker info
 ```
 
-如果 `docker info` 仍然失败，Docker Engine 执行 `sudo systemctl restart docker`，Snap 安装执行 `sudo snap restart docker`，然后重新运行 `newgrp docker`。
+如果 Docker 重启后重新创建了错误权限的 Socket，Docker Engine 执行 `sudo systemctl restart docker`，Snap 安装执行 `sudo snap restart docker`，然后再次执行 `chgrp`、`chmod` 和 `newgrp docker`。
 
 ```bash
 sudo apt-get update
@@ -102,7 +104,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-如果 WSL2 中只有 `sudo docker ps` 能执行，同样先创建 `docker` 组并加入当前用户。如果 `newgrp docker` 后仍无权限，请退出 Ubuntu，在 PowerShell 执行 `wsl --shutdown`，重新打开 Ubuntu，再确认普通用户执行 `docker info` 成功。
+如果 WSL2 中只有 `sudo docker ps` 能执行，同样先创建 `docker` 组、加入当前用户，并修正 `/var/run/docker.sock` 的组权限。如果仍无权限，请退出 Ubuntu，在 PowerShell 执行 `wsl --shutdown`，重新打开 Ubuntu，再确认普通用户执行 `docker info` 成功。
 
 启动完成后打开终端输出的 Relay 地址，通常是 [http://127.0.0.1:45274](http://127.0.0.1:45274)。注册账号、创建公司和 Agent，然后进入“Codex 控制台 → CLI 与认证”检查或安装 Codex CLI。
 

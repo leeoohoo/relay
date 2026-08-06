@@ -19,11 +19,13 @@ If `sudo docker ps` works but ordinary `docker ps` reports a permission error, f
 ```bash
 getent group docker >/dev/null || sudo groupadd docker
 sudo usermod -aG docker "$USER"
+sudo chgrp docker /var/run/docker.sock
+sudo chmod 660 /var/run/docker.sock
 newgrp docker
 docker info
 ```
 
-If `docker info` still fails, run `sudo systemctl restart docker` for Docker Engine or `sudo snap restart docker` for a Snap installation, then run `newgrp docker` again.
+If Docker later recreates the socket with the wrong group, run `sudo systemctl restart docker` for Docker Engine or `sudo snap restart docker` for a Snap installation, then repeat the `chgrp`, `chmod`, and `newgrp docker` commands.
 
 ```bash
 sudo apt-get update
@@ -102,7 +104,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-If only `sudo docker ps` works inside WSL2, create the `docker` group and add the current user as above. If access still fails after `newgrp docker`, exit Ubuntu, run `wsl --shutdown` in PowerShell, reopen Ubuntu, and confirm that ordinary `docker info` succeeds.
+If only `sudo docker ps` works inside WSL2, create the `docker` group, add the current user, and fix the group permissions on `/var/run/docker.sock` as above. If access still fails, exit Ubuntu, run `wsl --shutdown` in PowerShell, reopen Ubuntu, and confirm that ordinary `docker info` succeeds.
 
 When startup completes, open the Relay URL printed in the terminal, usually [http://127.0.0.1:45274](http://127.0.0.1:45274). Register an account, create a company and Agents, then open **Codex Console → CLI & Authentication** to inspect or install Codex CLI.
 

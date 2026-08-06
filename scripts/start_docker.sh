@@ -124,10 +124,13 @@ Docker is running, but the current user (${USER:-unknown}) cannot access the Doc
 Fix the Linux/WSL2 Docker group once:
   getent group docker >/dev/null || sudo groupadd docker
   sudo usermod -aG docker "\$USER"
+  sudo chgrp docker /var/run/docker.sock
+  sudo chmod 660 /var/run/docker.sock
   newgrp docker
   docker info
 
-If docker info still fails, restart the Docker provider first:
+If the socket is recreated with the wrong group, restart the Docker provider and repeat
+the chgrp/chmod commands:
   Linux Docker Engine: sudo systemctl restart docker
   Snap Docker:         sudo snap restart docker
   WSL2 Docker Desktop: run 'wsl --shutdown' in PowerShell, then reopen Ubuntu
