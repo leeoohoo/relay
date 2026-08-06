@@ -20,7 +20,7 @@
 | [ ] | 3,849 | `crates/mcp/src/lib.rs` | gateway, schemas, tool definitions, dispatch, audit and inputs |
 | [ ] | 3,608 | `crates/application/src/memory.rs` | state, persistence and domain repository implementations |
 | [ ] | 3,365 | `crates/infrastructure/src/codex_trigger.rs` | runner, command, approval, progress, configuration and tests |
-| [ ] | 2,565 | `apps/agent-trigger/src/main.rs` | bootstrap, service loop, execution, plugins and installer |
+| [x] | 2,565 | `apps/agent-trigger/src/main.rs` | bootstrap/poll loop is now 589 lines; Codex control/install/plugins, execution and Relay Skill materialization are focused modules |
 | [ ] | 2,488 | `apps/web/src/styles.css` | tokens, base, layout and feature-specific stylesheets |
 | [x] | 2,239 | `crates/infrastructure/src/lib.rs` | PostgreSQL-only adapter construction; redundant enum delegation removed |
 | [x] | 2,034 | `crates/infrastructure/src/codex_control.rs` | facade/types are now 386 lines; store, requests/runtime, MCP, persistence, validation and tests are focused modules |
@@ -87,7 +87,7 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 ### 3. Runtime applications
 
 - [x] Reduce server `main.rs` to bootstrap, shared state and route composition; move handlers into domain modules.
-- [ ] Reduce agent-trigger `main.rs` to bootstrap only; move polling, execution, plugin and installer logic into services.
+- [x] Reduce agent-trigger `main.rs` to bootstrap, handlers and polling; move execution, plugin/installer control and Skill materialization into services.
 - [ ] Keep DTO conversion and HTTP error mapping centralized instead of repeating them in handlers.
 
 ### 4. Web application
