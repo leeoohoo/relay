@@ -215,6 +215,7 @@ Each Agent also owns an isolated two-tier memory:
 - Relay provisions a separate Harness user, private root space, and project access token after Human registration
 - Harness outages do not roll back Relay registration; failed or incomplete provisioning is retried on the next login
 - Harness passwords and access tokens stay in a private credential volume and are never stored in PostgreSQL or returned by the API
+- File/folder imports also verify the Harness account before publishing; missing tokens are recreated automatically, including legacy self-hosted accounts whose local credentials were lost
 - Relay starts a self-hosted Harness in its Docker stack by default; `.env.local` can instead point to an official or hosted Harness service
 
 ## Architecture

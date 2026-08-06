@@ -32,6 +32,8 @@ struct HarnessProvisioningConfig {
     api_base_url: Option<String>,
     public_base_url: Option<String>,
     space_prefix: String,
+    admin_email: Option<String>,
+    admin_password: Option<String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +62,8 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                 api_base_url: config.harness_base_url.clone(),
                 public_base_url: config.harness_public_base_url.clone(),
                 space_prefix: config.harness_space_prefix.clone(),
+                admin_email: config.harness_admin_email.clone(),
+                admin_password: config.harness_admin_password.clone(),
             },
             credentials,
             client,
@@ -158,7 +162,6 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             Ok(access_token) => {
                 self.credentials
                     .store_access_token(user.id, access_token.as_str())?;
-                self.credentials.remove_password(user.id)?;
                 let completed_at = Utc::now();
                 account.status = HUMAN_HARNESS_STATUS_ACTIVE.to_string();
                 account.last_error = None;
@@ -177,6 +180,15 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                 )))
             }
         }
+    }
+
+    pub async fn ensure_active_account(&self, user: &HumanUser) -> AppResult<HumanHarnessAccount> {
+        self.ensure_account(user)
+            .await?
+            .filter(|account| account.status == HUMAN_HARNESS_STATUS_ACTIVE)
+            .ok_or_else(|| {
+                AppError::Validation("当前用户的 Harness 账户尚未就绪，无法自动创建项目仓库".into())
+            })
     }
 
     pub async fn provision_project_git(
@@ -338,22 +350,72 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         {
             Ok(response) => non_empty_token(response.access_token),
             Err(error) if error.is_already_exists() => {
-                let request = HarnessLoginRequest {
-                    login_identifier: identity.uid.as_str(),
-                    password,
-                };
-                let response = self
-                    .request_json::<HarnessTokenResponse, _>(
-                        Method::POST,
-                        format!("{base_url}/api/v1/login").as_str(),
-                        None,
-                        Some(&request),
-                    )
-                    .await?;
-                non_empty_token(response.access_token)
+                match self.login(base_url, identity.uid.as_str(), password).await {
+                    Ok(token) => Ok(token),
+                    Err(login_error) => {
+                        self.reset_password_with_admin(
+                            base_url,
+                            identity.uid.as_str(),
+                            password,
+                            &login_error,
+                        )
+                        .await?;
+                        self.login(base_url, identity.uid.as_str(), password).await
+                    }
+                }
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn login(
+        &self,
+        base_url: &str,
+        login_identifier: &str,
+        password: &str,
+    ) -> Result<String, HarnessRequestError> {
+        let request = HarnessLoginRequest {
+            login_identifier,
+            password,
+        };
+        let response = self
+            .request_json::<HarnessTokenResponse, _>(
+                Method::POST,
+                format!("{base_url}/api/v1/login").as_str(),
+                None,
+                Some(&request),
+            )
+            .await?;
+        non_empty_token(response.access_token)
+    }
+
+    async fn reset_password_with_admin(
+        &self,
+        base_url: &str,
+        user_uid: &str,
+        password: &str,
+        login_error: &HarnessRequestError,
+    ) -> Result<(), HarnessRequestError> {
+        let Some(admin_email) = self.config.admin_email.as_deref() else {
+            return Err(HarnessRequestError::transport(format!(
+                "Harness user login failed and HARNESS_ADMIN_EMAIL is not configured: {login_error}"
+            )));
+        };
+        let Some(admin_password) = self.config.admin_password.as_deref() else {
+            return Err(HarnessRequestError::transport(format!(
+                "Harness user login failed and HARNESS_ADMIN_PASSWORD is not configured: {login_error}"
+            )));
+        };
+        let admin_token = self.login(base_url, admin_email, admin_password).await?;
+        let request = HarnessUpdateUserRequest { password };
+        self.request_json::<Value, _>(
+            Method::PATCH,
+            format!("{base_url}/api/v1/admin/users/{user_uid}").as_str(),
+            Some(admin_token.as_str()),
+            Some(&request),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn ensure_space(
@@ -488,6 +550,11 @@ struct HarnessRegisterRequest<'a> {
 #[derive(Debug, Serialize)]
 struct HarnessLoginRequest<'a> {
     login_identifier: &'a str,
+    password: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct HarnessUpdateUserRequest<'a> {
     password: &'a str,
 }
 
@@ -635,6 +702,7 @@ impl HarnessCredentialStore {
         atomic_write_secret(self.password_path(human_user_id).as_path(), password)
     }
 
+    #[cfg(test)]
     fn remove_password(&self, human_user_id: Uuid) -> AppResult<()> {
         remove_secret(self.password_path(human_user_id).as_path())
     }
@@ -649,6 +717,11 @@ impl HarnessCredentialStore {
 
     fn read_access_token(&self, human_user_id: Uuid) -> AppResult<Option<String>> {
         read_secret(self.token_path(human_user_id).as_path())
+    }
+
+    #[cfg(test)]
+    fn remove_access_token(&self, human_user_id: Uuid) -> AppResult<()> {
+        remove_secret(self.token_path(human_user_id).as_path())
     }
 }
 
@@ -707,6 +780,7 @@ fn atomic_write_secret(path: &Path, secret: &str) -> AppResult<()> {
     result
 }
 
+#[cfg(test)]
 fn remove_secret(path: &Path) -> AppResult<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -731,194 +805,4 @@ fn credential_error(error: std::io::Error) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    };
-
-    use ai_chat_application::{AuthPlatformRepository, MemoryPlatformRepository};
-    use axum::{routing::post, Json, Router};
-
-    #[test]
-    fn identity_is_stable_and_unique_per_human() {
-        let user = HumanUser {
-            id: Uuid::parse_str("12345678-90ab-cdef-1234-567890abcdef").unwrap(),
-            email: "Human@Example.com".into(),
-            display_name: "Human".into(),
-            created_at: Utc::now(),
-        };
-        let identity = HarnessIdentity::for_user(&user, "u-");
-        assert_eq!(identity.uid, "relay-1234567890ab");
-        assert_eq!(identity.email, "human@example.com");
-        assert_eq!(identity.space_identifier, "u-relay-1234567890ab");
-    }
-
-    #[test]
-    fn credential_store_keeps_secrets_out_of_repository_records() {
-        let root = std::env::temp_dir().join(format!(
-            "relay-harness-credentials-{}",
-            Uuid::new_v4().simple()
-        ));
-        let store = HarnessCredentialStore::at(root.clone()).unwrap();
-        let user_id = Uuid::new_v4();
-        store.store_password(user_id, "secret-password").unwrap();
-        assert_eq!(
-            store.read_password(user_id).unwrap().as_deref(),
-            Some("secret-password")
-        );
-        store.store_access_token(user_id, "secret-token").unwrap();
-        assert!(store.has_access_token(user_id));
-        store.remove_password(user_id).unwrap();
-        assert_eq!(store.read_password(user_id).unwrap(), None);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[tokio::test]
-    async fn provisions_once_and_reuses_the_persisted_harness_account() {
-        let register_calls = Arc::new(AtomicUsize::new(0));
-        let register_counter = register_calls.clone();
-        let app = Router::new()
-            .route(
-                "/api/v1/register",
-                post(move || {
-                    register_counter.fetch_add(1, Ordering::SeqCst);
-                    async { Json(serde_json::json!({"access_token": "login-token"})) }
-                }),
-            )
-            .route(
-                "/api/v1/spaces",
-                post(|| async { Json(serde_json::json!({"identifier": "space"})) }),
-            )
-            .route(
-                "/api/v1/user/tokens",
-                post(|| async { Json(serde_json::json!({"access_token": "project-token"})) }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-        let credentials_root = std::env::temp_dir().join(format!(
-            "relay-harness-provision-test-{}",
-            Uuid::new_v4().simple()
-        ));
-        let repo = MemoryPlatformRepository::default();
-        let provisioner = HarnessProvisioner {
-            repo: repo.clone(),
-            config: HarnessProvisioningConfig {
-                mode: HarnessMode::Official,
-                api_base_url: Some(format!("http://{address}")),
-                public_base_url: Some("https://harness.example.test".into()),
-                space_prefix: "u-".into(),
-            },
-            credentials: HarnessCredentialStore::at(credentials_root.clone()).unwrap(),
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap(),
-            user_locks: Arc::new(Mutex::new(HashMap::new())),
-        };
-        let user = HumanUser {
-            id: Uuid::new_v4(),
-            email: "human@example.test".into(),
-            display_name: "Human".into(),
-            created_at: Utc::now(),
-        };
-        repo.insert_human_user(user.clone()).unwrap();
-
-        let first = provisioner.ensure_account(&user).await.unwrap().unwrap();
-        assert_eq!(first.status, HUMAN_HARNESS_STATUS_ACTIVE);
-        assert_eq!(first.provider_mode, "official");
-        assert_eq!(first.harness_base_url, "https://harness.example.test");
-        assert!(provisioner.credentials.has_access_token(user.id));
-
-        let second = provisioner.ensure_account(&user).await.unwrap().unwrap();
-        assert_eq!(second.attempt_count, 1);
-        assert_eq!(register_calls.load(Ordering::SeqCst), 1);
-
-        server.abort();
-        let _ = fs::remove_dir_all(credentials_root);
-    }
-
-    #[tokio::test]
-    async fn failed_provisioning_is_persisted_and_can_be_retried() {
-        let register_calls = Arc::new(AtomicUsize::new(0));
-        let register_counter = register_calls.clone();
-        let app = Router::new()
-            .route(
-                "/api/v1/register",
-                post(move || {
-                    let attempt = register_counter.fetch_add(1, Ordering::SeqCst);
-                    async move {
-                        if attempt == 0 {
-                            Err(StatusCode::SERVICE_UNAVAILABLE)
-                        } else {
-                            Ok(Json(serde_json::json!({"access_token": "login-token"})))
-                        }
-                    }
-                }),
-            )
-            .route(
-                "/api/v1/spaces",
-                post(|| async { Json(serde_json::json!({"identifier": "space"})) }),
-            )
-            .route(
-                "/api/v1/user/tokens",
-                post(|| async { Json(serde_json::json!({"access_token": "project-token"})) }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-        let credentials_root = std::env::temp_dir().join(format!(
-            "relay-harness-retry-test-{}",
-            Uuid::new_v4().simple()
-        ));
-        let repo = MemoryPlatformRepository::default();
-        let provisioner = HarnessProvisioner {
-            repo: repo.clone(),
-            config: HarnessProvisioningConfig {
-                mode: HarnessMode::SelfHosted,
-                api_base_url: Some(format!("http://{address}")),
-                public_base_url: Some("http://127.0.0.1:3000".into()),
-                space_prefix: "u-".into(),
-            },
-            credentials: HarnessCredentialStore::at(credentials_root.clone()).unwrap(),
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .unwrap(),
-            user_locks: Arc::new(Mutex::new(HashMap::new())),
-        };
-        let user = HumanUser {
-            id: Uuid::new_v4(),
-            email: "retry@example.test".into(),
-            display_name: "Retry Human".into(),
-            created_at: Utc::now(),
-        };
-        repo.insert_human_user(user.clone()).unwrap();
-
-        assert!(provisioner.ensure_account(&user).await.is_err());
-        let failed = provisioner.account(user.id).unwrap().unwrap();
-        assert_eq!(failed.status, HUMAN_HARNESS_STATUS_FAILED);
-        assert_eq!(failed.attempt_count, 1);
-        assert!(provisioner
-            .credentials
-            .read_password(user.id)
-            .unwrap()
-            .is_some());
-
-        let active = provisioner.ensure_account(&user).await.unwrap().unwrap();
-        assert_eq!(active.status, HUMAN_HARNESS_STATUS_ACTIVE);
-        assert_eq!(active.attempt_count, 2);
-        assert_eq!(register_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            provisioner.credentials.read_password(user.id).unwrap(),
-            None
-        );
-
-        server.abort();
-        let _ = fs::remove_dir_all(credentials_root);
-    }
-}
+mod tests;

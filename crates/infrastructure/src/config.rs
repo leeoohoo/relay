@@ -67,6 +67,8 @@ pub struct ApiConfig {
     pub harness_space_prefix: String,
     pub harness_request_timeout_seconds: u64,
     pub harness_credentials_root: String,
+    pub harness_admin_email: Option<String>,
+    pub harness_admin_password: Option<String>,
 }
 
 impl ApiConfig {
@@ -144,6 +146,13 @@ impl ApiConfig {
             .unwrap_or(15);
         let harness_credentials_root = std::env::var("HARNESS_CREDENTIALS_ROOT")
             .unwrap_or_else(|_| ".relay/harness-credentials".into());
+        let harness_admin_email = std::env::var("HARNESS_ADMIN_EMAIL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let harness_admin_password = std::env::var("HARNESS_ADMIN_PASSWORD")
+            .ok()
+            .filter(|value| !value.is_empty());
 
         Self {
             host,
@@ -167,6 +176,8 @@ impl ApiConfig {
             harness_space_prefix,
             harness_request_timeout_seconds,
             harness_credentials_root,
+            harness_admin_email,
+            harness_admin_password,
         }
     }
 }

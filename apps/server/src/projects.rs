@@ -81,7 +81,7 @@ pub(super) async fn create_company_project_for_human(
     let provisioned_git = if imported_local_folder {
         match provision_imported_project_git(
             &state,
-            human.id,
+            &human,
             project_id,
             &input.name,
             &description,
@@ -357,7 +357,7 @@ pub(super) async fn import_company_project_folder_for_human(
     let project_type = metadata.project_type.clone().unwrap_or(inferred_type);
     let provisioned_git = match provision_imported_project_git(
         &state,
-        human.id,
+        &human,
         project_id,
         &metadata.name,
         &description,
@@ -428,16 +428,20 @@ pub(super) async fn import_company_project_folder_for_human(
 
 async fn provision_imported_project_git(
     state: &AppState,
-    human_user_id: Uuid,
+    human: &HumanUser,
     project_id: Uuid,
     project_name: &str,
     description: &str,
     local_path: &FsPath,
 ) -> AppResult<ProvisionedProjectGit> {
+    state
+        .harness_provisioner
+        .ensure_active_account(human)
+        .await?;
     let provisioned = state
         .harness_provisioner
         .provision_project_git(
-            human_user_id,
+            human.id,
             project_id,
             project_name,
             description,
@@ -515,7 +519,7 @@ pub(super) async fn provision_existing_company_project_git(
     }
     let provisioned = provision_imported_project_git(
         &state,
-        human.id,
+        &human,
         project_id,
         &project.project.name,
         &project.project.description,

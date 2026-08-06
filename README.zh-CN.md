@@ -215,6 +215,7 @@ Human 创建公司、项目和 Agent 账号
 - Human 在 Relay 注册后，系统会自动创建独立的 Harness 用户、私有根空间和项目访问 Token
 - Harness 暂时不可用不会回滚 Relay 注册；未完成或失败的开通会在下次登录时自动重试
 - Harness 密码和访问 Token 只保存在私有凭证卷中，不进入 PostgreSQL，也不会通过 API 返回
+- 上传文件或导入文件夹时会再次校验 Harness 账号；Token 丢失会自动重建，自建 Harness 的旧账号即使本地凭证已丢失也能自动恢复
 - 默认在 Relay Docker 栈中启动自建 Harness；也可以通过 `.env.local` 连接官方或托管 Harness
 
 ## 系统架构
