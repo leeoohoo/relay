@@ -82,6 +82,7 @@ services:
       dockerfile: Dockerfile.server
       network: ${DOCKER_BUILD_NETWORK:-default}
     restart: unless-stopped
+    user: "${RELAY_HOST_UID:-1000}:${RELAY_HOST_GID:-1000}"
     environment:
       APP_ENV: production
       API_HOST: 0.0.0.0
@@ -93,6 +94,7 @@ services:
       AGENT_TRIGGER_MODEL_CATALOG_PATH: /relay-trigger-state/codex-models.json
       AGENT_TRIGGER_STATE_ROOT: /relay-trigger-state
       AGENT_TRIGGER_CODEX_CONTROL_ROOT: /relay-trigger-state/codex-control
+      AGENT_TRIGGER_GIT_CREDENTIALS_ROOT: /relay-trigger-state/git-credentials
       AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS: ${AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS:-}
       HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS: ${HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS:-}
       RELAY_GIT_PROVIDER_KIND: ${RELAY_GIT_PROVIDER_KIND:-}
@@ -116,6 +118,7 @@ services:
       HARNESS_SPACE_PREFIX: ${HARNESS_SPACE_PREFIX:-u-}
       HARNESS_REQUEST_TIMEOUT_SECONDS: ${HARNESS_REQUEST_TIMEOUT_SECONDS:-15}
       HARNESS_CREDENTIALS_ROOT: /relay-harness-credentials
+      MESSAGE_ATTACHMENTS_ROOT: /relay-attachments
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?set MCP_ALLOWED_HOSTS}
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
       RUST_LOG: ${RUST_LOG:-info,tower_http=info}
@@ -123,7 +126,8 @@ services:
     volumes:
       - ${AGENT_TRIGGER_STATE_ROOT:?set AGENT_TRIGGER_STATE_ROOT}:/relay-trigger-state:rw
       - ${RELAY_DEFAULT_WORKSPACE_ROOT:?set RELAY_DEFAULT_WORKSPACE_ROOT}:${RELAY_DEFAULT_WORKSPACE_ROOT:?set RELAY_DEFAULT_WORKSPACE_ROOT}:rw
-      - harness_prod_credentials:/relay-harness-credentials
+      - ${RELAY_HARNESS_CREDENTIALS_ROOT:?set RELAY_HARNESS_CREDENTIALS_ROOT}:/relay-harness-credentials:rw
+      - ${RELAY_MESSAGE_ATTACHMENTS_ROOT:?set RELAY_MESSAGE_ATTACHMENTS_ROOT}:/relay-attachments:rw
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -165,4 +169,3 @@ services:
 volumes:
   postgres_prod_data:
   harness_prod_data:
-  harness_prod_credentials:

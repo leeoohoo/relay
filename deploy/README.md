@@ -16,9 +16,28 @@ cp deploy/.env.production.example .env.production
 - `API_ALLOWED_ORIGINS`
 - `MCP_ALLOWED_HOSTS`
 - `AGENT_TRIGGER_STATE_ROOT`
+- `RELAY_DEFAULT_WORKSPACE_ROOT`
+- `RELAY_HARNESS_CREDENTIALS_ROOT`
+- `RELAY_MESSAGE_ATTACHMENTS_ROOT`
+- `RELAY_HOST_UID` 与 `RELAY_HOST_GID`（分别填写部署用户的 `id -u`、`id -g`）
 - 管理员 Token 或 `ADMIN_API_TOKENS_JSON`
 
 不要把 `.env.production` 提交到 Git。
+
+`RELAY_DEFAULT_WORKSPACE_ROOT` 必须填写宿主机绝对路径；该路径会以相同位置挂载到 Server 容器，使 Server 创建的项目和宿主机 Trigger 看到的是同一目录。
+
+首次启动前创建共享目录。Server 会使用上述宿主 UID/GID 运行，确保宿主机 Trigger 与 Docker Server 可以安全读写同一份状态：
+
+```bash
+mkdir -p .relay-agent-trigger .relay-workspace .relay/harness-credentials .relay/attachments
+```
+
+如果这些目录曾由旧版本的 root 容器创建，只需修复所有权，不要删除数据：
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" \
+  .relay-agent-trigger .relay-workspace .relay
+```
 
 ## 2. 启动 PostgreSQL、迁移、API 与 Web
 

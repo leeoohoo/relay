@@ -28,6 +28,19 @@ done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-$HOME/.docker/daemon.json}"
+
+# shellcheck source=scripts/lib/relay_directories.sh
+source "$ROOT_DIR/scripts/lib/relay_directories.sh"
+
+export RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}"
+export RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}"
+export AGENT_TRIGGER_STATE_ROOT="${AGENT_TRIGGER_STATE_ROOT:-$ROOT_DIR/.relay-agent-trigger}"
+export RELAY_DEFAULT_WORKSPACE_ROOT="${RELAY_DEFAULT_WORKSPACE_ROOT:-$ROOT_DIR/.relay-workspace}"
+export RELAY_HARNESS_CREDENTIALS_ROOT="${RELAY_HARNESS_CREDENTIALS_ROOT:-$ROOT_DIR/.relay/harness-credentials}"
+export RELAY_MESSAGE_ATTACHMENTS_ROOT="${RELAY_MESSAGE_ATTACHMENTS_ROOT:-$ROOT_DIR/.relay/attachments}"
+export AGENT_TRIGGER_MANAGED_PROJECTS_ROOT="${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
+export AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS="${AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
+export HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS="${HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
 KNOWN_BAD_DOCKER_MIRRORS=(
   "hub-mirror.c.163.com"
   "mirror.baidubce.com"
@@ -95,6 +108,14 @@ prepare_harness_mode() {
       exit 1
       ;;
   esac
+}
+
+prepare_shared_directories() {
+  relay_prepare_managed_directories \
+    "$AGENT_TRIGGER_STATE_ROOT" \
+    "$RELAY_DEFAULT_WORKSPACE_ROOT" \
+    "$RELAY_HARNESS_CREDENTIALS_ROOT" \
+    "$RELAY_MESSAGE_ATTACHMENTS_ROOT"
 }
 
 build_web_assets() {
@@ -494,6 +515,7 @@ EOF
 case "$MODE" in
   up)
     ensure_docker_daemon
+    prepare_shared_directories
     prepare_docker_build_network
     prepare_harness_mode
     preflight_docker_images
@@ -509,6 +531,7 @@ case "$MODE" in
     ;;
   rebuild)
     ensure_docker_daemon
+    prepare_shared_directories
     prepare_docker_build_network
     prepare_harness_mode
     preflight_docker_images
@@ -528,6 +551,7 @@ case "$MODE" in
     compose down
     ;;
   restart)
+    prepare_shared_directories
     prepare_harness_mode
     prepare_ports
     start_harness_service

@@ -9,15 +9,15 @@ TRIGGER_PID_FILE="$RUNTIME_DIR/trigger.pid"
 TRIGGER_LOG="$RUNTIME_DIR/trigger.log"
 TRIGGER_LAUNCH_LABEL="com.relay.ai-chat.trigger"
 
+# shellcheck source=scripts/lib/relay_directories.sh
+source "$ROOT_DIR/scripts/lib/relay_directories.sh"
+
 if [[ -f "$LOCAL_ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
   source "$LOCAL_ENV_FILE"
   set +a
 fi
-
-mkdir -p "$RUNTIME_DIR"
-touch "$TRIGGER_LOG"
 
 if [[ -z "${RELAY_GIT_PROVIDER_TOKEN:-}" \
   && -n "${RELAY_GIT_PROVIDER_TOKEN_KEYCHAIN_SERVICE:-}" \
@@ -40,8 +40,18 @@ export AGENT_TRIGGER_MANAGED_PROJECTS_ROOT="${AGENT_TRIGGER_MANAGED_PROJECTS_ROO
 export AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS="${AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
 export HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS="${HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
 export AGENT_TRIGGER_STATE_ROOT="${AGENT_TRIGGER_STATE_ROOT:-$ROOT_DIR/.relay-agent-trigger}"
+export RELAY_HARNESS_CREDENTIALS_ROOT="${RELAY_HARNESS_CREDENTIALS_ROOT:-$ROOT_DIR/.relay/harness-credentials}"
+export RELAY_MESSAGE_ATTACHMENTS_ROOT="${RELAY_MESSAGE_ATTACHMENTS_ROOT:-$ROOT_DIR/.relay/attachments}"
+export RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}"
+export RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}"
 
-mkdir -p "$RELAY_DEFAULT_WORKSPACE_ROOT" "$AGENT_TRIGGER_STATE_ROOT"
+relay_prepare_managed_directories \
+  "$RUNTIME_DIR" \
+  "$RELAY_DEFAULT_WORKSPACE_ROOT" \
+  "$AGENT_TRIGGER_STATE_ROOT" \
+  "$RELAY_HARNESS_CREDENTIALS_ROOT" \
+  "$RELAY_MESSAGE_ATTACHMENTS_ROOT"
+touch "$TRIGGER_LOG"
 
 container_host_port() {
   local container_name="$1"

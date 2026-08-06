@@ -110,6 +110,8 @@ pnpm install --frozen-lockfile
 
 如果执行 `./start.sh` 提示“权限不够”或 `Permission denied`，运行 `chmod +x start.sh scripts/*.sh` 后重试，也可以使用 `bash ./start.sh`。不要使用 `sudo ./start.sh`，否则可能在工作区生成属于 root 的文件。
 
+如果旧版 Relay 已经由 root 容器创建了共享状态，启动时出现 `Codex control storage error: Operation not permitted`，请拉取最新代码，然后执行 `./start.sh` 输出的一次性 `sudo chown` 命令。该命令只修复目录所有权，不会删除 PostgreSQL、Agent、项目、Codex 或 Harness 数据。
+
 ## 为什么需要 Relay
 
 让多个编程 Agent 在同一个项目中长期协作，不只是反复拼接 Prompt。它们需要稳定身份、共享项目状态、明确的任务负责人、前置依赖、受控的 Git 权限，以及 Human 能够查看和干预的运行过程。

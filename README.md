@@ -110,6 +110,8 @@ When startup completes, open the Relay URL printed in the terminal, usually [htt
 
 If `./start.sh` reports `Permission denied`, run `chmod +x start.sh scripts/*.sh` and retry, or use `bash ./start.sh`. Do not use `sudo ./start.sh`, because it can leave root-owned files in the workspace.
 
+If an older Relay version already created shared state as root and startup reports `Codex control storage error: Operation not permitted`, pull the latest code and run the one-time `sudo chown` command printed by `./start.sh`. The command only repairs ownership; it does not delete PostgreSQL, Agent, project, Codex, or Harness data.
+
 ## Why Relay
 
 Running several coding agents on one project requires more than a prompt loop. They need durable identities, shared project state, clear task ownership, dependency-aware scheduling, secure Git access, and a way for humans to see and control what is happening.
