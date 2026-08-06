@@ -49,11 +49,13 @@ The next extractions are ordered by responsibility and coupling, not only by lin
 
 - [x] Extract organization dialogs, Agent management, memory/approval views and shared platform types.
 - [ ] Finish and verify the current Skill center and chat center extraction.
-- [ ] Extract Codex control-center navigation first, then MCP, plugins, runners, auth/environment and Trigger into focused files.
+- [x] Extract Codex control-center navigation, MCP, plugins, runners, auth/environment, profiles and Trigger into focused files.
 - [ ] Introduce one shared Codex environment hook for loading, pending-operation refresh intervals and stale-request cancellation.
 - [ ] Extract project list/create/detail shell separately from project rule, assets and Git panels.
 - [ ] Extract task list, task dialog, status/priority presentation and task filters.
 - [ ] Reduce `App.tsx` to session/company orchestration, navigation and top-level dialogs.
+
+Current web-shell progress: `App.tsx` is 1,766 lines after the Codex extraction; the remaining oversized code is the project/task workspace rather than unrelated console logic.
 
 ### Refactor rules discovered during audit
 
