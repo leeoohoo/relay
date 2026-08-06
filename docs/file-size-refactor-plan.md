@@ -12,16 +12,16 @@
 
 | Status | Lines | File | Planned ownership split |
 | --- | ---: | --- | --- |
-| [x] | 16,634 | `crates/application/src/service.rs` | split into contracts, platform services, validation, pagination and tests; facade is now 991 lines |
-| [ ] | 6,725 | `crates/infrastructure/src/postgres.rs` | connection, transactions, domain repositories, row mapping |
+| [x] | 16,634 | `crates/application/src/service.rs` | split into contracts, platform services, validation, pagination and tests; repository facade is now 65 lines |
+| [x] | 6,725 | `crates/infrastructure/src/postgres.rs` | facade is now 164 lines; auth, company, Agent, chat, project, memory, Codex control/runtime, task, governance and row mapping are focused modules |
 | [x] | 5,236 | `apps/web/src/pages/App.tsx` | application shell is now 400 lines; feature pages, dialogs and view models were extracted |
 | [x] | 4,655 | `apps/server/src/main.rs` | bootstrap/router is now 653 lines; account, company, chat, project, Codex, Agent, auth/error, DTO and tests are focused modules |
 | [x] | 3,870 | `crates/domain/src/company.rs` | entity/governance facade is now 791 lines; profession catalogs/playbooks, project-type catalog/inference/rules and tests are focused modules |
 | [x] | 3,849 | `crates/mcp/src/lib.rs` | facade/input DTOs are now 797 lines; gateway/audit, Handler, schemas and domain dispatchers are focused modules |
-| [ ] | 3,608 | `crates/application/src/memory.rs` | state, persistence and domain repository implementations |
+| [x] | 3,608 | `crates/application/src/memory.rs` | state facade is now 339 lines; domain repository implementations and tests are focused modules |
 | [x] | 3,365 | `crates/infrastructure/src/codex_trigger.rs` | facade/types are now 222 lines; configuration/discovery, runtime, app-server RPC, JSONL events, model catalog, validation and tests are focused modules |
 | [x] | 2,565 | `apps/agent-trigger/src/main.rs` | bootstrap/poll loop is now 589 lines; Codex control/install/plugins, execution and Relay Skill materialization are focused modules |
-| [ ] | 2,488 | `apps/web/src/styles.css` | tokens, base, layout and feature-specific stylesheets |
+| [x] | 2,488 | `apps/web/src/styles.css` | split into ordered tokens, base, layout and feature-specific stylesheets |
 | [x] | 2,239 | `crates/infrastructure/src/lib.rs` | PostgreSQL-only adapter construction; redundant enum delegation removed |
 | [x] | 2,034 | `crates/infrastructure/src/codex_control.rs` | facade/types are now 386 lines; store, requests/runtime, MCP, persistence, validation and tests are focused modules |
 | [x] | 1,574 | `crates/infrastructure/src/git_workspace.rs` | manager, validation and Git command modules; facade/workflow is now 941 lines |
@@ -70,15 +70,15 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 ### 1. Application boundary
 
 - [x] Move public request/view/bundle types from `service.rs` into domain-oriented `contracts/` modules and re-export them without breaking callers.
-- [ ] Split the monolithic `PlatformRepository` port into auth, company, chat, project, task, memory and Codex ports; keep only a compatibility composition trait if required.
+- [x] Split the monolithic `PlatformRepository` port into auth, company, Agent, chat, project, task, memory, Codex control/runtime and governance ports; retain a compatibility composition trait.
 - [x] Move `PlatformApp` methods into domain-oriented platform modules.
 - [x] Move shared validation into focused `validation/` modules and remove duplicated normalizers.
 - [x] Split application unit tests by domain.
-- [ ] Split `MemoryPlatformRepository` into state/persistence plus domain-specific implementations.
+- [x] Split `MemoryPlatformRepository` into state/persistence plus domain-specific implementations.
 
 ### 2. Infrastructure adapters
 
-- [ ] Split PostgreSQL persistence by repository domain, with shared connection/transaction/mapping modules.
+- [x] Split PostgreSQL persistence by repository domain, with shared connection/transaction/mapping modules.
 - [x] Remove duplicated `RepositoryAdapter` delegation by standardizing runtime storage on PostgreSQL.
 - [x] Split Codex trigger execution into configuration/discovery, runtime, app-server RPC, progress/JSONL, model catalog and validation modules.
 - [x] Split Codex control into store/profile settings, request/runtime, MCP, persistence, validation and focused test modules.
@@ -106,9 +106,9 @@ Current web-shell result: `App.tsx` is 400 lines. Project, task, rule, asset, Gi
 
 ### 6. Permanent enforcement
 
-- [ ] Add `scripts/check_source_file_sizes.sh` with a default 1,000-line limit.
-- [ ] Run the size check in CI and fail on newly oversized hand-written source files.
-- [ ] Document narrow exclusions for generated/vendor files only; no source-file allowlist.
+- [x] Add `scripts/check_source_file_sizes.sh` with a default 1,000-line limit.
+- [x] Run the size check in CI and fail on newly oversized hand-written source files.
+- [x] Document narrow exclusions for generated/vendor files only; no source-file allowlist.
 
 ## Batch acceptance checks
 
@@ -127,8 +127,8 @@ git diff --check
 
 ## Definition of done
 
-- [ ] No hand-written Rust, TypeScript, TSX, JavaScript, JSX or CSS source file exceeds 1,000 lines.
-- [ ] No compatibility `include!` fragments or meaningless numbered files are used to bypass the limit.
-- [ ] Public behavior and persisted data compatibility are verified.
-- [ ] Repeated code found during the split is consolidated behind domain-level abstractions.
-- [ ] CI enforces the limit for future changes.
+- [x] No hand-written Rust, TypeScript, TSX, JavaScript, JSX or CSS source file exceeds 1,000 lines.
+- [x] No compatibility `include!` fragments or meaningless numbered files are used to bypass the limit.
+- [x] Public behavior and persisted data compatibility are verified.
+- [x] Repeated repository boundaries found during the split are consolidated behind domain-level ports and a compatibility composition trait.
+- [x] CI enforces the limit for future changes.

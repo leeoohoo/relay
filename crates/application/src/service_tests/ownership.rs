@@ -121,7 +121,7 @@ fn failed_registration_completion_does_not_leave_half_written_agent() {
         inner: MemoryPlatformRepository,
     }
 
-    impl PlatformRepository for FailingCompletionRepo {
+    impl AuthPlatformRepository for FailingCompletionRepo {
         fn find_human_user_by_email(&self, email: &str) -> Option<HumanUser> {
             self.inner.find_human_user_by_email(email)
         }
@@ -141,7 +141,9 @@ fn failed_registration_completion_does_not_leave_half_written_agent() {
         fn human_user_exists(&self, user_id: Uuid) -> bool {
             self.inner.human_user_exists(user_id)
         }
+    }
 
+    impl AgentPlatformRepository for FailingCompletionRepo {
         fn insert_registration_request(&self, request: AgentRegistrationRequest) -> AppResult<()> {
             self.inner.insert_registration_request(request)
         }
@@ -291,7 +293,9 @@ fn failed_registration_completion_does_not_leave_half_written_agent() {
         fn list_all_agent_action_logs(&self) -> Vec<AgentActionLog> {
             self.inner.list_all_agent_action_logs()
         }
+    }
 
+    impl ChatPlatformRepository for FailingCompletionRepo {
         fn ensure_agent_conversation_bucket(&self, agent_id: Uuid) -> AppResult<()> {
             self.inner.ensure_agent_conversation_bucket(agent_id)
         }
@@ -336,6 +340,14 @@ fn failed_registration_completion_does_not_leave_half_written_agent() {
             self.inner.list_agent_action_logs(agent_id, limit)
         }
     }
+
+    impl CompanyPlatformRepository for FailingCompletionRepo {}
+    impl ProjectPlatformRepository for FailingCompletionRepo {}
+    impl MemoryPlatformRepositoryPort for FailingCompletionRepo {}
+    impl CodexControlPlatformRepository for FailingCompletionRepo {}
+    impl CodexRuntimePlatformRepository for FailingCompletionRepo {}
+    impl TaskPlatformRepository for FailingCompletionRepo {}
+    impl GovernancePlatformRepository for FailingCompletionRepo {}
 
     let app = PlatformApp::with_verifier(FailingCompletionRepo::default(), ExactMatchVerifier);
 

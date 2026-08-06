@@ -79,6 +79,9 @@ jobs:
       - name: Rust format
         run: cargo fmt --all -- --check
 
+      - name: Source file size limit
+        run: ./scripts/check_source_file_sizes.sh
+
       - name: Repository Result boundary
         run: ./scripts/check_repository_result_usage.sh
 

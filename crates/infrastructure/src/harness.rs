@@ -598,7 +598,7 @@ mod tests {
         Arc,
     };
 
-    use ai_chat_application::MemoryPlatformRepository;
+    use ai_chat_application::{AuthPlatformRepository, MemoryPlatformRepository};
     use axum::{routing::post, Json, Router};
 
     #[test]
