@@ -203,6 +203,7 @@ API_HOST_PORT=${API_HOST_PORT}
 WEB_HOST_PORT=${WEB_HOST_PORT}
 DATABASE_URL=${DATABASE_URL}
 ENABLE_DEV_ENDPOINTS=${ENABLE_DEV_ENDPOINTS}
+HARNESS_MODE=${HARNESS_MODE}
 AGENT_TRIGGER_MCP_URL=${AGENT_TRIGGER_MCP_URL}
 AGENT_TRIGGER_MANAGED_PROJECTS_ROOT=${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT}
 EOF
@@ -353,6 +354,7 @@ prepare_env() {
   export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:${POSTGRES_HOST_PORT}/ai_chat}"
   export PG_CONTAINER="${PG_CONTAINER:-ai-chat-postgres}"
   export ENABLE_DEV_ENDPOINTS="${ENABLE_DEV_ENDPOINTS:-true}"
+  export HARNESS_MODE="${HARNESS_MODE:-disabled}"
   export ADMIN_API_TOKEN="${ADMIN_API_TOKEN:-dev-admin-token}"
   export API_ALLOWED_ORIGINS="${API_ALLOWED_ORIGINS:-http://127.0.0.1:${WEB_HOST_PORT},http://localhost:${WEB_HOST_PORT}}"
   export AGENT_TRIGGER_MCP_URL="${AGENT_TRIGGER_MCP_URL:-http://127.0.0.1:${API_HOST_PORT}/mcp}"
@@ -561,6 +563,8 @@ EOF
   print_http_status "Web" "http://127.0.0.1:${WEB_HOST_PORT}"
   print_http_status "API readiness" "http://127.0.0.1:${API_HOST_PORT}/ready"
 
+  echo "- Harness mode: ${HARNESS_MODE:-disabled}"
+
   cat <<EOF
 
 Logs:
@@ -605,6 +609,7 @@ Services:
 - API: http://127.0.0.1:${API_HOST_PORT}
 - Trigger: local ai-chat-agent-trigger process
 - PostgreSQL: 127.0.0.1:${POSTGRES_HOST_PORT} (ai_chat)
+- Harness mode: ${HARNESS_MODE:-disabled}
 
 Logs:
 - API: $API_LOG
