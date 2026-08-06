@@ -42,24 +42,23 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use ai_chat_application::{
-    ChangeHumanPasswordInput, ConfigureManagedLocalProjectGitForHumanInput,
-    CreateCompanyAgentInput, CreateCompanyInput, CreateCompanyProjectForHumanInput,
-    CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput, DeleteAgentMemoryForHumanInput,
-    DeleteCompanyCodexRunnerProfileForHumanInput, DeleteCompanyProjectGitForHumanInput,
-    DevLoginInput, GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
-    HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
-    ListCompanyCodexPluginsForHumanInput, ListCompanyCodexRunnerProfilesForHumanInput,
-    ListCompanyMemoriesForHumanInput, LoginHumanInput, OpenHumanCompanyDirectConversationInput,
-    PlatformApp, PublishCompanyGovernancePolicyInput, RegisterHumanInput,
-    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
-    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
-    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
-    SetCompanyProjectPauseForHumanInput, UpdateAgentMemoryForHumanInput,
-    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
-    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
-    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
-    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
-    UpsertCompanyProjectGitForHumanInput,
+    ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
+    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput,
+    DeleteAgentMemoryForHumanInput, DeleteCompanyCodexRunnerProfileForHumanInput,
+    DeleteCompanyProjectGitForHumanInput, DevLoginInput, GetCompanyAgentCodexTriggerForHumanInput,
+    GetCompanyProjectGitForHumanInput, HumanCompanyStaffingStatusInput,
+    ListCompanyAgentCodexRunsForHumanInput, ListCompanyCodexPluginsForHumanInput,
+    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
+    OpenHumanCompanyDirectConversationInput, PlatformApp, PublishCompanyGovernancePolicyInput,
+    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
+    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
+    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
+    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
+    UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
+    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
+    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
+    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
+    UpsertCompanyProjectAssetRefreshForHumanInput, UpsertCompanyProjectGitForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -79,7 +78,7 @@ use ai_chat_infrastructure::git_credentials::{
     github_token_profile_name, managed_token_profile_name, validate_github_token,
     GitCredentialStore,
 };
-use ai_chat_infrastructure::gitness::GitnessProjectGitProvisioner;
+use ai_chat_infrastructure::gitness::{GitnessProjectGitProvisioner, ProvisionedProjectGit};
 use ai_chat_infrastructure::harness::HarnessProvisioner;
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
 use ai_chat_infrastructure::realtime::spawn_postgres_realtime_listener;
@@ -279,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
     let _realtime_listener =
         spawn_postgres_realtime_listener(config.database_url.clone(), realtime_sender.clone());
     let mcp_gateway = McpGateway::new(platform.clone(), mcp_config.agent_key.clone())
-        .with_project_git_provisioner(project_git_provisioner);
+        .with_project_git_provisioner(project_git_provisioner.clone());
     let standard_mcp_config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)
@@ -395,6 +394,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/companies/{company_id}/projects/import-folder",
             post(import_company_project_folder_for_human)
                 .layer(DefaultBodyLimit::max(5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/git/provision-harness",
+            post(provision_existing_company_project_git),
         )
         .route(
             "/api/v1/companies/{company_id}/memories",

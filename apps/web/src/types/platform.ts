@@ -288,6 +288,26 @@ export type CodexWebSearch = "disabled" | "cached" | "indexed" | "live";
 export type CodexSandboxMode = "inherit" | "read_only" | "workspace_write";
 export type CodexApprovalPolicy = "inherit" | "never" | "on-request";
 
+export type CodexCompanyCliSettings = {
+  company_id: string;
+  model: string | null;
+  reasoning_effort: CodexReasoningEffort | null;
+  reasoning_summary: CodexReasoningSummary;
+  verbosity: CodexVerbosity | null;
+  personality: CodexPersonality | null;
+  service_tier: "fast" | null;
+  approval_policy: "never" | "on-request";
+  sandbox_mode: "read_only" | "workspace_write";
+  network_access: boolean;
+  web_search: CodexWebSearch;
+  feature_multi_agent: boolean;
+  feature_remote_plugin: boolean;
+  feature_hooks: boolean;
+  feature_goals: boolean;
+  feature_shell_tool: boolean;
+  updated_at: string;
+};
+
 export type CodexCliRuntime = {
   installed: boolean;
   source: string;
@@ -390,9 +410,12 @@ export type CodexPluginItem = {
 
 export type CodexPluginCatalog = {
   runner_id: string;
+  target_selector: string;
   hostname: string;
   codex_version: string | null;
   fingerprint: string;
+  discovery_status: "ready" | "empty";
+  diagnostic_message: string | null;
   installed: CodexPluginItem[];
   available: CodexPluginItem[];
   marketplaces: Array<{
@@ -406,6 +429,7 @@ export type CodexPluginCatalog = {
 export type CodexPluginOperation = {
   id: string;
   target_runner_id: string;
+  target_selector: string;
   operation: "install" | "remove" | "refresh";
   plugin_id: string | null;
   status: "queued" | "running" | "succeeded" | "failed";

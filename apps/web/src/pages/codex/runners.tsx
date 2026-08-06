@@ -3,7 +3,7 @@ import { api } from "../../api/client";
 import type { CompanyRealtimeEvent } from "../../api/types";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Icon } from "../../components/ui";
-import type { CodexEnvironmentView, CodexRunnerProfileView, CompanyConsole } from "../../types/platform";
+import type { CodexCompanyCliSettings, CodexEnvironmentView, CodexRunnerProfileView, CompanyConsole } from "../../types/platform";
 import { Metric, StatusBadge } from "../app/shared";
 import { CodexRunnerProfilesPanel } from "./profiles";
 import { CodexTriggerPanel } from "./trigger";
@@ -21,6 +21,7 @@ export function CodexRunnersView(props: {
   const [profiles, setProfiles] = useState<CodexRunnerProfileView[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(true);
   const [environment, setEnvironment] = useState<CodexEnvironmentView | null>(null);
+  const [cliSettings, setCliSettings] = useState<CodexCompanyCliSettings | null>(null);
   const runnerPagination = usePagination(runnableAgents, 6, props.consoleData.company.id);
 
   async function loadProfiles() {
@@ -51,9 +52,26 @@ export function CodexRunnersView(props: {
     }
   }
 
+  async function loadCliSettings() {
+    try {
+      const response = await api<{ settings: CodexCompanyCliSettings }>(
+        `/api/v1/companies/${props.consoleData.company.id}/codex-cli-settings`,
+        {},
+        props.token,
+      );
+      setCliSettings(response.settings);
+    } catch (error) {
+      props.onError(error);
+    }
+  }
+
+  async function refreshProfiles() {
+    await Promise.all([loadProfiles(), loadCliSettings()]);
+  }
+
   useEffect(() => {
     setProfilesLoading(true);
-    void loadProfiles();
+    void refreshProfiles();
     void loadEnvironment();
   }, [props.consoleData.company.id, props.token]);
 
@@ -93,7 +111,8 @@ export function CodexRunnersView(props: {
         loading={profilesLoading}
         token={props.token}
         authProfiles={environment?.profiles ?? []}
-        onChanged={loadProfiles}
+        cliSettings={cliSettings}
+        onChanged={refreshProfiles}
         onError={props.onError}
         onNotice={props.onNotice}
       />
@@ -145,4 +164,3 @@ export function CodexRunnersView(props: {
     </div>
   );
 }
-

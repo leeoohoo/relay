@@ -21,6 +21,8 @@ use ai_chat_domain::agent_identity::{
 use ai_chat_shared::{AppError, AppResult};
 
 use crate::config::{ApiConfig, HarnessMode};
+use crate::git_credentials::GitCredentialStore;
+use crate::gitness::{generated_repository_identifier, ProvisionedProjectGit};
 
 const MAX_HARNESS_ERROR_CHARS: usize = 1_000;
 
@@ -175,6 +177,125 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                 )))
             }
         }
+    }
+
+    pub async fn provision_project_git(
+        &self,
+        human_user_id: Uuid,
+        project_id: Uuid,
+        project_name: &str,
+        description: &str,
+        git_credentials: &GitCredentialStore,
+    ) -> AppResult<ProvisionedProjectGit> {
+        let account = self
+            .repo
+            .get_human_harness_account_result(human_user_id)?
+            .filter(|account| account.status == HUMAN_HARNESS_STATUS_ACTIVE)
+            .ok_or_else(|| {
+                AppError::Validation("当前用户的 Harness 账户尚未就绪，无法自动创建项目仓库".into())
+            })?;
+        let access_token = self
+            .credentials
+            .read_access_token(human_user_id)?
+            .ok_or_else(|| AppError::Validation("Harness access token is unavailable".into()))?;
+        let api_base_url = self.config.api_base_url.as_deref().ok_or_else(|| {
+            AppError::Validation("HARNESS_BASE_URL is required for Git provisioning".into())
+        })?;
+        let repository_identifier = generated_repository_identifier(project_name, project_id);
+        let create = HarnessCreateRepositoryRequest {
+            parent_ref: account.space_identifier.as_str(),
+            identifier: repository_identifier.as_str(),
+            default_branch: "main",
+            description,
+            is_public: false,
+            readme: false,
+        };
+        let repository = match self
+            .request_json::<HarnessRepositoryResponse, _>(
+                Method::POST,
+                format!("{api_base_url}/api/v1/repos").as_str(),
+                Some(access_token.as_str()),
+                Some(&create),
+            )
+            .await
+        {
+            Ok(repository) => repository,
+            Err(error) if error.is_already_exists() => self
+                .request_json::<HarnessRepositoryResponse, ()>(
+                    Method::GET,
+                    format!(
+                        "{api_base_url}/api/v1/repos/{}%2F{}",
+                        account.space_identifier.replace('/', "%2F"),
+                        repository_identifier
+                    )
+                    .as_str(),
+                    Some(access_token.as_str()),
+                    None,
+                )
+                .await
+                .map_err(|error| AppError::Internal(format!("read Harness repository: {error}")))?,
+            Err(error) => {
+                return Err(AppError::Internal(format!(
+                    "create Harness repository: {error}"
+                )))
+            }
+        };
+        let token_identifier = format!(
+            "relay-project-{}-{}",
+            short_identifier(project_id),
+            short_identifier(Uuid::new_v4())
+        );
+        let token_request = HarnessCreateAccessTokenRequest {
+            identifier: token_identifier.as_str(),
+        };
+        let project_token = self
+            .request_json::<HarnessTokenResponse, _>(
+                Method::POST,
+                format!("{api_base_url}/api/v1/user/tokens").as_str(),
+                Some(access_token.as_str()),
+                Some(&token_request),
+            )
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("create Harness project token: {error}"))
+            })?;
+        let auth_profile = git_credentials.store_managed_git_token(
+            project_id,
+            account.harness_uid.as_str(),
+            project_token.access_token.as_str(),
+        )?;
+        let public_base =
+            reqwest::Url::parse(account.harness_base_url.as_str()).map_err(|error| {
+                AppError::Validation(format!("invalid Harness public URL: {error}"))
+            })?;
+        let remote_url = public_base
+            .join(&format!(
+                "git/{}/{}.git",
+                account.space_identifier, repository_identifier
+            ))
+            .map_err(|error| AppError::Validation(format!("invalid Harness Git URL: {error}")))?
+            .to_string();
+        let internal_base = reqwest::Url::parse(api_base_url).map_err(|error| {
+            AppError::Validation(format!("invalid Harness internal URL: {error}"))
+        })?;
+        let push_url = internal_base
+            .join(&format!(
+                "git/{}/{}.git",
+                account.space_identifier, repository_identifier
+            ))
+            .map_err(|error| AppError::Validation(format!("invalid Harness push URL: {error}")))?
+            .to_string();
+        Ok(ProvisionedProjectGit {
+            remote_url,
+            push_url: Some(push_url),
+            default_branch: if repository.default_branch.trim().is_empty() {
+                "main".into()
+            } else {
+                repository.default_branch
+            },
+            auth_profile,
+            repository_identifier,
+        })
     }
 
     async fn provision_inner(
@@ -383,6 +504,21 @@ struct HarnessCreateAccessTokenRequest<'a> {
     identifier: &'a str,
 }
 
+#[derive(Debug, Serialize)]
+struct HarnessCreateRepositoryRequest<'a> {
+    parent_ref: &'a str,
+    identifier: &'a str,
+    default_branch: &'a str,
+    description: &'a str,
+    is_public: bool,
+    readme: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HarnessRepositoryResponse {
+    default_branch: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct HarnessTokenResponse {
     access_token: String,
@@ -509,6 +645,10 @@ impl HarnessCredentialStore {
 
     fn has_access_token(&self, human_user_id: Uuid) -> bool {
         self.token_path(human_user_id).is_file()
+    }
+
+    fn read_access_token(&self, human_user_id: Uuid) -> AppResult<Option<String>> {
+        read_secret(self.token_path(human_user_id).as_path())
     }
 }
 

@@ -1,6 +1,17 @@
 use super::*;
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
+    pub fn get_company_project_for_human_manager(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+        project_id: Uuid,
+    ) -> AppResult<CompanyProjectView> {
+        let project =
+            self.ensure_company_project_for_human_manager(human_user_id, company_id, project_id)?;
+        self.company_project_view(project)
+    }
+
     pub fn create_company_project(
         &self,
         input: CreateCompanyProjectInput,

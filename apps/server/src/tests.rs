@@ -104,6 +104,54 @@ fn local_project_import_copies_source_into_a_fresh_git_repository() {
 }
 
 #[test]
+fn imported_project_is_published_to_the_provisioned_remote() {
+    let root = std::env::temp_dir().join(format!("relay-project-publish-{}", Uuid::new_v4()));
+    let project = root.join("project");
+    let remote = root.join("remote.git");
+    fs::create_dir_all(&project).expect("project directory");
+    fs::write(project.join("README.md"), "# Imported\n").expect("project file");
+    initialize_managed_project_git(&project).expect("local git initialization");
+    let init_remote = Command::new("git")
+        .args(["init", "--bare", remote.to_str().expect("remote path")])
+        .output()
+        .expect("bare remote initialization");
+    assert!(init_remote.status.success());
+
+    let project_id = Uuid::new_v4();
+    let credential_store = GitCredentialStore::at(root.join("credentials")).expect("credentials");
+    let auth_profile = credential_store
+        .store_managed_git_token(
+            project_id,
+            "relay-test",
+            "test-token-with-more-than-20-characters",
+        )
+        .expect("managed token");
+    let provisioned = ProvisionedProjectGit {
+        remote_url: format!("file://{}", remote.display()),
+        push_url: None,
+        default_branch: "main".into(),
+        auth_profile,
+        repository_identifier: "imported-project".into(),
+    };
+
+    push_managed_project_to_remote(&project, &provisioned, &credential_store)
+        .expect("project publish");
+
+    let show = Command::new("git")
+        .args([
+            "--git-dir",
+            remote.to_str().expect("remote path"),
+            "show",
+            "main:README.md",
+        ])
+        .output()
+        .expect("read remote file");
+    assert!(show.status.success());
+    assert_eq!(String::from_utf8_lossy(&show.stdout), "# Imported\n");
+    fs::remove_dir_all(root).expect("test publish should be removable");
+}
+
+#[test]
 fn uploaded_project_paths_are_normalized_and_exclude_generated_directories() {
     assert_eq!(
         normalize_uploaded_project_path("src\\main.rs").expect("valid path"),

@@ -3,7 +3,7 @@ import { api } from "../../api/client";
 import type { CompanyRealtimeEvent } from "../../api/types";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Icon } from "../../components/ui";
-import type { CodexPluginCatalog, CodexPluginOperation } from "../../types/platform";
+import type { CodexEnvironmentView, CodexPluginCatalog, CodexPluginOperation } from "../../types/platform";
 import { codexPluginOperationStatusLabel, formatTime, LoadingState } from "../app/shared";
 
 export function CodexPluginsView(props: {
@@ -15,7 +15,8 @@ export function CodexPluginsView(props: {
 }) {
   const [catalogs, setCatalogs] = useState<CodexPluginCatalog[]>([]);
   const [operations, setOperations] = useState<CodexPluginOperation[]>([]);
-  const [runnerId, setRunnerId] = useState("");
+  const [environment, setEnvironment] = useState<CodexEnvironmentView | null>(null);
+  const [catalogKey, setCatalogKey] = useState("");
   const [tab, setTab] = useState<"installed" | "available">("installed");
   const [query, setQuery] = useState("");
   const [marketplace, setMarketplace] = useState("");
@@ -25,16 +26,20 @@ export function CodexPluginsView(props: {
   async function loadPlugins(silent = false) {
     if (!silent) setLoading(true);
     try {
-      const response = await api<{ catalogs: CodexPluginCatalog[]; operations: CodexPluginOperation[] }>(
-        `/api/v1/companies/${props.companyId}/codex-plugins?operation_limit=80`,
-        {},
-        props.token,
-      );
+      const [response, environmentResponse] = await Promise.all([
+        api<{ catalogs: CodexPluginCatalog[]; operations: CodexPluginOperation[] }>(
+          `/api/v1/companies/${props.companyId}/codex-plugins?operation_limit=80`, {}, props.token,
+        ),
+        api<CodexEnvironmentView>(
+          `/api/v1/companies/${props.companyId}/codex-environments`, {}, props.token,
+        ),
+      ]);
       setCatalogs(response.catalogs);
       setOperations(response.operations);
-      setRunnerId((current) => response.catalogs.some((catalog) => catalog.runner_id === current)
+      setEnvironment(environmentResponse);
+      setCatalogKey((current) => response.catalogs.some((catalog) => pluginCatalogKey(catalog) === current)
         ? current
-        : response.catalogs[0]?.runner_id ?? "");
+        : pluginCatalogKey(response.catalogs.find((catalog) => catalog.discovery_status === "ready") ?? response.catalogs[0]));
     } catch (error) {
       props.onError(error);
     } finally {
@@ -50,13 +55,14 @@ export function CodexPluginsView(props: {
   }, [props.realtimeEvent?.sequence_id]);
 
   async function requestOperation(operation: CodexPluginOperation["operation"], pluginId: string | null) {
-    if (!runnerId) return;
+    const catalog = catalogs.find((item) => pluginCatalogKey(item) === catalogKey);
+    if (!catalog) return;
     const key = `${operation}:${pluginId ?? "catalog"}`;
     setBusyKey(key);
     try {
       await api(
         `/api/v1/companies/${props.companyId}/codex-plugins/operations`,
-        { method: "POST", body: JSON.stringify({ target_runner_id: runnerId, operation, plugin_id: pluginId }) },
+        { method: "POST", body: JSON.stringify({ target_runner_id: catalog.runner_id, target_selector: catalog.target_selector, operation, plugin_id: pluginId }) },
         props.token,
       );
       props.onNotice(operation === "install" ? "安装请求已交给宿主机 Trigger" : operation === "remove" ? "卸载请求已交给宿主机 Trigger" : "插件目录刷新请求已提交");
@@ -68,27 +74,32 @@ export function CodexPluginsView(props: {
     }
   }
 
-  const catalog = catalogs.find((item) => item.runner_id === runnerId) ?? null;
+  const catalog = catalogs.find((item) => pluginCatalogKey(item) === catalogKey) ?? null;
+  const runnerId = catalog?.runner_id ?? "";
+  const targetSelector = catalog?.target_selector ?? "";
+  const environmentName = targetSelector === "default"
+    ? "宿主机默认登录"
+    : environment?.profiles.find((profile) => profile.selector === targetSelector)?.name ?? targetSelector;
   const plugins = (tab === "installed" ? catalog?.installed : catalog?.available) ?? [];
   const marketplaces = Array.from(new Set(plugins.map((plugin) => plugin.marketplaceName))).sort();
   const visible = plugins.filter((plugin) => {
     const matchesQuery = !query.trim() || `${plugin.name} ${plugin.pluginId} ${plugin.marketplaceName}`.toLowerCase().includes(query.trim().toLowerCase());
     return matchesQuery && (!marketplace || plugin.marketplaceName === marketplace);
   });
-  const pluginPagination = usePagination(visible, 12, `${runnerId}:${tab}:${query}:${marketplace}`);
-  const visibleOperations = operations.filter((operation) => operation.target_runner_id === runnerId);
-  const operationPagination = usePagination(visibleOperations, 8, runnerId);
+  const pluginPagination = usePagination(visible, 12, `${runnerId}:${targetSelector}:${tab}:${query}:${marketplace}`);
+  const visibleOperations = operations.filter((operation) => operation.target_runner_id === runnerId && operation.target_selector === targetSelector);
+  const operationPagination = usePagination(visibleOperations, 8, `${runnerId}:${targetSelector}`);
   const activeOperationKeys = new Set(operations
-    .filter((operation) => operation.target_runner_id === runnerId && ["queued", "running"].includes(operation.status))
+    .filter((operation) => operation.target_runner_id === runnerId && operation.target_selector === targetSelector && ["queued", "running"].includes(operation.status))
     .map((operation) => `${operation.operation}:${operation.plugin_id ?? "catalog"}`));
 
   return (
     <div className="content-stack codex-plugin-page">
       <section className="section-card">
         <div className="section-heading plugin-catalog-heading">
-          <div><span className="eyebrow">PLUGIN CATALOG</span><h2>插件目录</h2><p>{catalog ? `${catalog.hostname} · ${catalog.codex_version ?? "Codex CLI"} · ${formatTime(catalog.discovered_at)}` : "等待宿主机 Trigger 上报 Codex CLI 插件目录。"}</p></div>
+          <div><span className="eyebrow">PLUGIN CATALOG</span><h2>插件目录</h2><p>{catalog ? `${catalog.hostname} · ${environmentName} · ${catalog.codex_version ?? "Codex CLI"} · ${formatTime(catalog.discovered_at)}` : "等待宿主机 Trigger 上报 Codex CLI 插件目录。"}</p></div>
           <div className="section-heading-actions">
-            {catalogs.length > 1 ? <select value={runnerId} onChange={(event) => setRunnerId(event.target.value)}>{catalogs.map((item) => <option key={item.runner_id} value={item.runner_id}>{item.hostname} · {item.runner_id}</option>)}</select> : null}
+            {catalogs.length > 1 ? <select value={catalogKey} onChange={(event) => setCatalogKey(event.target.value)}>{catalogs.map((item) => <option key={pluginCatalogKey(item)} value={pluginCatalogKey(item)}>{item.hostname} · {item.target_selector === "default" ? "宿主机默认登录" : environment?.profiles.find((profile) => profile.selector === item.target_selector)?.name ?? item.target_selector}</option>)}</select> : null}
             <button className="button small" onClick={() => void requestOperation("refresh", null)} disabled={!runnerId || Boolean(busyKey) || activeOperationKeys.has("refresh:catalog")}><Icon name="refresh" /> 刷新目录</button>
           </div>
         </div>
@@ -102,6 +113,7 @@ export function CodexPluginsView(props: {
               <span><small>Marketplace</small><strong>{catalog.marketplaces.length}</strong></span>
               <span><small>能力指纹</small><code>{catalog.fingerprint.slice(0, 12)}</code></span>
             </div>
+            {catalog.discovery_status === "empty" ? <div className="credential-warning"><Icon name="alert" /><p><strong>当前认证环境没有插件 Marketplace</strong><small>这里读取的是「{environmentName}」的独立 Codex 配置。请先完成该环境登录或配置 Marketplace，再点击刷新目录；空目录不会再被当作成功。</small></p></div> : null}
             <div className="plugin-toolbar">
               <div className="project-detail-tabs"><button className={tab === "installed" ? "active" : ""} onClick={() => setTab("installed")}>已安装 {catalog.installed.length}</button><button className={tab === "available" ? "active" : ""} onClick={() => setTab("available")}>可安装 {catalog.available.length}</button></div>
               <div className="plugin-filters"><label><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索插件" /></label><select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}><option value="">全部来源</option>{marketplaces.map((name) => <option key={name} value={name}>{name}</option>)}</select></div>
@@ -124,3 +136,6 @@ export function CodexPluginsView(props: {
   );
 }
 
+function pluginCatalogKey(catalog: CodexPluginCatalog | undefined) {
+  return catalog ? `${catalog.runner_id}\n${catalog.target_selector}` : "";
+}

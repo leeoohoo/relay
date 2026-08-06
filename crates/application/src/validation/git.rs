@@ -158,9 +158,23 @@ pub(crate) fn validate_git_remote_url(raw: &str) -> AppResult<(String, String)> 
     let git_host = if remote_url.contains("://") {
         let parsed = Url::parse(remote_url)
             .map_err(|_| AppError::Validation("git_remote_url is not a valid URL".into()))?;
-        if !matches!(parsed.scheme(), "https" | "ssh") {
+        let private_http = parsed.scheme() == "http"
+            && parsed.host_str().is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| match address {
+                            std::net::IpAddr::V4(address) => {
+                                address.is_loopback() || address.is_private()
+                            }
+                            std::net::IpAddr::V6(address) => {
+                                address.is_loopback() || address.is_unique_local()
+                            }
+                        })
+            });
+        if !matches!(parsed.scheme(), "https" | "ssh") && !private_http {
             return Err(AppError::Validation(
-                "git_remote_url must use https or ssh".into(),
+                "git_remote_url must use https, ssh, or private-network http".into(),
             ));
         }
         if parsed.password().is_some()

@@ -78,6 +78,26 @@ pub(super) async fn create_company_project_for_human(
         .as_ref()
         .is_some_and(|value| !value.is_empty());
     let project_type = input.project_type.clone().unwrap_or(inferred_type);
+    let provisioned_git = if imported_local_folder {
+        match provision_imported_project_git(
+            &state,
+            human.id,
+            project_id,
+            &input.name,
+            &description,
+            &destination,
+        )
+        .await
+        {
+            Ok(git) => Some(git),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&destination);
+                return Err(error.into());
+            }
+        }
+    } else {
+        None
+    };
     let project_result =
         state
             .platform
@@ -118,19 +138,20 @@ pub(super) async fn create_company_project_for_human(
         }
     };
 
-    let git = if imported_local_folder {
-        Some(
-            state
-                .platform
-                .configure_managed_local_project_git_for_human(
-                    ConfigureManagedLocalProjectGitForHumanInput {
-                        human_user_id: human.id,
-                        company_id,
-                        project_id,
-                        managed_local_path: destination.to_string_lossy().into_owned(),
-                    },
-                )?,
-        )
+    let git = if let Some(provisioned) = provisioned_git {
+        Some(state.platform.upsert_company_project_git_for_human(
+            UpsertCompanyProjectGitForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                project_id,
+                remote_url: provisioned.remote_url,
+                host_local_path: Some(destination.to_string_lossy().into_owned()),
+                default_branch: Some(provisioned.default_branch),
+                auth_profile: Some(provisioned.auth_profile),
+                allow_agent_push: Some(true),
+                branch_prefix: Some("relay/".into()),
+            },
+        )?)
     } else {
         Some(state.platform.upsert_company_project_git_for_human(
             UpsertCompanyProjectGitForHumanInput {
@@ -334,6 +355,22 @@ pub(super) async fn import_company_project_folder_for_human(
         .as_ref()
         .is_some_and(|value| !value.is_empty());
     let project_type = metadata.project_type.clone().unwrap_or(inferred_type);
+    let provisioned_git = match provision_imported_project_git(
+        &state,
+        human.id,
+        project_id,
+        &metadata.name,
+        &description,
+        &destination,
+    )
+    .await
+    {
+        Ok(git) => git,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&destination);
+            return Err(error.into());
+        }
+    };
     let project_result =
         state
             .platform
@@ -369,21 +406,53 @@ pub(super) async fn import_company_project_folder_for_human(
             return Err(error.into());
         }
     };
-    let git = state
-        .platform
-        .configure_managed_local_project_git_for_human(
-            ConfigureManagedLocalProjectGitForHumanInput {
-                human_user_id: human.id,
-                company_id,
-                project_id,
-                managed_local_path: destination.to_string_lossy().into_owned(),
-            },
-        )?;
+    let git = state.platform.upsert_company_project_git_for_human(
+        UpsertCompanyProjectGitForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+            remote_url: provisioned_git.remote_url,
+            host_local_path: Some(destination.to_string_lossy().into_owned()),
+            default_branch: Some(provisioned_git.default_branch),
+            auth_profile: Some(provisioned_git.auth_profile),
+            allow_agent_push: Some(true),
+            branch_prefix: Some("relay/".into()),
+        },
+    )?;
     Ok(Json(serde_json::json!({
         "project": project,
         "git": git,
         "managed_local_path": destination,
     })))
+}
+
+async fn provision_imported_project_git(
+    state: &AppState,
+    human_user_id: Uuid,
+    project_id: Uuid,
+    project_name: &str,
+    description: &str,
+    local_path: &FsPath,
+) -> AppResult<ProvisionedProjectGit> {
+    let provisioned = state
+        .harness_provisioner
+        .provision_project_git(
+            human_user_id,
+            project_id,
+            project_name,
+            description,
+            &state.git_credential_store,
+        )
+        .await?;
+    let provisioned_for_push = provisioned.clone();
+    let credential_store = state.git_credential_store.clone();
+    let local_path = local_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        push_managed_project_to_remote(&local_path, &provisioned_for_push, &credential_store)
+    })
+    .await
+    .map_err(|error| AppError::Internal(format!("Harness Git publish task failed: {error}")))??;
+    Ok(provisioned)
 }
 
 pub(super) async fn get_company_project_git(
@@ -414,6 +483,62 @@ pub(super) async fn get_company_project_git(
         "git": git,
         "github_token_configured": github_token_configured,
         "managed_token_configured": managed_token_configured,
+    })))
+}
+
+pub(super) async fn provision_existing_company_project_git(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let project = state
+        .platform
+        .get_company_project_for_human_manager(human.id, company_id, project_id)?;
+    let existing = state
+        .platform
+        .get_company_project_git_for_human(GetCompanyProjectGitForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+        })?
+        .ok_or_else(|| AppError::NotFound("project Git configuration not found".into()))?;
+    if existing.git_host != "relay-local" && !existing.remote_url.starts_with("file://") {
+        return Err(AppError::Conflict("项目已经使用远端 Git 仓库，无需迁移".into()).into());
+    }
+    let local_path = PathBuf::from(existing.host_local_path.as_str());
+    if !local_path.is_dir() || !local_path.join(".git").is_dir() {
+        return Err(AppError::Validation(
+            "本地导入仓库不存在或不是有效 Git 仓库，无法迁移到 Harness".into(),
+        )
+        .into());
+    }
+    let provisioned = provision_imported_project_git(
+        &state,
+        human.id,
+        project_id,
+        &project.project.name,
+        &project.project.description,
+        &local_path,
+    )
+    .await?;
+    let git = state.platform.upsert_company_project_git_for_human(
+        UpsertCompanyProjectGitForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+            remote_url: provisioned.remote_url,
+            host_local_path: Some(existing.host_local_path),
+            default_branch: Some(provisioned.default_branch),
+            auth_profile: Some(provisioned.auth_profile),
+            allow_agent_push: Some(true),
+            branch_prefix: Some(existing.branch_prefix),
+        },
+    )?;
+    Ok(Json(serde_json::json!({
+        "git": git,
+        "github_token_configured": false,
+        "managed_token_configured": true,
     })))
 }
 

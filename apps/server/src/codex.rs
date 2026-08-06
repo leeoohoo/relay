@@ -304,6 +304,7 @@ pub(super) async fn request_codex_plugin_operation(
             human_user_id: human.id,
             company_id,
             target_runner_id: input.target_runner_id,
+            target_selector: input.target_selector,
             operation: input.operation,
             plugin_id: input.plugin_id,
         },

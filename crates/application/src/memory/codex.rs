@@ -122,9 +122,8 @@ impl CodexControlPlatformRepository for MemoryPlatformRepository {
         snapshot: CodexPluginCatalogSnapshot,
     ) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .codex_plugin_catalogs
-            .insert(snapshot.runner_id.clone(), snapshot);
+        let key = format!("{}\n{}", snapshot.runner_id, snapshot.target_selector);
+        guard.codex_plugin_catalogs.insert(key, snapshot);
         Ok(())
     }
 
@@ -143,6 +142,7 @@ impl CodexControlPlatformRepository for MemoryPlatformRepository {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
         if guard.codex_plugin_operations.values().any(|existing| {
             existing.target_runner_id == operation.target_runner_id
+                && existing.target_selector == operation.target_selector
                 && existing.operation == operation.operation
                 && existing.plugin_id == operation.plugin_id
                 && matches!(

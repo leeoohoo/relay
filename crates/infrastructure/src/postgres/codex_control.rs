@@ -226,14 +226,17 @@ impl CodexControlPlatformRepository for PostgresPlatformRepository {
             client.execute(
                 r#"
                 INSERT INTO codex_plugin_catalog_snapshots (
-                    runner_id, hostname, codex_version, fingerprint,
-                    installed, available, marketplaces, discovered_at, updated_at
+                    runner_id, target_selector, hostname, codex_version, fingerprint,
+                    discovery_status, diagnostic_message, installed, available,
+                    marketplaces, discovered_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (runner_id) DO UPDATE
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (runner_id, target_selector) DO UPDATE
                 SET hostname = EXCLUDED.hostname,
                     codex_version = EXCLUDED.codex_version,
                     fingerprint = EXCLUDED.fingerprint,
+                    discovery_status = EXCLUDED.discovery_status,
+                    diagnostic_message = EXCLUDED.diagnostic_message,
                     installed = EXCLUDED.installed,
                     available = EXCLUDED.available,
                     marketplaces = EXCLUDED.marketplaces,
@@ -242,9 +245,12 @@ impl CodexControlPlatformRepository for PostgresPlatformRepository {
                 "#,
                 &[
                     &snapshot.runner_id,
+                    &snapshot.target_selector,
                     &snapshot.hostname,
                     &snapshot.codex_version,
                     &snapshot.fingerprint,
+                    &snapshot.discovery_status,
+                    &snapshot.diagnostic_message,
                     &Json(snapshot.installed),
                     &Json(snapshot.available),
                     &Json(snapshot.marketplaces),
@@ -260,10 +266,11 @@ impl CodexControlPlatformRepository for PostgresPlatformRepository {
         self.with_client(|client| {
             client.query(
                 r#"
-                SELECT runner_id, hostname, codex_version, fingerprint,
-                       installed, available, marketplaces, discovered_at, updated_at
+                SELECT runner_id, target_selector, hostname, codex_version, fingerprint,
+                       discovery_status, diagnostic_message, installed, available,
+                       marketplaces, discovered_at, updated_at
                 FROM codex_plugin_catalog_snapshots
-                ORDER BY discovered_at DESC, runner_id
+                ORDER BY discovered_at DESC, runner_id, target_selector
                 "#,
                 &[],
             )
@@ -280,18 +287,19 @@ impl CodexControlPlatformRepository for PostgresPlatformRepository {
             client.execute(
                 r#"
                 INSERT INTO codex_plugin_operations (
-                    id, company_id, target_runner_id, operation, plugin_id, status,
+                    id, company_id, target_runner_id, target_selector, operation, plugin_id, status,
                     requested_by_human_user_id, lease_owner, lease_expires_at,
                     attempt_count, error_message, result, requested_at,
                     started_at, finished_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                        $9, $10, $11, $12, $13, $14, $15, $16)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                        $10, $11, $12, $13, $14, $15, $16, $17)
                 "#,
                 &[
                     &operation.id,
                     &operation.company_id,
                     &operation.target_runner_id,
+                    &operation.target_selector,
                     &operation.operation,
                     &operation.plugin_id,
                     &operation.status,
@@ -319,7 +327,7 @@ impl CodexControlPlatformRepository for PostgresPlatformRepository {
         self.with_client(|client| {
             client.query(
                 r#"
-                SELECT id, company_id, target_runner_id, operation, plugin_id, status,
+                SELECT id, company_id, target_runner_id, target_selector, operation, plugin_id, status,
                        requested_by_human_user_id, lease_owner, lease_expires_at,
                        attempt_count, error_message, result, requested_at,
                        started_at, finished_at, updated_at
@@ -366,7 +374,8 @@ impl CodexControlPlatformRepository for PostgresPlatformRepository {
                 FROM due
                 WHERE operation.id = due.id
                 RETURNING operation.id, operation.company_id, operation.target_runner_id,
-                          operation.operation, operation.plugin_id, operation.status,
+                          operation.target_selector, operation.operation, operation.plugin_id,
+                          operation.status,
                           operation.requested_by_human_user_id, operation.lease_owner,
                           operation.lease_expires_at, operation.attempt_count,
                           operation.error_message, operation.result, operation.requested_at,

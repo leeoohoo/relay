@@ -545,9 +545,12 @@ pub const CODEX_PLUGIN_OPERATION_STATUS_FAILED: &str = "failed";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexPluginCatalogSnapshot {
     pub runner_id: String,
+    pub target_selector: String,
     pub hostname: String,
     pub codex_version: Option<String>,
     pub fingerprint: String,
+    pub discovery_status: String,
+    pub diagnostic_message: Option<String>,
     pub installed: Value,
     pub available: Value,
     pub marketplaces: Value,
@@ -560,6 +563,7 @@ pub struct CodexPluginOperation {
     pub id: Uuid,
     pub company_id: Uuid,
     pub target_runner_id: String,
+    pub target_selector: String,
     pub operation: String,
     pub plugin_id: Option<String>,
     pub status: String,

@@ -1,47 +1,24 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api/client";
+import type { CodexCompanyCliSettings, CodexPersonality, CodexReasoningEffort, CodexReasoningSummary, CodexVerbosity, CodexWebSearch } from "../types/platform";
 import { Field, Icon } from "./ui";
 
-type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
-type ReasoningSummary = "auto" | "concise" | "detailed" | "none";
-type Verbosity = "low" | "medium" | "high";
-type Personality = "none" | "friendly" | "pragmatic";
-type WebSearch = "disabled" | "cached" | "indexed" | "live";
-
-type Settings = {
-  company_id: string;
-  model: string | null;
-  reasoning_effort: ReasoningEffort | null;
-  reasoning_summary: ReasoningSummary;
-  verbosity: Verbosity | null;
-  personality: Personality | null;
-  service_tier: "fast" | null;
-  approval_policy: "never" | "on-request";
-  sandbox_mode: "read_only" | "workspace_write";
-  network_access: boolean;
-  web_search: WebSearch;
-  feature_multi_agent: boolean;
-  feature_remote_plugin: boolean;
-  feature_hooks: boolean;
-  feature_goals: boolean;
-  feature_shell_tool: boolean;
-  updated_at: string;
-};
+type Settings = CodexCompanyCliSettings;
 
 type RunnerProfile = {
   id: string;
   name: string;
   is_default: boolean;
   model: string | null;
-  reasoning_effort: ReasoningEffort | null;
-  reasoning_summary: ReasoningSummary | null;
-  verbosity: Verbosity | null;
-  personality: Personality | null;
+  reasoning_effort: CodexReasoningEffort | null;
+  reasoning_summary: CodexReasoningSummary | null;
+  verbosity: CodexVerbosity | null;
+  personality: CodexPersonality | null;
   service_tier: "fast" | null;
   approval_policy: "inherit" | "never" | "on-request";
   sandbox_mode: "inherit" | "read_only" | "workspace_write";
   network_access: boolean | null;
-  web_search: WebSearch | null;
+  web_search: CodexWebSearch | null;
   feature_multi_agent: boolean | null;
   feature_remote_plugin: boolean | null;
   feature_hooks: boolean | null;
@@ -61,7 +38,7 @@ type Environment = {
   };
 };
 
-const reasoningEfforts: ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const reasoningEfforts: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 export function CodexCliSettingsView(props: {
   companyId: string;
@@ -143,16 +120,16 @@ export function CodexCliSettingsView(props: {
         <div className="cli-settings-groups">
           <fieldset><legend>模型</legend><div className="cli-settings-grid">
             <Field label="默认模型"><input value={draft.model ?? ""} onChange={(event) => update("model", event.target.value || null)} placeholder="Codex / 项目配置" /></Field>
-            <Field label="思考等级"><select value={draft.reasoning_effort ?? ""} onChange={(event) => update("reasoning_effort", (event.target.value || null) as ReasoningEffort | null)}><option value="">模型默认</option>{reasoningEfforts.map((value) => <option key={value}>{value}</option>)}</select></Field>
-            <Field label="推理摘要"><select value={draft.reasoning_summary} onChange={(event) => update("reasoning_summary", event.target.value as ReasoningSummary)}><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
-            <Field label="输出详细度"><select value={draft.verbosity ?? ""} onChange={(event) => update("verbosity", (event.target.value || null) as Verbosity | null)}><option value="">Codex 默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
-            <Field label="Personality"><select value={draft.personality ?? ""} onChange={(event) => update("personality", (event.target.value || null) as Personality | null)}><option value="">Codex 默认</option><option value="none">none</option><option value="friendly">friendly</option><option value="pragmatic">pragmatic</option></select></Field>
+            <Field label="思考等级"><select value={draft.reasoning_effort ?? ""} onChange={(event) => update("reasoning_effort", (event.target.value || null) as CodexReasoningEffort | null)}><option value="">模型默认</option>{reasoningEfforts.map((value) => <option key={value}>{value}</option>)}</select></Field>
+            <Field label="推理摘要"><select value={draft.reasoning_summary} onChange={(event) => update("reasoning_summary", event.target.value as CodexReasoningSummary)}><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
+            <Field label="输出详细度"><select value={draft.verbosity ?? ""} onChange={(event) => update("verbosity", (event.target.value || null) as CodexVerbosity | null)}><option value="">Codex 默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
+            <Field label="Personality"><select value={draft.personality ?? ""} onChange={(event) => update("personality", (event.target.value || null) as CodexPersonality | null)}><option value="">Codex 默认</option><option value="none">none</option><option value="friendly">friendly</option><option value="pragmatic">pragmatic</option></select></Field>
             <Switch label="Fast 模式" detail="service_tier = fast" checked={draft.service_tier === "fast"} onChange={(checked) => update("service_tier", checked ? "fast" : null)} />
           </div></fieldset>
           <fieldset><legend>权限与网络</legend><div className="cli-settings-grid">
             <Field label="审批策略"><select value={draft.approval_policy} onChange={(event) => update("approval_policy", event.target.value as Settings["approval_policy"])}><option value="never">never</option><option value="on-request">on-request</option></select></Field>
             <Field label="沙盒等级"><select value={draft.sandbox_mode} onChange={(event) => update("sandbox_mode", event.target.value as Settings["sandbox_mode"])}><option value="workspace_write">workspace-write</option><option value="read_only">read-only</option></select></Field>
-            <Field label="Web Search"><select value={draft.web_search} onChange={(event) => update("web_search", event.target.value as WebSearch)}><option value="disabled">关闭</option><option value="cached">缓存</option><option value="indexed">索引</option><option value="live">实时</option></select></Field>
+            <Field label="Web Search"><select value={draft.web_search} onChange={(event) => update("web_search", event.target.value as CodexWebSearch)}><option value="disabled">关闭</option><option value="cached">缓存</option><option value="indexed">索引</option><option value="live">实时</option></select></Field>
             <Switch label="工作区网络访问" detail="sandbox network_access" checked={draft.network_access} onChange={(checked) => update("network_access", checked)} />
           </div></fieldset>
           <fieldset><legend>能力开关</legend><div className="cli-feature-switches">

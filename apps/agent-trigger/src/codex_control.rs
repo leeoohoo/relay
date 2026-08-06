@@ -465,18 +465,26 @@ pub(super) async fn refresh_codex_plugin_catalog(
     platform: &TriggerPlatform,
     codex_runner: &CodexTriggerRunner,
     config: &TriggerServiceConfig,
-) -> AppResult<String> {
-    let discovery = codex_runner.discover_plugins().await?;
+    target_selector: &str,
+) -> AppResult<(String, bool)> {
+    let discovery = codex_runner.discover_plugins(target_selector).await?;
     let fingerprint = codex_plugin_fingerprint(&discovery.installed);
     let installed = public_codex_plugin_items(&discovery.installed);
     let available = public_codex_plugin_items(&discovery.available);
     let marketplaces = public_codex_marketplaces(&discovery.marketplaces);
+    let catalog_is_empty = codex_plugin_catalog_is_empty(&installed, &available, &marketplaces);
+    let diagnostic_message = catalog_is_empty.then(|| {
+        "The selected Codex authentication environment has no configured plugin marketplace. Sign in or configure a marketplace in this environment, then refresh again.".into()
+    });
     let now = now_utc();
     platform.save_codex_plugin_catalog_snapshot(CodexPluginCatalogSnapshot {
         runner_id: config.plugin_host_id.clone(),
+        target_selector: target_selector.into(),
         hostname: config.hostname.clone(),
         codex_version: codex_runner.detect_version(),
         fingerprint: fingerprint.clone(),
+        discovery_status: if catalog_is_empty { "empty" } else { "ready" }.into(),
+        diagnostic_message,
         installed,
         available,
         marketplaces,
@@ -485,10 +493,50 @@ pub(super) async fn refresh_codex_plugin_catalog(
     })?;
     tracing::info!(
         runner_id = %config.plugin_host_id,
+        target_selector,
         fingerprint = %fingerprint,
         "local Codex plugin catalog refreshed by Trigger"
     );
-    Ok(fingerprint)
+    Ok((fingerprint, catalog_is_empty))
+}
+
+pub(super) fn codex_plugin_catalog_is_empty(
+    installed: &serde_json::Value,
+    available: &serde_json::Value,
+    marketplaces: &serde_json::Value,
+) -> bool {
+    installed.as_array().is_none_or(Vec::is_empty)
+        && available.as_array().is_none_or(Vec::is_empty)
+        && marketplaces.as_array().is_none_or(Vec::is_empty)
+}
+
+pub(super) async fn refresh_codex_plugin_catalogs(
+    platform: &TriggerPlatform,
+    codex_control: &CodexControlStore,
+    codex_runner: &CodexTriggerRunner,
+    config: &TriggerServiceConfig,
+) -> AppResult<()> {
+    let mut selectors = codex_control.list_active_profile_selectors()?;
+    selectors.push("default".into());
+    selectors.sort();
+    selectors.dedup();
+    let mut first_error = None;
+    for selector in selectors {
+        if let Err(error) =
+            refresh_codex_plugin_catalog(platform, codex_runner, config, &selector).await
+        {
+            tracing::warn!(
+                target_selector = %selector,
+                error = %sanitize_error(&error.to_string()),
+                "failed to refresh a Codex plugin environment"
+            );
+            first_error.get_or_insert(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 pub(super) async fn process_codex_plugin_operation(
@@ -498,7 +546,11 @@ pub(super) async fn process_codex_plugin_operation(
     operation: CodexPluginOperation,
 ) {
     let command_result = codex_runner
-        .apply_plugin_operation(&operation.operation, operation.plugin_id.as_deref())
+        .apply_plugin_operation(
+            &operation.target_selector,
+            &operation.operation,
+            operation.plugin_id.as_deref(),
+        )
         .await;
     let (succeeded, mut result, error_message) = match command_result {
         Ok(result) => (true, result, None),
@@ -511,10 +563,23 @@ pub(super) async fn process_codex_plugin_operation(
     let mut final_succeeded = succeeded;
     let mut final_error = error_message;
     if succeeded {
-        match refresh_codex_plugin_catalog(platform, codex_runner, config).await {
-            Ok(fingerprint) => {
+        match refresh_codex_plugin_catalog(
+            platform,
+            codex_runner,
+            config,
+            &operation.target_selector,
+        )
+        .await
+        {
+            Ok((fingerprint, catalog_is_empty)) => {
                 if let Some(object) = result.as_object_mut() {
                     object.insert("catalog_fingerprint".into(), fingerprint.into());
+                }
+                if catalog_is_empty && operation.operation == CODEX_PLUGIN_OPERATION_REFRESH {
+                    final_succeeded = false;
+                    final_error = Some(
+                        "当前 Codex 认证环境没有配置插件 Marketplace；请先完成该环境登录或配置 Marketplace，再刷新。".into(),
+                    );
                 }
             }
             Err(error) if operation.operation == CODEX_PLUGIN_OPERATION_REFRESH => {

@@ -1,6 +1,13 @@
 use super::*;
 
 #[test]
+fn self_hosted_git_allows_private_http_but_rejects_public_http() {
+    assert!(validate_git_remote_url("http://127.0.0.1:13101/git/team/project.git").is_ok());
+    assert!(validate_git_remote_url("http://192.168.1.8/git/team/project.git").is_ok());
+    assert!(validate_git_remote_url("http://code.example.com/git/team/project.git").is_err());
+}
+
+#[test]
 fn managed_project_path_is_generated_when_human_omits_the_advanced_path() {
     let project_id = Uuid::new_v4();
     let path = resolve_project_host_local_path(project_id, None, None)

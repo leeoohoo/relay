@@ -230,8 +230,20 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         input: ListCompanyCodexPluginsForHumanInput,
     ) -> AppResult<CompanyCodexPluginsView> {
         self.ensure_company_human_manager(input.company_id, input.human_user_id)?;
+        let mut allowed_selectors = self
+            .repo
+            .list_company_codex_runner_profiles(input.company_id)
+            .into_iter()
+            .map(|profile| profile.codex_profile)
+            .collect::<std::collections::HashSet<_>>();
+        allowed_selectors.insert("default".into());
         Ok(CompanyCodexPluginsView {
-            catalogs: self.repo.list_codex_plugin_catalog_snapshots()?,
+            catalogs: self
+                .repo
+                .list_codex_plugin_catalog_snapshots()?
+                .into_iter()
+                .filter(|catalog| allowed_selectors.contains(&catalog.target_selector))
+                .collect(),
             operations: self.repo.list_company_codex_plugin_operations(
                 input.company_id,
                 input.operation_limit.clamp(1, 200),
@@ -253,6 +265,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "Codex plugin target runner is invalid".into(),
             ));
         }
+        let target_selector = input.target_selector.trim();
+        let selector_is_available = target_selector == "default"
+            || self
+                .repo
+                .list_company_codex_runner_profiles(input.company_id)
+                .into_iter()
+                .any(|profile| profile.codex_profile == target_selector);
+        if !selector_is_available {
+            return Err(AppError::Validation(
+                "Codex plugin authentication environment is unavailable".into(),
+            ));
+        }
         if !matches!(
             input.operation.as_str(),
             CODEX_PLUGIN_OPERATION_INSTALL
@@ -266,7 +290,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let catalogs = self.repo.list_codex_plugin_catalog_snapshots()?;
         let catalog = catalogs
             .iter()
-            .find(|catalog| catalog.runner_id == target_runner_id)
+            .find(|catalog| {
+                catalog.runner_id == target_runner_id && catalog.target_selector == target_selector
+            })
             .ok_or_else(|| AppError::NotFound("Codex plugin runner not found".into()))?;
         let plugin_id = if input.operation == CODEX_PLUGIN_OPERATION_REFRESH {
             None
@@ -294,6 +320,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             id: Uuid::new_v4(),
             company_id: input.company_id,
             target_runner_id: target_runner_id.to_string(),
+            target_selector: target_selector.to_string(),
             operation: input.operation,
             plugin_id,
             status: CODEX_PLUGIN_OPERATION_STATUS_QUEUED.into(),

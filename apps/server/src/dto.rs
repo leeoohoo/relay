@@ -322,6 +322,7 @@ pub(super) struct CodexPluginsQuery {
 #[derive(Debug, Deserialize)]
 pub(super) struct CodexPluginOperationRequest {
     pub(super) target_runner_id: String,
+    pub(super) target_selector: String,
     pub(super) operation: String,
     pub(super) plugin_id: Option<String>,
 }

@@ -255,6 +255,59 @@ pub(super) fn initialize_managed_project_git(path: &FsPath) -> AppResult<()> {
     )
 }
 
+pub(super) fn push_managed_project_to_remote(
+    path: &FsPath,
+    provisioned: &ProvisionedProjectGit,
+    credential_store: &GitCredentialStore,
+) -> AppResult<()> {
+    let auth_environment = credential_store.auth_environment(&provisioned.auth_profile)?;
+    let run = |args: &[&str]| -> AppResult<()> {
+        let mut command = Command::new("git");
+        command
+            .args(args)
+            .current_dir(path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .envs(&auth_environment);
+        let output = command
+            .output()
+            .map_err(|error| AppError::Internal(format!("failed to start git: {error}")))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(AppError::Validation(format!(
+            "failed to publish imported project to Harness Git: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    };
+
+    let remote_exists = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(path)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let push_url = provisioned
+        .push_url
+        .as_deref()
+        .unwrap_or(provisioned.remote_url.as_str());
+    if remote_exists {
+        run(&["remote", "set-url", "origin", push_url])?;
+    } else {
+        run(&["remote", "add", "origin", push_url])?;
+    }
+    run(&["branch", "-M", &provisioned.default_branch])?;
+    run(&[
+        "push",
+        "--force",
+        "--set-upstream",
+        "origin",
+        &provisioned.default_branch,
+    ])?;
+    if push_url != provisioned.remote_url {
+        run(&["remote", "set-url", "origin", &provisioned.remote_url])?;
+    }
+    Ok(())
+}
+
 pub(super) fn load_folder_reference_allowed_roots() -> anyhow::Result<Vec<PathBuf>> {
     let configured = std::env::var("HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS")
         .ok()

@@ -78,6 +78,7 @@ pub struct RequestCodexPluginOperationForHumanInput {
     pub human_user_id: Uuid,
     pub company_id: Uuid,
     pub target_runner_id: String,
+    pub target_selector: String,
     pub operation: String,
     pub plugin_id: Option<String>,
 }

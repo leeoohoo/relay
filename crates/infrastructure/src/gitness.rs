@@ -20,6 +20,8 @@ pub struct ProjectGitProvisionRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProvisionedProjectGit {
     pub remote_url: String,
+    #[serde(skip_serializing)]
+    pub push_url: Option<String>,
     pub default_branch: String,
     pub auth_profile: String,
     pub repository_identifier: String,
@@ -244,6 +246,7 @@ impl GitnessProjectGitProvisioner {
         let auth_profile = self.ensure_project_token(&client, request.project_id)?;
         Ok(ProvisionedProjectGit {
             remote_url,
+            push_url: None,
             default_branch: if repository.default_branch.trim().is_empty() {
                 "main".into()
             } else {
@@ -264,7 +267,7 @@ impl ProjectGitProvisioner for GitnessProjectGitProvisioner {
     }
 }
 
-fn generated_repository_identifier(project_name: &str, project_id: Uuid) -> String {
+pub(crate) fn generated_repository_identifier(project_name: &str, project_id: Uuid) -> String {
     let mut slug = project_name
         .chars()
         .flat_map(char::to_lowercase)

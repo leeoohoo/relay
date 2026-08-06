@@ -79,6 +79,20 @@ fn plugin_fingerprint_is_stable_and_tracks_enabled_versions() {
 }
 
 #[test]
+fn empty_plugin_catalog_is_not_treated_as_a_successful_catalog() {
+    assert!(codex_plugin_catalog_is_empty(
+        &serde_json::json!([]),
+        &serde_json::json!([]),
+        &serde_json::json!([]),
+    ));
+    assert!(!codex_plugin_catalog_is_empty(
+        &serde_json::json!([]),
+        &serde_json::json!([]),
+        &serde_json::json!([{ "name": "openai-bundled" }]),
+    ));
+}
+
+#[test]
 fn permission_blocks_are_removed_when_the_agent_lacks_the_permission() {
     let template = "before\n<!-- relay-permission:task.assign:start -->secret\n<!-- relay-permission:task.assign:end -->\nafter";
     assert_eq!(

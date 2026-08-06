@@ -335,7 +335,9 @@ async fn run_trigger_loop(
             next_mcp_discovery = tokio::time::Instant::now() + config.mcp_discovery_interval;
         }
         if tokio::time::Instant::now() >= next_plugin_discovery {
-            if let Err(error) = refresh_codex_plugin_catalog(platform, codex_runner, config).await {
+            if let Err(error) =
+                refresh_codex_plugin_catalogs(platform, codex_control, codex_runner, config).await
+            {
                 tracing::warn!(
                     error = %sanitize_error(&error.to_string()),
                     "failed to refresh the local Codex plugin catalog"

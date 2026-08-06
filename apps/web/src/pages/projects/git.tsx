@@ -18,6 +18,7 @@ export function ProjectGitCard(props: {
   const [githubToken, setGithubToken] = useState("");
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
   const [managedTokenConfigured, setManagedTokenConfigured] = useState(false);
+  const [gitHost, setGitHost] = useState(props.project.git?.git_host ?? "");
   const [branchPrefix, setBranchPrefix] = useState(props.project.git?.branch_prefix ?? "relay/");
   const [allowAgentPush, setAllowAgentPush] = useState(props.project.git?.push_enabled ?? false);
   const [configured, setConfigured] = useState(Boolean(props.project.git));
@@ -39,6 +40,7 @@ export function ProjectGitCard(props: {
         setGithubToken("");
         setGithubTokenConfigured(github_token_configured);
         setManagedTokenConfigured(managed_token_configured);
+        setGitHost(git?.git_host ?? "");
         setBranchPrefix(git?.branch_prefix ?? "relay/");
         setAllowAgentPush(git?.allow_agent_push ?? false);
         setConfigured(Boolean(git));
@@ -73,6 +75,7 @@ export function ProjectGitCard(props: {
       setGithubToken("");
       setGithubTokenConfigured(response.github_token_configured);
       setManagedTokenConfigured(response.managed_token_configured);
+      setGitHost(response.git.git_host);
       setBranchPrefix(response.git.branch_prefix);
       setAllowAgentPush(response.git.allow_agent_push);
       setConfigured(true);
@@ -108,7 +111,34 @@ export function ProjectGitCard(props: {
       setGithubToken("");
       setGithubTokenConfigured(response.github_token_configured);
       setManagedTokenConfigured(response.managed_token_configured);
+      setGitHost(response.git.git_host);
       props.onNotice(`${props.project.project.name} 的 GitHub Token 已清除`);
+      await props.onChanged();
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function migrateToHarness() {
+    if (!window.confirm(`把 ${props.project.project.name} 的本地仓库创建到 Harness 并推送 main 分支？`)) return;
+    setBusy(true);
+    try {
+      const response = await api<{ git: ProjectGitAdminView; github_token_configured: boolean; managed_token_configured: boolean }>(
+        `/api/v1/companies/${props.companyId}/projects/${props.project.project.id}/git/provision-harness`,
+        { method: "POST" },
+        props.token,
+      );
+      setRemoteUrl(response.git.remote_url);
+      setHostLocalPath(response.git.host_local_path);
+      setDefaultBranch(response.git.default_branch);
+      setGithubTokenConfigured(response.github_token_configured);
+      setManagedTokenConfigured(response.managed_token_configured);
+      setGitHost(response.git.git_host);
+      setBranchPrefix(response.git.branch_prefix);
+      setAllowAgentPush(response.git.allow_agent_push);
+      props.onNotice(`${props.project.project.name} 已迁移到 Harness Git`);
       await props.onChanged();
     } catch (error) {
       props.onError(error);
@@ -132,6 +162,7 @@ export function ProjectGitCard(props: {
       setGithubToken("");
       setGithubTokenConfigured(false);
       setManagedTokenConfigured(false);
+      setGitHost("");
       setBranchPrefix("relay/");
       setAllowAgentPush(false);
       setConfigured(false);
@@ -210,6 +241,7 @@ export function ProjectGitCard(props: {
           </div>
           <div className="project-git-actions">
             {configured ? <button className="button small" type="button" onClick={() => void clearGit()} disabled={busy}>清除配置</button> : null}
+            {gitHost === "relay-local" || remoteUrl.startsWith("file://") ? <button className="button small" type="button" onClick={() => void migrateToHarness()} disabled={busy}>{busy ? "正在迁移…" : "迁移到 Harness"}</button> : null}
             <button className="button primary small" disabled={busy}>{busy ? "正在保存…" : "保存 Git 配置"}</button>
           </div>
         </form>

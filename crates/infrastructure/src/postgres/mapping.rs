@@ -386,9 +386,12 @@ pub(super) fn map_company_codex_runner_profile(row: Row) -> CompanyCodexRunnerPr
 pub(super) fn map_codex_plugin_catalog_snapshot(row: Row) -> CodexPluginCatalogSnapshot {
     CodexPluginCatalogSnapshot {
         runner_id: row.get("runner_id"),
+        target_selector: row.get("target_selector"),
         hostname: row.get("hostname"),
         codex_version: row.get("codex_version"),
         fingerprint: row.get("fingerprint"),
+        discovery_status: row.get("discovery_status"),
+        diagnostic_message: row.get("diagnostic_message"),
         installed: row.get::<_, Json<Value>>("installed").0,
         available: row.get::<_, Json<Value>>("available").0,
         marketplaces: row.get::<_, Json<Value>>("marketplaces").0,
@@ -402,6 +405,7 @@ pub(super) fn map_codex_plugin_operation(row: Row) -> CodexPluginOperation {
         id: row.get("id"),
         company_id: row.get("company_id"),
         target_runner_id: row.get("target_runner_id"),
+        target_selector: row.get("target_selector"),
         operation: row.get("operation"),
         plugin_id: row.get("plugin_id"),
         status: row.get("status"),

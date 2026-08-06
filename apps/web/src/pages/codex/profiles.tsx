@@ -2,8 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Field, Icon } from "../../components/ui";
-import { useUiLanguage } from "../../i18n/uiLanguage";
-import type { CodexApprovalPolicy, CodexAuthProfile, CodexPersonality, CodexReasoningEffort, CodexReasoningSummary, CodexRunnerProfileView, CodexSandboxMode, CodexVerbosity, CodexWebSearch } from "../../types/platform";
+import { useUiLanguage, type UiLanguage } from "../../i18n/uiLanguage";
+import type { CodexApprovalPolicy, CodexAuthProfile, CodexCompanyCliSettings, CodexPersonality, CodexReasoningEffort, CodexReasoningSummary, CodexRunnerProfileView, CodexSandboxMode, CodexVerbosity, CodexWebSearch } from "../../types/platform";
 import { codexReasoningEffortLabel, formatAgentCount, formatInterval, formatRunSeconds } from "../app/shared";
 import { codexAuthStatusLabel } from "./auth";
 
@@ -23,6 +23,7 @@ export function CodexRunnerProfilesPanel(props: {
   profiles: CodexRunnerProfileView[];
   loading: boolean;
   authProfiles: CodexAuthProfile[];
+  cliSettings: CodexCompanyCliSettings | null;
   token: string;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
@@ -50,6 +51,7 @@ export function CodexRunnerProfilesPanel(props: {
           companyId={props.companyId}
           profileView={null}
           authProfiles={props.authProfiles}
+          cliSettings={props.cliSettings}
           initialCodexProfile={defaultAuthSelector}
           token={props.token}
           onSaved={async () => { setCreating(false); await props.onChanged(); }}
@@ -66,6 +68,7 @@ export function CodexRunnerProfilesPanel(props: {
               companyId={props.companyId}
               profileView={profile}
               authProfiles={props.authProfiles}
+              cliSettings={props.cliSettings}
               initialCodexProfile={defaultAuthSelector}
               token={props.token}
               onSaved={props.onChanged}
@@ -87,6 +90,7 @@ function CodexRunnerProfileEditor(props: {
   companyId: string;
   profileView: CodexRunnerProfileView | null;
   authProfiles: CodexAuthProfile[];
+  cliSettings: CodexCompanyCliSettings | null;
   initialCodexProfile: string;
   token: string;
   onSaved: () => Promise<void>;
@@ -194,14 +198,23 @@ function CodexRunnerProfileEditor(props: {
   }
 
   if (!editing && profile) {
+    const reasoningLabel = profile.reasoning_effort
+      ? codexReasoningEffortLabel(profile.reasoning_effort, language)
+      : cliSettingsValue(reasoningEffortValue(props.cliSettings, language), language);
+    const sandboxLabel = profile.sandbox_mode === "inherit"
+      ? cliSettingsValue(sandboxValue(props.cliSettings?.sandbox_mode, language), language)
+      : sandboxValue(profile.sandbox_mode, language);
+    const approvalLabel = profile.approval_policy === "inherit"
+      ? cliSettingsValue(approvalValue(props.cliSettings?.approval_policy, language), language)
+      : approvalValue(profile.approval_policy, language);
     return (
       <article className={`runner-profile-card ${profile.is_default ? "default" : ""}`}>
         <div className="runner-profile-main"><span className="runner-profile-icon"><Icon name="terminal" /></span><div><strong>{profile.name}</strong><small>{profile.model || "Codex 默认模型"} · Profile: {profile.codex_profile}</small></div></div>
         <div className="runner-profile-facts">
           <span><small>兜底检查</small><strong>{formatInterval(profile.interval_seconds)}</strong></span>
-          <span><small>思考等级</small><strong>{codexReasoningEffortLabel(profile.reasoning_effort, language)}</strong></span>
-          <span><small>Sandbox</small><strong>{profile.sandbox_mode === "inherit" ? "继承公司" : profile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
-          <span><small>审批</small><strong>{profile.approval_policy === "inherit" ? "继承公司" : profile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+          <span><small>思考等级</small><strong>{reasoningLabel}</strong></span>
+          <span><small>Sandbox</small><strong>{sandboxLabel}</strong></span>
+          <span><small>审批</small><strong>{approvalLabel}</strong></span>
           <span><small>运行上限</small><strong>{formatRunSeconds(profile.max_run_seconds, language)}</strong></span>
           <span><small>已绑定</small><strong>{formatAgentCount(props.profileView?.assigned_agent_count ?? 0, language)}</strong></span>
         </div>
@@ -218,28 +231,33 @@ function CodexRunnerProfileEditor(props: {
   const defaultReasoningLabel = selectedModel?.default_reasoning_effort
     ? codexReasoningEffortLabel(selectedModel.default_reasoning_effort, language)
     : "Codex 默认";
+  const companyModelValue = props.cliSettings?.model ?? (language === "en" ? "Codex / project config" : "Codex / 项目配置");
+  const companyReasoningValue = reasoningEffortValue(props.cliSettings, language, defaultReasoningLabel);
+  const companyVerbosityValue = props.cliSettings?.verbosity ?? (language === "en" ? "Codex default" : "Codex 默认");
+  const companyPersonalityValue = props.cliSettings?.personality ?? (language === "en" ? "Codex default" : "Codex 默认");
+  const companyServiceTierValue = props.cliSettings?.service_tier ?? (language === "en" ? "standard / Codex config" : "标准 / Codex 配置");
   return (
     <form className="runner-profile-form" onSubmit={save}>
-      <div className="runner-profile-form-head"><div><span className="eyebrow">{profile ? "EDIT PROFILE" : "NEW PROFILE"}</span><h3>{profile ? `编辑 ${profile.name}` : "新建运行配置"}</h3></div><label className="check-row"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} disabled={profile?.is_default} />设为默认</label></div>
+      <div className="runner-profile-form-head"><div><span className="eyebrow">{profile ? "EDIT PROFILE" : "NEW PROFILE"}</span><h3>{profile ? `编辑 ${profile.name}` : "新建运行配置"}</h3></div><label className="check-row"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} disabled={profile?.is_default} />新 Agent 默认使用</label></div>
       <div className="runner-profile-fields">
         <Field label="配置名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：开发模式" required /></Field>
         <Field label="兜底检查周期（秒）"><input type="number" min={10} max={604800} value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} /><small>Human 消息会即时唤醒；这里最多可设置为 7 天，只作为无消息时的兜底。</small></Field>
         <Field label="Codex 认证环境"><select value={codexProfile} onChange={(event) => { setCodexProfile(event.target.value); setModel(""); setReasoningEffort(""); }} required><option value="default">宿主机默认登录</option>{codexProfile.startsWith("relay_") && !props.authProfiles.some((item) => item.selector === codexProfile) ? <option value={codexProfile}>{codexProfile}（当前不可用）</option> : null}{props.authProfiles.map((item) => <option key={item.id} value={item.selector} disabled={item.status !== "active"}>{item.name}{item.status === "active" ? "" : `（${codexAuthStatusLabel(item.status)}）`}</option>)}</select><small>每个托管认证配置都有独立登录态、会话与本地配置。</small></Field>
-        <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={modelsLoading}><option value="">使用 Codex 默认模型</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select>{modelsError ? <small className="codex-runtime-error">{modelsError}</small> : <small>{modelsLoading ? "正在从对应 Codex 环境读取模型…" : "模型列表由本机 Trigger 发现。"}</small>}</Field>
-        <Field label="思考等级"><select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as CodexReasoningEffort | "")} disabled={modelsLoading}><option value="">继承公司 / 模型默认（{defaultReasoningLabel}）</option>{currentReasoningMissing ? <option value={reasoningEffort}>{reasoningEffort}（当前配置）</option> : null}{reasoningOptions.map((item) => <option key={item.effort} value={item.effort}>{codexReasoningEffortLabel(item.effort, language)} · {item.effort}</option>)}</select></Field>
-        <Field label="推理摘要"><select value={reasoningSummary} onChange={(event) => setReasoningSummary(event.target.value as CodexReasoningSummary | "")}><option value="">继承公司默认</option><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
-        <Field label="输出详细度"><select value={verbosity} onChange={(event) => setVerbosity(event.target.value as CodexVerbosity | "")}><option value="">继承公司默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
-        <Field label="Personality"><select value={personality} onChange={(event) => setPersonality(event.target.value as CodexPersonality | "")}><option value="">继承公司默认</option><option value="none">none</option><option value="friendly">friendly</option><option value="pragmatic">pragmatic</option></select></Field>
-        <Field label="Fast 模式"><select value={serviceTier} onChange={(event) => setServiceTier(event.target.value as "fast" | "")}><option value="">继承公司默认</option><option value="fast">开启 fast</option></select></Field>
-        <Field label="Sandbox"><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value as CodexSandboxMode)}><option value="inherit">继承公司默认</option><option value="workspace_write">workspace-write</option><option value="read_only">read-only</option></select></Field>
-        <Field label="审批策略"><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as CodexApprovalPolicy)}><option value="inherit">继承公司默认</option><option value="never">never</option><option value="on-request">on-request</option></select></Field>
-        <Field label="工作区网络"><CodexBooleanOverrideSelect value={networkAccess} onChange={setNetworkAccess} /></Field>
-        <Field label="Web Search"><select value={webSearch} onChange={(event) => setWebSearch(event.target.value as CodexWebSearch | "")}><option value="">继承公司默认</option><option value="disabled">关闭</option><option value="cached">缓存</option><option value="indexed">索引</option><option value="live">实时</option></select></Field>
-        <Field label="多 Agent"><CodexBooleanOverrideSelect value={featureMultiAgent} onChange={setFeatureMultiAgent} /></Field>
-        <Field label="插件"><CodexBooleanOverrideSelect value={featureRemotePlugin} onChange={setFeatureRemotePlugin} /></Field>
-        <Field label="Hooks"><CodexBooleanOverrideSelect value={featureHooks} onChange={setFeatureHooks} /></Field>
-        <Field label="Goals"><CodexBooleanOverrideSelect value={featureGoals} onChange={setFeatureGoals} /></Field>
-        <Field label="Shell"><CodexBooleanOverrideSelect value={featureShellTool} onChange={setFeatureShellTool} /></Field>
+        <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={modelsLoading}><option value="">{cliSettingsOption(companyModelValue, language)}</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select>{modelsError ? <small className="codex-runtime-error">{modelsError}</small> : <small>{modelsLoading ? "正在从对应 Codex 环境读取模型…" : "模型列表由本机 Trigger 发现。"}</small>}</Field>
+        <Field label="思考等级"><select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as CodexReasoningEffort | "")} disabled={modelsLoading}><option value="">{cliSettingsOption(companyReasoningValue, language)}</option>{currentReasoningMissing ? <option value={reasoningEffort}>{reasoningEffort}（当前配置）</option> : null}{reasoningOptions.map((item) => <option key={item.effort} value={item.effort}>{codexReasoningEffortLabel(item.effort, language)} · {item.effort}</option>)}</select></Field>
+        <Field label="推理摘要"><select value={reasoningSummary} onChange={(event) => setReasoningSummary(event.target.value as CodexReasoningSummary | "")}><option value="">{cliSettingsOption(props.cliSettings?.reasoning_summary ?? "auto", language)}</option><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
+        <Field label="输出详细度"><select value={verbosity} onChange={(event) => setVerbosity(event.target.value as CodexVerbosity | "")}><option value="">{cliSettingsOption(companyVerbosityValue, language)}</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
+        <Field label="Personality"><select value={personality} onChange={(event) => setPersonality(event.target.value as CodexPersonality | "")}><option value="">{cliSettingsOption(companyPersonalityValue, language)}</option><option value="none">none</option><option value="friendly">friendly</option><option value="pragmatic">pragmatic</option></select></Field>
+        <Field label="Fast 模式"><select value={serviceTier} onChange={(event) => setServiceTier(event.target.value as "fast" | "")}><option value="">{cliSettingsOption(companyServiceTierValue, language)}</option><option value="fast">开启 fast</option></select></Field>
+        <Field label="Sandbox"><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value as CodexSandboxMode)}><option value="inherit">{cliSettingsOption(sandboxValue(props.cliSettings?.sandbox_mode, language), language)}</option><option value="workspace_write">workspace-write</option><option value="read_only">read-only</option></select></Field>
+        <Field label="审批策略"><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as CodexApprovalPolicy)}><option value="inherit">{cliSettingsOption(approvalValue(props.cliSettings?.approval_policy, language), language)}</option><option value="never">never</option><option value="on-request">on-request</option></select></Field>
+        <Field label="工作区网络"><CodexBooleanOverrideSelect value={networkAccess} companyValue={props.cliSettings?.network_access} language={language} onChange={setNetworkAccess} /></Field>
+        <Field label="Web Search"><select value={webSearch} onChange={(event) => setWebSearch(event.target.value as CodexWebSearch | "")}><option value="">{cliSettingsOption(webSearchValue(props.cliSettings?.web_search, language), language)}</option><option value="disabled">关闭</option><option value="cached">缓存</option><option value="indexed">索引</option><option value="live">实时</option></select></Field>
+        <Field label="多 Agent"><CodexBooleanOverrideSelect value={featureMultiAgent} companyValue={props.cliSettings?.feature_multi_agent} language={language} onChange={setFeatureMultiAgent} /></Field>
+        <Field label="插件"><CodexBooleanOverrideSelect value={featureRemotePlugin} companyValue={props.cliSettings?.feature_remote_plugin} language={language} onChange={setFeatureRemotePlugin} /></Field>
+        <Field label="Hooks"><CodexBooleanOverrideSelect value={featureHooks} companyValue={props.cliSettings?.feature_hooks} language={language} onChange={setFeatureHooks} /></Field>
+        <Field label="Goals"><CodexBooleanOverrideSelect value={featureGoals} companyValue={props.cliSettings?.feature_goals} language={language} onChange={setFeatureGoals} /></Field>
+        <Field label="Shell"><CodexBooleanOverrideSelect value={featureShellTool} companyValue={props.cliSettings?.feature_shell_tool} language={language} onChange={setFeatureShellTool} /></Field>
         <Field label="单次最长运行（秒）"><input type="number" min={60} max={7200} value={maxRunSeconds} onChange={(event) => setMaxRunSeconds(Number(event.target.value))} /></Field>
       </div>
       <div className="runner-profile-form-actions"><button className="button small" type="button" onClick={() => { setEditing(false); props.onCancel(); }} disabled={busy}>取消</button><button className="button primary small" disabled={busy}>{busy ? "正在保存…" : "保存运行配置"}</button></div>
@@ -259,8 +277,43 @@ function codexBooleanOverrideValue(value: CodexBooleanOverride): boolean | null 
 
 function CodexBooleanOverrideSelect(props: {
   value: CodexBooleanOverride;
+  companyValue: boolean | undefined;
+  language: UiLanguage;
   onChange: (value: CodexBooleanOverride) => void;
 }) {
-  return <select value={props.value} onChange={(event) => props.onChange(event.target.value as CodexBooleanOverride)}><option value="inherit">继承公司默认</option><option value="true">开启</option><option value="false">关闭</option></select>;
+  return <select value={props.value} onChange={(event) => props.onChange(event.target.value as CodexBooleanOverride)}><option value="inherit">{cliSettingsOption(booleanValue(props.companyValue, props.language), props.language)}</option><option value="true">开启</option><option value="false">关闭</option></select>;
 }
 
+function cliSettingsOption(value: string, language: UiLanguage) {
+  return language === "en" ? `Use “CLI Settings”: ${value}` : `使用「CLI 设置」：${value}`;
+}
+
+function cliSettingsValue(value: string, language: UiLanguage) {
+  return language === "en" ? `CLI Settings · ${value}` : `CLI 设置 · ${value}`;
+}
+
+function reasoningEffortValue(settings: CodexCompanyCliSettings | null, language: UiLanguage, modelDefault?: string) {
+  if (!settings?.reasoning_effort) return modelDefault ?? codexReasoningEffortLabel(null, language);
+  return `${codexReasoningEffortLabel(settings.reasoning_effort, language)} · ${settings.reasoning_effort}`;
+}
+
+function sandboxValue(value: "read_only" | "workspace_write" | undefined, language: UiLanguage) {
+  if (language === "en") return value === "read_only" ? "read-only" : value === "workspace_write" ? "workspace-write" : "company value";
+  return value === "read_only" ? "只读" : value === "workspace_write" ? "可写工作区" : "公司级基础值";
+}
+
+function approvalValue(value: "never" | "on-request" | undefined, language: UiLanguage) {
+  if (language === "en") return value === "never" ? "never" : value === "on-request" ? "on-request" : "company value";
+  return value === "never" ? "无需审批" : value === "on-request" ? "Human 审批" : "公司级基础值";
+}
+
+function webSearchValue(value: CodexWebSearch | undefined, language: UiLanguage) {
+  if (!value) return language === "en" ? "company value" : "公司级基础值";
+  if (language === "en") return value;
+  return ({ disabled: "关闭", cached: "缓存", indexed: "索引", live: "实时" } as const)[value];
+}
+
+function booleanValue(value: boolean | undefined, language: UiLanguage) {
+  if (value === undefined) return language === "en" ? "company value" : "公司级基础值";
+  return language === "en" ? (value ? "On" : "Off") : value ? "开启" : "关闭";
+}

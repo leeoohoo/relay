@@ -508,12 +508,24 @@ impl CodexTriggerRunner {
         })
     }
 
-    pub async fn discover_plugins(&self) -> AppResult<CodexPluginCatalogDiscovery> {
+    pub async fn discover_plugins(
+        &self,
+        target_selector: &str,
+    ) -> AppResult<CodexPluginCatalogDiscovery> {
+        validate_config_key(target_selector, "Codex plugin target environment")?;
         let plugins = self
-            .run_plugin_json(&["plugin", "list", "--available", "--json"], 30)
+            .run_plugin_json(
+                target_selector,
+                &["plugin", "list", "--available", "--json"],
+                30,
+            )
             .await?;
         let marketplaces = self
-            .run_plugin_json(&["plugin", "marketplace", "list", "--json"], 30)
+            .run_plugin_json(
+                target_selector,
+                &["plugin", "marketplace", "list", "--json"],
+                30,
+            )
             .await?;
         Ok(CodexPluginCatalogDiscovery {
             installed: plugins
@@ -533,9 +545,11 @@ impl CodexTriggerRunner {
 
     pub async fn apply_plugin_operation(
         &self,
+        target_selector: &str,
         operation: &str,
         plugin_id: Option<&str>,
     ) -> AppResult<Value> {
+        validate_config_key(target_selector, "Codex plugin target environment")?;
         match operation {
             "refresh" => Ok(json!({ "refreshed": true })),
             "install" | "remove" => {
@@ -543,8 +557,12 @@ impl CodexTriggerRunner {
                     AppError::Validation("plugin_id is required for this operation".into())
                 })?;
                 validate_plugin_id(plugin_id)?;
-                self.run_plugin_json(&["plugin", operation, plugin_id, "--json"], 120)
-                    .await
+                self.run_plugin_json(
+                    target_selector,
+                    &["plugin", operation, plugin_id, "--json"],
+                    120,
+                )
+                .await
             }
             _ => Err(AppError::Validation(
                 "unsupported Codex plugin operation".into(),
@@ -552,13 +570,21 @@ impl CodexTriggerRunner {
         }
     }
 
-    async fn run_plugin_json(&self, arguments: &[&str], timeout_seconds: u64) -> AppResult<Value> {
+    async fn run_plugin_json(
+        &self,
+        target_selector: &str,
+        arguments: &[&str],
+        timeout_seconds: u64,
+    ) -> AppResult<Value> {
         let mut command = Command::new(&self.executable);
         command
             .args(&self.prefix_args)
-            .args(arguments)
             .env_clear()
-            .envs(&self.inherited_environment)
+            .envs(&self.inherited_environment);
+        self.apply_profile_environment(&mut command, target_selector)?;
+        self.apply_profile_arguments(&mut command, target_selector)?;
+        command
+            .args(arguments)
             .stdin(Stdio::null())
             .kill_on_drop(true);
         let output = timeout(Duration::from_secs(timeout_seconds), command.output())

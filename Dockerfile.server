@@ -30,11 +30,12 @@ FROM debian:bookworm-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/ai-chat-server /usr/local/bin/ai-chat-server
 COPY --from=builder /app/apps/web/dist /app/web-dist
-COPY --from=builder /usr/bin/git /usr/bin/git
-COPY --from=builder /usr/lib/git-core /usr/lib/git-core
-COPY --from=builder /usr/share/git-core /usr/share/git-core
 
 EXPOSE 8080
 
