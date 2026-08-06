@@ -25,6 +25,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY apps ./apps
 COPY crates ./crates
+COPY skills ./skills
 COPY --from=web-builder /app/apps/web/dist ./apps/web/dist
 
 RUN cargo build --release -p ai-chat-server

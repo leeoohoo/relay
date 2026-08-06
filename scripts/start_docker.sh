@@ -261,6 +261,11 @@ load_existing_port_assignments() {
     existing_port="$(existing_host_port_for ai-chat-harness 3022/tcp)"
     [[ -n "$existing_port" ]] && HARNESS_SSH_PORT="$existing_port"
   fi
+
+  # A missing previous container/port is the normal first-start case. Without
+  # an explicit success return, the final conditional above can make this
+  # function return 1 and `set -e` aborts startup immediately after web build.
+  return 0
 }
 
 assign_port() {
