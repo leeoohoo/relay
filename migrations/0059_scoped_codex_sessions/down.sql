@@ -3,6 +3,9 @@ DROP INDEX IF EXISTS idx_agent_memories_active_project_topic;
 DROP INDEX IF EXISTS idx_agent_memories_active_control_topic;
 DROP INDEX IF EXISTS idx_agent_memories_active_agent_topic;
 
+ALTER TABLE agent_memories
+    DROP CONSTRAINT IF EXISTS agent_memories_scoped_scope_check;
+
 -- The legacy schema permits only one active/draft topic per Agent. Scoped
 -- memories can legitimately reuse a topic across control and projects, so
 -- archive the older duplicates before collapsing every scope back to agent.
@@ -26,7 +29,15 @@ WHERE id IN (
 
 UPDATE agent_memories
 SET scope = 'agent',
-    project_id = NULL,
+    project_id = CASE
+        WHEN scope = 'project' THEN project_id
+        WHEN scope = 'session' THEN (
+            SELECT session.project_id
+            FROM agent_codex_sessions AS session
+            WHERE session.id = agent_memories.session_id
+        )
+        ELSE NULL
+    END,
     session_id = NULL,
     visibility = 'both',
     injection_mode = CASE
@@ -35,9 +46,8 @@ SET scope = 'agent',
     END;
 
 ALTER TABLE agent_memories
-    DROP CONSTRAINT IF EXISTS agent_memories_scoped_scope_check;
-
-ALTER TABLE agent_memories
+    ADD CONSTRAINT agent_memories_scope_check
+        CHECK (scope IN ('agent', 'project', 'company')),
     ADD CONSTRAINT agent_memories_agent_private_scope_check CHECK (scope = 'agent');
 
 ALTER TABLE agent_memories

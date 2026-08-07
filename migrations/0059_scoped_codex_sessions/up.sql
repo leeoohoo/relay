@@ -108,15 +108,26 @@ ALTER TABLE agent_memories
     ADD COLUMN visibility TEXT NOT NULL DEFAULT 'both'
         CHECK (visibility IN ('control', 'worker', 'both'));
 
+ALTER TABLE agent_memories
+    DROP CONSTRAINT IF EXISTS agent_memories_agent_private_scope_check,
+    DROP CONSTRAINT IF EXISTS agent_memories_scope_check;
+
+-- 0047 made every memory Agent-private but intentionally retained project_id
+-- as its project context. Translate those legacy rows into the new explicit
+-- project scope before installing the structural scope constraint.
 UPDATE agent_memories
-SET injection_mode = CASE
+SET scope = CASE
+        WHEN project_id IS NOT NULL THEN 'project'
+        ELSE 'agent'
+    END,
+    injection_mode = CASE
         WHEN memory_tier = 'long_term' THEN 'always'
         ELSE 'on_demand'
     END,
-    visibility = 'both';
-
-ALTER TABLE agent_memories
-    DROP CONSTRAINT IF EXISTS agent_memories_agent_private_scope_check;
+    visibility = CASE
+        WHEN project_id IS NOT NULL THEN 'worker'
+        ELSE 'both'
+    END;
 
 ALTER TABLE agent_memories
     ADD CONSTRAINT agent_memories_scoped_scope_check CHECK (
