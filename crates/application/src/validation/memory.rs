@@ -1,5 +1,22 @@
 use super::*;
 
+pub(crate) fn normalize_agent_memory_scope(value: &str) -> AppResult<String> {
+    let value = value.trim().to_lowercase();
+    if matches!(
+        value.as_str(),
+        AGENT_MEMORY_SCOPE_AGENT
+            | AGENT_MEMORY_SCOPE_CONTROL
+            | AGENT_MEMORY_SCOPE_PROJECT
+            | AGENT_MEMORY_SCOPE_SESSION
+    ) {
+        Ok(value)
+    } else {
+        Err(AppError::Validation(
+            "memory scope must be agent, control, project, or session".into(),
+        ))
+    }
+}
+
 pub(crate) fn normalize_agent_memory_tier(value: &str) -> AppResult<String> {
     let value = value.trim().to_lowercase();
     if matches!(

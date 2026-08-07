@@ -261,6 +261,26 @@ export type CodexTriggerRun = {
   }>;
 };
 
+export type CodexSession = {
+  id: string;
+  agent_profile_id: string;
+  session_kind: "control" | "project";
+  scope_key: string;
+  project_id: string | null;
+  generation: number;
+  codex_thread_id: string;
+  workspace_key: string;
+  status: "active" | "archived";
+  summary_short: string;
+  checkpoint_json: Record<string, unknown>;
+  skill_bundle_version: string;
+  memory_snapshot_version: string;
+  policy_version: string;
+  created_at: string;
+  last_used_at: string;
+  archived_at: string | null;
+};
+
 export type CodexTriggerView = {
   runner_profile_id: string | null;
   config: {
@@ -513,8 +533,12 @@ export type AgentMemory = {
   id: string;
   company_id: string;
   owner_agent_id: string;
+  scope: "agent" | "control" | "project" | "session";
   project_id: string | null;
+  session_id: string | null;
   memory_tier: "short_term" | "long_term";
+  injection_mode: "always" | "on_demand";
+  visibility: "control" | "worker" | "both";
   memory_type: "fact" | "decision" | "lesson" | "preference" | "procedure" | "relationship" | "handoff";
   topic_key: string;
   title: string;

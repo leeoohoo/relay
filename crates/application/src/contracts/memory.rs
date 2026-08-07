@@ -8,7 +8,9 @@ use ai_chat_domain::company::{AgentMemory, AgentMemorySourceRef};
 pub struct RememberAgentMemoryInput {
     pub actor_agent_id: Uuid,
     pub company_id: Uuid,
+    pub scope: Option<String>,
     pub project_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
     pub memory_tier: String,
     pub memory_type: String,
     pub topic_key: String,
@@ -29,7 +31,10 @@ pub struct RememberAgentMemoryInput {
 pub struct SearchAgentMemoriesInput {
     pub actor_agent_id: Uuid,
     pub company_id: Uuid,
+    #[serde(default)]
+    pub scopes: Vec<String>,
     pub project_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
     pub query: Option<String>,
     #[serde(default)]
     pub memory_tiers: Vec<String>,
@@ -88,6 +93,7 @@ pub struct ListCompanyMemoriesForHumanInput {
     pub human_user_id: Uuid,
     pub company_id: Uuid,
     pub owner_agent_id: Option<Uuid>,
+    pub scope: Option<String>,
     pub project_id: Option<Uuid>,
     pub memory_tier: Option<String>,
     pub status: Option<String>,

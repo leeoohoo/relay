@@ -14,6 +14,10 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
             "agent.memory",
             "Maintain this Agent's isolated two-tier memory. long_term memories are injected into the Agent-specific Skill on every Codex wake-up; short_term memories are searched on demand. Available actions: overview, search, get, remember, update, archive, supersede, pin, and forget. Store concise reusable conclusions, never raw chat, task text, logs, or secrets.",
         ),
+        action_tool::<AgentWorkSessionToolInput>(
+            "agent.work_session",
+            "List this Agent's control/project Codex sessions, inspect a session checkpoint, or dispatch structured work to a project-bound worker session. Use dispatch only when project execution is necessary; the Relay backend resolves the actual thread from agent_id plus project_id.",
+        ),
         read_only_tool::<AgentInboxWaitInput>(
             "agent.inbox.wait",
             "List or wait up to 25 seconds for inbox events. Set timeout_seconds to 0 for an immediate query and pending_only to false for history.",
@@ -406,6 +410,7 @@ pub(super) fn is_public_tool_name(tool: &str) -> bool {
         "agent.bootstrap"
             | "agent.profile.update"
             | "agent.memory"
+            | "agent.work_session"
             | "agent.inbox.wait"
             | "agent.inbox.ack"
             | "company.chat"
@@ -424,6 +429,7 @@ pub(super) fn is_mutating_tool(tool: &str, input: &Value) -> bool {
     match tool {
         "agent.profile.update" | "agent.inbox.ack" => true,
         "agent.memory" => !matches!(input_action(input), Some("overview" | "search" | "get")),
+        "agent.work_session" => matches!(input_action(input), Some("dispatch")),
         "company.chat" => !matches!(input_action(input), Some("history" | "unread")),
         "company.project" => !matches!(input_action(input), Some("get" | "list")),
         "company.task" => !matches!(input_action(input), Some("get" | "list" | "my")),
@@ -448,6 +454,9 @@ pub(super) fn success_target_ref(tool: &str, input: &Value, output: &Value) -> O
         "agent.memory" => nested_id(output, &["memory", "id"])
             .or_else(|| nested_id(input, &["memory_id"]))
             .map(|value| format!("agent_memory:{value}")),
+        "agent.work_session" => nested_id(output, &["intent", "project_id"])
+            .or_else(|| nested_id(input, &["project_id"]))
+            .map(|value| format!("project:{value}")),
         "company.chat" => match input_action(input) {
             Some("direct_open" | "group_create") => {
                 nested_id(output, &["conversation", "preview", "id"])
@@ -503,6 +512,11 @@ pub(super) fn failure_target_ref(tool: &str, input: &Value) -> Option<String> {
         "agent.memory" => nested_id(input, &["memory_id"])
             .map(|value| format!("agent_memory:{value}"))
             .or_else(|| nested_id(input, &["company_id"]).map(|value| format!("company:{value}"))),
+        "agent.work_session" => nested_id(input, &["project_id"])
+            .map(|value| format!("project:{value}"))
+            .or_else(|| {
+                nested_id(input, &["session_id"]).map(|value| format!("codex_session:{value}"))
+            }),
         "company.chat" => match input_action(input) {
             Some("direct_open") => {
                 nested_id(input, &["target_agent_id"]).map(|value| format!("agent:{value}"))

@@ -24,10 +24,15 @@ use ai_chat_domain::{
     company::{
         company_profession_by_key, company_project_type_by_key, infer_company_profession,
         AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
-        AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation, CompanyProject,
-        CompanyProjectRule, AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
+        AgentExecutionIntent, AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation,
+        CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_POLICY_NEVER,
+        AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
         AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
-        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SETTING_INHERIT,
+        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
+        AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
+        AGENT_CODEX_SESSION_STATUS_ACTIVE, AGENT_CODEX_SETTING_INHERIT,
+        AGENT_EXECUTION_INTENT_STATUS_COMPLETED, AGENT_EXECUTION_INTENT_STATUS_FAILED,
+        AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
         AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
         AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
         AGENT_TOOL_APPROVAL_STATUS_REJECTED, CODEX_PLUGIN_OPERATION_REFRESH,
@@ -45,7 +50,7 @@ use ai_chat_infrastructure::{
     codex_trigger::{
         CodexApprovalDecision, CodexApprovalHandler, CodexApprovalRequest,
         CodexCancellationHandler, CodexModelCatalogFile, CodexProgressEvent, CodexProgressHandler,
-        CodexRunRequest, CodexRunStatus, CodexTriggerRunner,
+        CodexRunRequest, CodexRunResult, CodexRunStatus, CodexTriggerRunner,
     },
     config::ApiConfig,
     git_credentials::is_managed_token_profile,
@@ -57,7 +62,9 @@ use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
 type TriggerPlatform = PlatformApp<RepositoryAdapter>;
 type TriggerHarnessProvisioner = HarnessProvisioner<RepositoryAdapter>;
-const CODEX_SESSION_POLICY_VERSION: &str = "relay-skills-v8";
+const CODEX_SESSION_POLICY_VERSION: &str = "relay-scoped-sessions-v9";
+const RELAY_SKILL_BUNDLE_CONTROL: &str = "control";
+const RELAY_SKILL_BUNDLE_PROJECT: &str = "project";
 const EMPLOYEE_SKILL_TEMPLATE: &str =
     include_str!("../../../skills/relay-company-employee/SKILL.md");
 const EMPLOYEE_SKILL_TEMPLATE_EN: &str =
@@ -116,9 +123,9 @@ struct EffectiveCodexCliSettings {
 struct PreparedRelaySkills {
     employee_name: String,
     profession_name: String,
+    session_name: String,
     project_name: Option<String>,
     staffing_name: Option<String>,
-    #[cfg(test)]
     version_hash: String,
 }
 

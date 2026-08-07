@@ -216,6 +216,11 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .selected-profile-summary small { color: #87928c; font-size: 9px; }.selected-profile-summary strong { overflow: hidden; color: #435249; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .codex-trigger-fields { display: grid; grid-template-columns: .7fr 1.4fr 1fr .9fr; gap: 12px; }
 .codex-trigger-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.codex-work-session-list { display: grid; gap: 8px; border-top: 1px solid #e2e9e4; padding-top: 12px; }
+.codex-work-session-row { display: grid; grid-template-columns: auto minmax(150px,.7fr) minmax(220px,1.5fr) auto; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid #e1e8e3; border-radius: 10px; background: #fbfdfb; }
+.codex-work-session-row > div { display: grid; gap: 2px; }
+.codex-work-session-row small, .codex-work-session-row time { color: #7c8881; font-size: 11px; }
+.codex-work-session-row p { margin: 0; color: #526159; font-size: 12px; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .codex-run-list { display: grid; gap: 7px; border-top: 1px solid #edf1ee; padding-top: 12px; }
 .codex-run-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 2px; color: #52635a; }
 .codex-run-list-heading strong { font-size: 11px; }

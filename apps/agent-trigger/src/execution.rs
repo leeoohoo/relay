@@ -148,52 +148,33 @@ pub(super) async fn execute_trigger(
     }
     let agent = platform.get_agent_profile_by_id(trigger.agent_profile_id)?;
     let membership = platform.get_active_company_agent_membership(trigger.agent_profile_id)?;
-    let workspace = match (decision.project.as_ref(), decision.git.as_ref()) {
-        (Some(project), Some(git)) => {
-            prepare_project_workspace_with_credential_recovery(
-                harness,
-                workspace_manager,
-                trigger.company_id,
-                project.id,
-                trigger.agent_profile_id,
-                agent.owner_user_id,
-                &agent.handle,
-                git,
-            )
-            .await?
-        }
-        _ => workspace_manager
-            .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?,
-    };
-    let long_term_memories =
-        platform.agent_long_term_memories(trigger.agent_profile_id, trigger.company_id)?;
-    let project_view = decision
-        .project
-        .as_ref()
-        .map(|project| {
-            platform.get_company_project(GetCompanyProjectInput {
-                actor_agent_id: trigger.agent_profile_id,
-                company_id: trigger.company_id,
-                project_id: project.id,
-            })
-        })
-        .transpose()?;
+    let control_workspace = workspace_manager
+        .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?;
+    let control_session_id = platform
+        .get_agent_codex_session(trigger.agent_profile_id, "control")
+        .map(|session| session.id);
+    let control_memories = platform.agent_long_term_memories_for_control_session(
+        trigger.agent_profile_id,
+        trigger.company_id,
+        control_session_id,
+    )?;
     let skill_language = platform.effective_company_skill_language(trigger.company_id);
-    let relay_skills = prepare_relay_skills(
-        &workspace.path,
+    let control_skills = prepare_relay_skills(
+        &control_workspace.path,
+        RELAY_SKILL_BUNDLE_CONTROL,
         &agent,
         &membership.job_title,
         &membership.permissions,
-        &long_term_memories,
-        project_view.as_ref().map(|view| &view.project),
-        project_view.as_ref().and_then(|view| view.rule.as_ref()),
+        &control_memories,
+        None,
+        None,
         &skill_language,
     )?;
     let started_at = now_utc();
     let initial_activity = AgentCodexRunActivity {
         at: started_at,
         phase: "preparing".into(),
-        summary: format!("正在准备工作区：{}", workspace.branch),
+        summary: "正在准备 Agent 控制会话".into(),
     };
     let mut run = AgentCodexTriggerRun {
         id: Uuid::new_v4(),
@@ -215,7 +196,8 @@ pub(super) async fn execute_trigger(
         activity_log: vec![initial_activity],
     };
     platform.insert_agent_codex_trigger_run(run.clone())?;
-    let token_expiry = started_at + Duration::seconds(i64::from(trigger.max_run_seconds) + 60);
+    let token_expiry =
+        started_at + Duration::seconds(i64::from(trigger.max_run_seconds).saturating_mul(4) + 60);
     let token = match platform.issue_agent_codex_run_token(
         run.id,
         trigger.agent_profile_id,
@@ -227,87 +209,438 @@ pub(super) async fn execute_trigger(
             return Err(error);
         }
     };
-    let session_key = codex_session_key(&workspace);
-    let existing_thread_id = platform
-        .get_agent_codex_session(trigger.agent_profile_id)
-        .and_then(|session| {
-            if codex_session_key_matches(&session.worktree_key, &session_key) {
-                Some(session.codex_thread_id)
-            } else {
-                tracing::info!(
-                    agent_id = %trigger.agent_profile_id,
-                    "starting a new Codex session because the saved session uses an older workspace or execution policy"
-                );
-                None
-            }
-        });
-    let request = CodexRunRequest {
-        cwd: workspace.path.clone(),
-        codex_profile: trigger.codex_profile.clone(),
-        model: effective_settings.model.clone(),
-        reasoning_effort: effective_settings.reasoning_effort.clone(),
-        reasoning_summary: effective_settings.reasoning_summary.clone(),
-        verbosity: effective_settings.verbosity.clone(),
-        personality: effective_settings.personality.clone(),
-        service_tier: effective_settings.service_tier.clone(),
-        sandbox_mode: effective_settings.sandbox_mode.clone(),
-        approval_policy: effective_settings.approval_policy.clone(),
-        network_access: effective_settings.network_access,
-        web_search: effective_settings.web_search.clone(),
-        feature_multi_agent: effective_settings.feature_multi_agent,
-        feature_remote_plugin: effective_settings.feature_remote_plugin,
-        feature_hooks: effective_settings.feature_hooks,
-        feature_goals: effective_settings.feature_goals,
-        feature_shell_tool: effective_settings.feature_shell_tool,
-        max_run_seconds: trigger.max_run_seconds as u64,
-        prompt: build_wakeup_prompt(WakeupPromptContext {
-            agent: &agent,
-            project_name: decision
-                .project
-                .as_ref()
-                .map(|project| project.name.as_str()),
-            pending_inbox_count: decision.pending_inbox_count,
-            active_task_count: decision.active_task_count,
-            waiting_task_count: decision.waiting_task_count,
-            asset_refresh_due: decision.asset_refresh_due,
-            workspace: &workspace,
-            relay_skills: &relay_skills,
-        }),
-        existing_thread_id,
-        run_token: token.plaintext_token,
-        environment: workspace.auth_environment.clone(),
-        approval_handler: (effective_settings.approval_policy == "on-request").then(|| {
-            Arc::new(PlatformCodexApprovalHandler {
-                platform: platform.clone(),
-                company_id: trigger.company_id,
-                run_id: run.id,
-                agent_id: trigger.agent_profile_id,
-                expires_at: started_at + Duration::seconds(i64::from(trigger.max_run_seconds)),
-            }) as Arc<dyn CodexApprovalHandler>
-        }),
-        progress_handler: Some(Arc::new(PlatformCodexProgressHandler {
-            platform: platform.clone(),
-            run_id: run.id,
-        }) as Arc<dyn CodexProgressHandler>),
-        cancellation_handler: decision.project.as_ref().map(|project| {
-            Arc::new(PlatformProjectCancellationHandler {
-                platform: platform.clone(),
-                project_id: project.id,
-            }) as Arc<dyn CodexCancellationHandler>
-        }),
-    };
-    let result = codex_runner.run(request).await;
-    let revoke_result = platform.revoke_agent_codex_run_tokens(run.id);
-    if let Err(error) = revoke_result {
-        tracing::error!(run_id = %run.id, error = %sanitize_error(&error.to_string()), "failed to revoke Agent Run Token");
-    }
-    let result = match result {
+    let mut control_settings = effective_settings.clone();
+    control_settings.sandbox_mode = AGENT_CODEX_SANDBOX_READ_ONLY.into();
+    control_settings.approval_policy = AGENT_CODEX_APPROVAL_POLICY_NEVER.into();
+    control_settings.network_access = false;
+    control_settings.web_search = "disabled".into();
+    control_settings.feature_multi_agent = false;
+    control_settings.feature_shell_tool = false;
+    let control_prompt = build_wakeup_prompt(WakeupPromptContext {
+        agent: &agent,
+        project_name: decision
+            .project
+            .as_ref()
+            .map(|project| project.name.as_str()),
+        pending_inbox_count: decision.pending_inbox_count,
+        active_task_count: decision.active_task_count,
+        waiting_task_count: decision.waiting_task_count,
+        asset_refresh_due: decision.asset_refresh_due,
+        workspace: &control_workspace,
+        relay_skills: &control_skills,
+    });
+    let control_result = run_codex_stage(
+        platform,
+        codex_runner,
+        trigger,
+        &run,
+        &control_workspace,
+        "control",
+        None,
+        control_prompt,
+        &control_skills,
+        &control_memories,
+        &control_settings,
+        &token.plaintext_token,
+    )
+    .await;
+    let control_result = match control_result {
         Ok(result) => result,
         Err(error) => {
+            let _ = platform.revoke_agent_codex_run_tokens(run.id);
             fail_run(platform, &mut run, None, error.to_string())?;
             return Err(error);
         }
     };
+    if control_result.status != CodexRunStatus::Succeeded {
+        let _ = platform.revoke_agent_codex_run_tokens(run.id);
+        apply_codex_result_to_run(&mut run, &control_result);
+        platform.update_agent_codex_trigger_run(run.clone())?;
+        return Ok(trigger_execution_from_result(&control_result));
+    }
+    let control_session = persist_codex_stage_session(
+        platform,
+        trigger.agent_profile_id,
+        "control",
+        AGENT_CODEX_SESSION_KIND_CONTROL,
+        None,
+        &control_workspace,
+        &control_skills,
+        &control_memories,
+        &control_result,
+    )?;
+    run.codex_thread_id = Some(control_session.codex_thread_id.clone());
+    run.final_message_summary = control_result
+        .final_message
+        .as_deref()
+        .map(|message| truncate(message, 2_000));
+
+    let mut worker_failure = None;
+    let intents = platform.list_agent_execution_intents(
+        trigger.agent_profile_id,
+        Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+        3,
+    );
+    for mut intent in intents {
+        intent.status = AGENT_EXECUTION_INTENT_STATUS_RUNNING.into();
+        intent.claimed_at = Some(now_utc());
+        platform.update_agent_execution_intent(intent.clone())?;
+        record_run_activity(
+            platform,
+            run.id,
+            "dispatching",
+            &format!("正在进入项目工作会话：{}", intent.project_id),
+            None,
+        );
+        let worker_result = execute_project_intent(
+            platform,
+            harness,
+            workspace_manager,
+            codex_runner,
+            trigger,
+            &run,
+            &agent,
+            &membership,
+            &skill_language,
+            &effective_settings,
+            &token.plaintext_token,
+            &intent,
+        )
+        .await;
+        match worker_result {
+            Ok((result, session)) if result.status == CodexRunStatus::Succeeded => {
+                intent.status = AGENT_EXECUTION_INTENT_STATUS_COMPLETED.into();
+                intent.worker_session_id = Some(session.id);
+                intent.result_summary = result
+                    .final_message
+                    .as_deref()
+                    .map(|message| truncate(message, 4_000))
+                    .unwrap_or_default();
+                intent.completed_at = Some(now_utc());
+                platform.update_agent_execution_intent(intent)?;
+                run.project_id = session.project_id;
+                run.codex_thread_id = Some(session.codex_thread_id);
+                run.final_message_summary = result
+                    .final_message
+                    .as_deref()
+                    .map(|message| truncate(message, 2_000));
+            }
+            Ok((result, _)) => {
+                intent.status = AGENT_EXECUTION_INTENT_STATUS_FAILED.into();
+                intent.error_message = result.error_message.clone();
+                intent.result_summary = result.final_message.clone().unwrap_or_default();
+                intent.completed_at = Some(now_utc());
+                platform.update_agent_execution_intent(intent)?;
+                worker_failure = Some(result);
+                break;
+            }
+            Err(error) => {
+                intent.status = AGENT_EXECUTION_INTENT_STATUS_FAILED.into();
+                intent.error_message = Some(sanitize_error(&error.to_string()));
+                intent.completed_at = Some(now_utc());
+                platform.update_agent_execution_intent(intent)?;
+                let _ = platform.revoke_agent_codex_run_tokens(run.id);
+                fail_run(platform, &mut run, None, error.to_string())?;
+                return Err(error);
+            }
+        }
+    }
+    if let Err(error) = platform.revoke_agent_codex_run_tokens(run.id) {
+        tracing::error!(run_id = %run.id, error = %sanitize_error(&error.to_string()), "failed to revoke Agent Run Token");
+    }
+    if let Some(result) = worker_failure.as_ref() {
+        apply_codex_result_to_run(&mut run, result);
+    } else {
+        run.status = AGENT_CODEX_RUN_STATUS_SUCCEEDED.into();
+        run.exit_code = Some(0);
+        run.finished_at = Some(now_utc());
+        run.error_message = None;
+    }
+    platform.update_agent_codex_trigger_run(run.clone())?;
+    let final_status = if worker_failure.is_some() {
+        CodexRunStatus::Failed
+    } else {
+        CodexRunStatus::Succeeded
+    };
+    let (final_phase, final_summary) = match final_status {
+        CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
+        CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
+        CodexRunStatus::TimedOut => ("timed_out", "Codex 本轮执行超时"),
+        CodexRunStatus::Cancelled => ("cancelled", "项目已暂停，Codex 本轮已停止"),
+    };
+    record_run_activity(
+        platform,
+        run.id,
+        final_phase,
+        final_summary,
+        run.codex_thread_id.clone(),
+    );
+    Ok(TriggerExecution {
+        succeeded: worker_failure.is_none(),
+        error_message: run.error_message,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_project_intent(
+    platform: &TriggerPlatform,
+    harness: &TriggerHarnessProvisioner,
+    workspace_manager: &GitWorkspaceManager,
+    codex_runner: &CodexTriggerRunner,
+    trigger: &AgentCodexTriggerConfig,
+    run: &AgentCodexTriggerRun,
+    agent: &AgentProfile,
+    membership: &ai_chat_domain::company::CompanyAgentMembership,
+    skill_language: &str,
+    settings: &EffectiveCodexCliSettings,
+    run_token: &str,
+    intent: &AgentExecutionIntent,
+) -> AppResult<(CodexRunResult, AgentCodexSession)> {
+    let project_view = platform.get_company_project(GetCompanyProjectInput {
+        actor_agent_id: trigger.agent_profile_id,
+        company_id: trigger.company_id,
+        project_id: intent.project_id,
+    })?;
+    let git = platform.get_agent_project_git_config(
+        trigger.agent_profile_id,
+        trigger.company_id,
+        intent.project_id,
+    )?;
+    let workspace = prepare_project_workspace_with_credential_recovery(
+        harness,
+        workspace_manager,
+        trigger.company_id,
+        intent.project_id,
+        trigger.agent_profile_id,
+        agent.owner_user_id,
+        &agent.handle,
+        &git,
+    )
+    .await?;
+    let scope_key = format!("project:{}", intent.project_id);
+    let worker_session_id = platform
+        .get_agent_codex_session(trigger.agent_profile_id, &scope_key)
+        .map(|session| session.id);
+    let memories = platform.agent_long_term_memories_for_project_session(
+        trigger.agent_profile_id,
+        trigger.company_id,
+        intent.project_id,
+        worker_session_id,
+    )?;
+    let skills = prepare_relay_skills(
+        &workspace.path,
+        RELAY_SKILL_BUNDLE_PROJECT,
+        agent,
+        &membership.job_title,
+        &membership.permissions,
+        &memories,
+        Some(&project_view.project),
+        project_view.rule.as_ref(),
+        skill_language,
+    )?;
+    let prompt = build_worker_prompt(WorkerPromptContext {
+        agent,
+        project: &project_view.project,
+        intent,
+        workspace: &workspace,
+        relay_skills: &skills,
+    });
+    let result = run_codex_stage(
+        platform,
+        codex_runner,
+        trigger,
+        run,
+        &workspace,
+        &scope_key,
+        Some(intent.project_id),
+        prompt,
+        &skills,
+        &memories,
+        settings,
+        run_token,
+    )
+    .await?;
+    let session = if result.status == CodexRunStatus::Succeeded {
+        persist_codex_stage_session(
+            platform,
+            trigger.agent_profile_id,
+            &scope_key,
+            AGENT_CODEX_SESSION_KIND_PROJECT,
+            Some(intent.project_id),
+            &workspace,
+            &skills,
+            &memories,
+            &result,
+        )?
+    } else {
+        platform
+            .get_agent_codex_session(trigger.agent_profile_id, &scope_key)
+            .unwrap_or_else(|| empty_stage_session(trigger.agent_profile_id, intent.project_id))
+    };
+    Ok((result, session))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_codex_stage(
+    platform: &TriggerPlatform,
+    codex_runner: &CodexTriggerRunner,
+    trigger: &AgentCodexTriggerConfig,
+    run: &AgentCodexTriggerRun,
+    workspace: &PreparedGitWorkspace,
+    scope_key: &str,
+    project_id: Option<Uuid>,
+    prompt: String,
+    _skills: &PreparedRelaySkills,
+    _memories: &[AgentMemory],
+    settings: &EffectiveCodexCliSettings,
+    run_token: &str,
+) -> AppResult<CodexRunResult> {
+    let session_key = codex_session_key(workspace);
+    let existing_thread_id = platform
+        .get_agent_codex_session(trigger.agent_profile_id, scope_key)
+        .and_then(|session| {
+            codex_session_key_matches(&session.workspace_key, &session_key)
+                .then_some(session.codex_thread_id)
+        });
+    codex_runner
+        .run(CodexRunRequest {
+            cwd: workspace.path.clone(),
+            codex_profile: trigger.codex_profile.clone(),
+            model: settings.model.clone(),
+            reasoning_effort: settings.reasoning_effort.clone(),
+            reasoning_summary: settings.reasoning_summary.clone(),
+            verbosity: settings.verbosity.clone(),
+            personality: settings.personality.clone(),
+            service_tier: settings.service_tier.clone(),
+            sandbox_mode: settings.sandbox_mode.clone(),
+            approval_policy: settings.approval_policy.clone(),
+            network_access: settings.network_access,
+            web_search: settings.web_search.clone(),
+            feature_multi_agent: settings.feature_multi_agent,
+            feature_remote_plugin: settings.feature_remote_plugin,
+            feature_hooks: settings.feature_hooks,
+            feature_goals: settings.feature_goals,
+            feature_shell_tool: settings.feature_shell_tool,
+            max_run_seconds: trigger.max_run_seconds as u64,
+            prompt,
+            existing_thread_id,
+            run_token: run_token.into(),
+            environment: workspace.auth_environment.clone(),
+            approval_handler: (settings.approval_policy == "on-request").then(|| {
+                Arc::new(PlatformCodexApprovalHandler {
+                    platform: platform.clone(),
+                    company_id: trigger.company_id,
+                    run_id: run.id,
+                    agent_id: trigger.agent_profile_id,
+                    expires_at: now_utc() + Duration::seconds(i64::from(trigger.max_run_seconds)),
+                }) as Arc<dyn CodexApprovalHandler>
+            }),
+            progress_handler: Some(Arc::new(PlatformCodexProgressHandler {
+                platform: platform.clone(),
+                run_id: run.id,
+            }) as Arc<dyn CodexProgressHandler>),
+            cancellation_handler: project_id.map(|project_id| {
+                Arc::new(PlatformProjectCancellationHandler {
+                    platform: platform.clone(),
+                    project_id,
+                }) as Arc<dyn CodexCancellationHandler>
+            }),
+        })
+        .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_codex_stage_session(
+    platform: &TriggerPlatform,
+    agent_id: Uuid,
+    scope_key: &str,
+    session_kind: &str,
+    project_id: Option<Uuid>,
+    workspace: &PreparedGitWorkspace,
+    skills: &PreparedRelaySkills,
+    memories: &[AgentMemory],
+    result: &CodexRunResult,
+) -> AppResult<AgentCodexSession> {
+    let thread_id = result.thread_id.clone().ok_or_else(|| {
+        AppError::Validation("successful Codex run did not return a thread ID".into())
+    })?;
+    let existing = platform.get_agent_codex_session(agent_id, scope_key);
+    let now = now_utc();
+    let summary = result
+        .final_message
+        .as_deref()
+        .map(|message| truncate(message, 1_000))
+        .unwrap_or_default();
+    let session = AgentCodexSession {
+        id: existing
+            .as_ref()
+            .map(|session| session.id)
+            .unwrap_or_else(Uuid::new_v4),
+        agent_profile_id: agent_id,
+        session_kind: session_kind.into(),
+        scope_key: scope_key.into(),
+        project_id,
+        generation: existing
+            .as_ref()
+            .map(|session| session.generation)
+            .unwrap_or(1),
+        codex_thread_id: thread_id,
+        workspace_key: codex_session_key(workspace),
+        status: AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),
+        summary_short: summary.clone(),
+        checkpoint_json: serde_json::json!({
+            "summary": summary,
+            "project_id": project_id,
+            "branch": workspace.branch,
+            "updated_at": now,
+        }),
+        skill_bundle_version: skills.version_hash.clone(),
+        memory_snapshot_version: memory_snapshot_version(memories),
+        policy_version: CODEX_SESSION_POLICY_VERSION.into(),
+        created_at: existing
+            .as_ref()
+            .map(|session| session.created_at)
+            .unwrap_or(now),
+        last_used_at: now,
+        archived_at: None,
+    };
+    platform.save_agent_codex_session(session.clone())?;
+    Ok(session)
+}
+
+fn memory_snapshot_version(memories: &[AgentMemory]) -> String {
+    let source = memories
+        .iter()
+        .map(|memory| format!("{}:{}:{}", memory.id, memory.updated_at, memory.topic_key))
+        .collect::<Vec<_>>()
+        .join("\n");
+    hash_secret(&source).chars().take(16).collect()
+}
+
+fn empty_stage_session(agent_id: Uuid, project_id: Uuid) -> AgentCodexSession {
+    let now = now_utc();
+    AgentCodexSession {
+        id: Uuid::nil(),
+        agent_profile_id: agent_id,
+        session_kind: AGENT_CODEX_SESSION_KIND_PROJECT.into(),
+        scope_key: format!("project:{project_id}"),
+        project_id: Some(project_id),
+        generation: 1,
+        codex_thread_id: String::new(),
+        workspace_key: String::new(),
+        status: AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),
+        summary_short: String::new(),
+        checkpoint_json: serde_json::json!({}),
+        skill_bundle_version: String::new(),
+        memory_snapshot_version: String::new(),
+        policy_version: CODEX_SESSION_POLICY_VERSION.into(),
+        created_at: now,
+        last_used_at: now,
+        archived_at: None,
+    }
+}
+
+fn apply_codex_result_to_run(run: &mut AgentCodexTriggerRun, result: &CodexRunResult) {
     run.codex_thread_id = result.thread_id.clone();
     run.exit_code = result.exit_code;
     run.finished_at = Some(now_utc());
@@ -326,47 +659,18 @@ pub(super) async fn execute_trigger(
         CodexRunStatus::Cancelled => AGENT_CODEX_RUN_STATUS_CANCELLED,
     }
     .into();
-    if result.status == CodexRunStatus::Succeeded {
-        let Some(thread_id) = result.thread_id else {
-            let error =
-                AppError::Validation("successful Codex run did not return a thread ID".into());
-            fail_run(platform, &mut run, result.exit_code, error.to_string())?;
-            return Err(error);
-        };
-        if let Err(error) = platform.save_agent_codex_session(AgentCodexSession {
-            agent_profile_id: trigger.agent_profile_id,
-            current_project_id: decision.project.as_ref().map(|project| project.id),
-            codex_thread_id: thread_id,
-            worktree_key: session_key,
-            last_used_at: now_utc(),
-        }) {
-            fail_run(platform, &mut run, result.exit_code, error.to_string())?;
-            return Err(error);
-        }
-    }
-    platform.update_agent_codex_trigger_run(run.clone())?;
-    let (final_phase, final_summary) = match result.status {
-        CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
-        CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
-        CodexRunStatus::TimedOut => ("timed_out", "Codex 本轮执行超时"),
-        CodexRunStatus::Cancelled => ("cancelled", "项目已暂停，Codex 本轮已停止"),
-    };
-    record_run_activity(
-        platform,
-        run.id,
-        final_phase,
-        final_summary,
-        run.codex_thread_id.clone(),
-    );
-    Ok(TriggerExecution {
+}
+
+fn trigger_execution_from_result(result: &CodexRunResult) -> TriggerExecution {
+    TriggerExecution {
         succeeded: matches!(
             result.status,
             CodexRunStatus::Succeeded | CodexRunStatus::Cancelled
         ),
         error_message: (result.status != CodexRunStatus::Cancelled)
-            .then_some(result.error_message)
+            .then_some(result.error_message.clone())
             .flatten(),
-    })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

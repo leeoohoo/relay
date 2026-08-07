@@ -12,6 +12,63 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if let Some(project_id) = input.project_id {
             self.ensure_company_project_access(input.company_id, project_id, input.actor_agent_id)?;
         }
+        let scope = input
+            .scope
+            .as_deref()
+            .map(normalize_agent_memory_scope)
+            .transpose()?
+            .unwrap_or_else(|| {
+                if input.session_id.is_some() {
+                    AGENT_MEMORY_SCOPE_SESSION.into()
+                } else if input.project_id.is_some() {
+                    AGENT_MEMORY_SCOPE_PROJECT.into()
+                } else {
+                    AGENT_MEMORY_SCOPE_AGENT.into()
+                }
+            });
+        let session_visibility = match scope.as_str() {
+            AGENT_MEMORY_SCOPE_AGENT | AGENT_MEMORY_SCOPE_CONTROL => {
+                if input.project_id.is_some() || input.session_id.is_some() {
+                    return Err(AppError::Validation(
+                        "agent and control memories cannot bind a project or session".into(),
+                    ));
+                }
+                None
+            }
+            AGENT_MEMORY_SCOPE_PROJECT => {
+                if input.project_id.is_none() || input.session_id.is_some() {
+                    return Err(AppError::Validation(
+                        "project memories require project_id and cannot bind session_id".into(),
+                    ));
+                }
+                None
+            }
+            AGENT_MEMORY_SCOPE_SESSION => {
+                let session_id = input.session_id.ok_or_else(|| {
+                    AppError::Validation("session memories require session_id".into())
+                })?;
+                let session = self
+                    .repo
+                    .list_agent_codex_sessions(input.actor_agent_id, 100)
+                    .into_iter()
+                    .find(|session| session.id == session_id);
+                if input.project_id.is_some() || session.is_none() {
+                    return Err(AppError::Unauthorized(
+                        "Agent cannot bind memory to the requested session".into(),
+                    ));
+                }
+                Some(
+                    if session.is_some_and(|session| {
+                        session.session_kind == AGENT_CODEX_SESSION_KIND_CONTROL
+                    }) {
+                        AGENT_MEMORY_VISIBILITY_CONTROL
+                    } else {
+                        AGENT_MEMORY_VISIBILITY_WORKER
+                    },
+                )
+            }
+            _ => unreachable!("memory scope is normalized"),
+        };
         let memory_tier = normalize_agent_memory_tier(&input.memory_tier)?;
         let topic_key = normalize_agent_memory_topic_key(input.topic_key)?;
         let memory_type = normalize_agent_memory_type(&input.memory_type)?;
@@ -80,6 +137,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if let Some(existing) = existing_memories.iter().find(|memory| {
             memory.topic_key == topic_key
                 && memory.owner_agent_id == input.actor_agent_id
+                && memory.scope == scope
+                && memory.project_id == input.project_id
+                && memory.session_id == input.session_id
                 && matches!(
                     memory.status.as_str(),
                     AGENT_MEMORY_STATUS_DRAFT | AGENT_MEMORY_STATUS_ACTIVE
@@ -95,9 +155,23 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             id: Uuid::new_v4(),
             company_id: input.company_id,
             owner_agent_id: input.actor_agent_id,
-            scope: AGENT_MEMORY_SCOPE_AGENT.into(),
+            scope: scope.clone(),
             project_id: input.project_id,
+            session_id: input.session_id,
             memory_tier,
+            injection_mode: if input.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
+                AGENT_MEMORY_INJECTION_ALWAYS.into()
+            } else {
+                AGENT_MEMORY_INJECTION_ON_DEMAND.into()
+            },
+            visibility: match scope.as_str() {
+                AGENT_MEMORY_SCOPE_CONTROL => AGENT_MEMORY_VISIBILITY_CONTROL,
+                AGENT_MEMORY_SCOPE_PROJECT => AGENT_MEMORY_VISIBILITY_WORKER,
+                AGENT_MEMORY_SCOPE_SESSION => session_visibility
+                    .expect("session memory visibility is resolved from its bound session"),
+                _ => AGENT_MEMORY_VISIBILITY_BOTH,
+            }
+            .into(),
             memory_type,
             topic_key,
             title,
@@ -139,6 +213,40 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if let Some(project_id) = input.project_id {
             self.ensure_company_project_access(input.company_id, project_id, input.actor_agent_id)?;
         }
+        for scope in &input.scopes {
+            normalize_agent_memory_scope(scope)?;
+        }
+        let requested_session = input.session_id.map_or(Ok(None), |session_id| {
+            self.repo
+                .list_agent_codex_sessions(input.actor_agent_id, 100)
+                .into_iter()
+                .find(|session| session.id == session_id)
+                .map(Some)
+                .ok_or_else(|| {
+                    AppError::Unauthorized(
+                        "Agent cannot search the requested session memory".into(),
+                    )
+                })
+        })?;
+        if let (Some(project_id), Some(session)) = (input.project_id, requested_session.as_ref()) {
+            if session
+                .project_id
+                .is_some_and(|bound_project_id| bound_project_id != project_id)
+            {
+                return Err(AppError::Unauthorized(
+                    "Agent session is not bound to the requested project".into(),
+                ));
+            }
+        }
+        let context_project_id = input.project_id.or_else(|| {
+            requested_session
+                .as_ref()
+                .and_then(|session| session.project_id)
+        });
+        let include_control_scope = context_project_id.is_none()
+            && requested_session
+                .as_ref()
+                .is_none_or(|session| session.session_kind == AGENT_CODEX_SESSION_KIND_CONTROL);
         for memory_tier in &input.memory_tiers {
             normalize_agent_memory_tier(memory_tier)?;
         }
@@ -166,9 +274,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|memory| memory.owner_agent_id == input.actor_agent_id)
             .filter(|memory| memory.expires_at.is_none_or(|expires_at| expires_at > now))
             .filter(|memory| {
-                input
-                    .project_id
-                    .is_none_or(|project_id| memory.project_id == Some(project_id))
+                if !input.scopes.is_empty() && !input.scopes.contains(&memory.scope) {
+                    return false;
+                }
+                memory.scope == AGENT_MEMORY_SCOPE_AGENT
+                    || (include_control_scope && memory.scope == AGENT_MEMORY_SCOPE_CONTROL)
+                    || (memory.scope == AGENT_MEMORY_SCOPE_PROJECT
+                        && memory.project_id == context_project_id)
+                    || (memory.scope == AGENT_MEMORY_SCOPE_SESSION
+                        && memory.session_id == input.session_id)
             })
             .filter(|memory| {
                 requested_status.as_ref().map_or_else(
@@ -252,6 +366,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }
         if let Some(memory_tier) = input.memory_tier {
             memory.memory_tier = normalize_agent_memory_tier(&memory_tier)?;
+            memory.injection_mode = if memory.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
+                AGENT_MEMORY_INJECTION_ALWAYS.into()
+            } else {
+                AGENT_MEMORY_INJECTION_ON_DEMAND.into()
+            };
         }
         if let Some(title) = input.title {
             memory.title = normalize_agent_memory_text(title, 200, "memory title", 1)?;
@@ -381,6 +500,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         company_id: Uuid,
         project_id: Option<Uuid>,
     ) -> AppResult<AgentMemoryOverview> {
+        self.agent_memory_overview_for_context(actor_agent_id, company_id, project_id, None)
+    }
+
+    fn agent_memory_overview_for_context(
+        &self,
+        actor_agent_id: Uuid,
+        company_id: Uuid,
+        project_id: Option<Uuid>,
+        session_id: Option<Uuid>,
+    ) -> AppResult<AgentMemoryOverview> {
         let membership = self.get_active_company_agent_membership(actor_agent_id)?;
         if membership.company_id != company_id {
             return Err(AppError::Unauthorized(
@@ -395,7 +524,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|memory| memory.owner_agent_id == actor_agent_id)
             .filter(|memory| memory.expires_at.is_none_or(|expires_at| expires_at > now))
             .filter(|memory| {
-                project_id.is_none_or(|project_id| memory.project_id == Some(project_id))
+                memory.scope == AGENT_MEMORY_SCOPE_AGENT
+                    || (project_id.is_none() && memory.scope == AGENT_MEMORY_SCOPE_CONTROL)
+                    || (memory.scope == AGENT_MEMORY_SCOPE_PROJECT
+                        && memory.project_id == project_id)
+                    || (memory.scope == AGENT_MEMORY_SCOPE_SESSION
+                        && memory.session_id == session_id)
             })
             .collect::<Vec<_>>();
         let active_count = visible
@@ -467,6 +601,45 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .long_term)
     }
 
+    pub fn agent_long_term_memories_for_control_session(
+        &self,
+        actor_agent_id: Uuid,
+        company_id: Uuid,
+        session_id: Option<Uuid>,
+    ) -> AppResult<Vec<AgentMemory>> {
+        Ok(self
+            .agent_memory_overview_for_context(actor_agent_id, company_id, None, session_id)?
+            .long_term)
+    }
+
+    pub fn agent_long_term_memories_for_project(
+        &self,
+        actor_agent_id: Uuid,
+        company_id: Uuid,
+        project_id: Uuid,
+    ) -> AppResult<Vec<AgentMemory>> {
+        Ok(self
+            .agent_memory_overview(actor_agent_id, company_id, Some(project_id))?
+            .long_term)
+    }
+
+    pub fn agent_long_term_memories_for_project_session(
+        &self,
+        actor_agent_id: Uuid,
+        company_id: Uuid,
+        project_id: Uuid,
+        session_id: Option<Uuid>,
+    ) -> AppResult<Vec<AgentMemory>> {
+        Ok(self
+            .agent_memory_overview_for_context(
+                actor_agent_id,
+                company_id,
+                Some(project_id),
+                session_id,
+            )?
+            .long_term)
+    }
+
     pub fn list_company_memories_for_human(
         &self,
         input: ListCompanyMemoriesForHumanInput,
@@ -482,6 +655,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .as_deref()
             .map(normalize_agent_memory_status)
             .transpose()?;
+        let requested_scope = input
+            .scope
+            .as_deref()
+            .map(normalize_agent_memory_scope)
+            .transpose()?;
         let query = input.query.unwrap_or_default().to_lowercase();
         let mut memories = self
             .repo
@@ -491,6 +669,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 input
                     .owner_agent_id
                     .is_none_or(|agent_id| memory.owner_agent_id == agent_id)
+            })
+            .filter(|memory| {
+                requested_scope
+                    .as_ref()
+                    .is_none_or(|scope| &memory.scope == scope)
             })
             .filter(|memory| {
                 input

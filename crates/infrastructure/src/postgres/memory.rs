@@ -7,7 +7,8 @@ impl MemoryPlatformRepositoryPort for PostgresPlatformRepository {
             client.execute(
                 r#"
                 INSERT INTO agent_memories (
-                    id, company_id, owner_agent_id, scope, project_id, memory_tier, memory_type,
+                    id, company_id, owner_agent_id, scope, project_id, session_id,
+                    memory_tier, injection_mode, visibility, memory_type,
                     topic_key, title, summary, when_to_use, tags, importance, confidence,
                     pinned, status, source_refs, supersedes_memory_id, expires_at,
                     verified_by_agent_id, verified_by_human_user_id, verified_at,
@@ -17,7 +18,7 @@ impl MemoryPlatformRepositoryPort for PostgresPlatformRepository {
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
                     $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-                    $25, $26, $27, $28
+                    $25, $26, $27, $28, $29, $30, $31
                 )
                 "#,
                 &[
@@ -26,7 +27,10 @@ impl MemoryPlatformRepositoryPort for PostgresPlatformRepository {
                     &memory.owner_agent_id,
                     &memory.scope,
                     &memory.project_id,
+                    &memory.session_id,
                     &memory.memory_tier,
+                    &memory.injection_mode,
+                    &memory.visibility,
                     &memory.memory_type,
                     &memory.topic_key,
                     &memory.title,
@@ -61,28 +65,32 @@ impl MemoryPlatformRepositoryPort for PostgresPlatformRepository {
                 r#"
                 UPDATE agent_memories
                 SET memory_tier = $2,
-                    title = $3,
-                    summary = $4,
-                    when_to_use = $5,
-                    tags = $6,
-                    importance = $7,
-                    confidence = $8,
-                    pinned = $9,
-                    status = $10,
-                    source_refs = $11,
-                    supersedes_memory_id = $12,
-                    expires_at = $13,
-                    verified_by_agent_id = $14,
-                    verified_by_human_user_id = $15,
-                    verified_at = $16,
-                    updated_by_agent_id = $17,
-                    updated_by_human_user_id = $18,
-                    updated_at = $19
+                    injection_mode = $3,
+                    visibility = $4,
+                    title = $5,
+                    summary = $6,
+                    when_to_use = $7,
+                    tags = $8,
+                    importance = $9,
+                    confidence = $10,
+                    pinned = $11,
+                    status = $12,
+                    source_refs = $13,
+                    supersedes_memory_id = $14,
+                    expires_at = $15,
+                    verified_by_agent_id = $16,
+                    verified_by_human_user_id = $17,
+                    verified_at = $18,
+                    updated_by_agent_id = $19,
+                    updated_by_human_user_id = $20,
+                    updated_at = $21
                 WHERE id = $1
                 "#,
                 &[
                     &memory.id,
                     &memory.memory_tier,
+                    &memory.injection_mode,
+                    &memory.visibility,
                     &memory.title,
                     &memory.summary,
                     &memory.when_to_use,
@@ -114,7 +122,8 @@ impl MemoryPlatformRepositoryPort for PostgresPlatformRepository {
         self.with_client(|client| {
             client.query_opt(
                 r#"
-                SELECT id, company_id, owner_agent_id, scope, project_id, memory_tier, memory_type,
+                SELECT id, company_id, owner_agent_id, scope, project_id, session_id,
+                       memory_tier, injection_mode, visibility, memory_type,
                        topic_key, title, summary, when_to_use, tags, importance, confidence,
                        pinned, status, source_refs, supersedes_memory_id, expires_at,
                        verified_by_agent_id, verified_by_human_user_id, verified_at,
@@ -138,7 +147,8 @@ impl MemoryPlatformRepositoryPort for PostgresPlatformRepository {
         self.with_client(|client| {
             client.query(
                 r#"
-                SELECT id, company_id, owner_agent_id, scope, project_id, memory_tier, memory_type,
+                SELECT id, company_id, owner_agent_id, scope, project_id, session_id,
+                       memory_tier, injection_mode, visibility, memory_type,
                        topic_key, title, summary, when_to_use, tags, importance, confidence,
                        pinned, status, source_refs, supersedes_memory_id, expires_at,
                        verified_by_agent_id, verified_by_human_user_id, verified_at,

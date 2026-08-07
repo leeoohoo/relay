@@ -192,8 +192,36 @@ pub trait CodexRuntimePlatformRepository: Send + Sync {
             "Codex sessions are not supported by this repository".into(),
         ))
     }
-    fn get_agent_codex_session(&self, _agent_id: Uuid) -> Option<AgentCodexSession> {
+    fn get_agent_codex_session(
+        &self,
+        _agent_id: Uuid,
+        _scope_key: &str,
+    ) -> Option<AgentCodexSession> {
         None
+    }
+    fn list_agent_codex_sessions(&self, _agent_id: Uuid, _limit: usize) -> Vec<AgentCodexSession> {
+        Vec::new()
+    }
+    fn insert_agent_execution_intent(&self, _intent: AgentExecutionIntent) -> AppResult<()> {
+        Err(AppError::Validation(
+            "Agent execution intents are not supported by this repository".into(),
+        ))
+    }
+    fn update_agent_execution_intent(&self, _intent: AgentExecutionIntent) -> AppResult<()> {
+        Err(AppError::Validation(
+            "Agent execution intents are not supported by this repository".into(),
+        ))
+    }
+    fn get_agent_execution_intent(&self, _intent_id: Uuid) -> Option<AgentExecutionIntent> {
+        None
+    }
+    fn list_agent_execution_intents(
+        &self,
+        _agent_id: Uuid,
+        _status: Option<&str>,
+        _limit: usize,
+    ) -> Vec<AgentExecutionIntent> {
+        Vec::new()
     }
     fn insert_agent_codex_run_token(&self, _token: AgentCodexRunToken) -> AppResult<()> {
         Err(AppError::Validation(

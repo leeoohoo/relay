@@ -11,6 +11,14 @@ pub(super) struct WakeupPromptContext<'a> {
     pub(super) relay_skills: &'a PreparedRelaySkills,
 }
 
+pub(super) struct WorkerPromptContext<'a> {
+    pub(super) agent: &'a AgentProfile,
+    pub(super) project: &'a CompanyProject,
+    pub(super) intent: &'a AgentExecutionIntent,
+    pub(super) workspace: &'a PreparedGitWorkspace,
+    pub(super) relay_skills: &'a PreparedRelaySkills,
+}
+
 pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
     let WakeupPromptContext {
         agent,
@@ -35,37 +43,90 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         .as_deref()
         .map(|name| format!("，并在涉及人员管理时同时使用 `${name}`"))
         .unwrap_or_default();
-    let project_skill = relay_skills
-        .project_name
-        .as_deref()
-        .map(|name| format!("，处理当前项目时还必须使用 `${name}`"))
-        .unwrap_or_default();
     format!(
-        "你是 Relay 公司 Agent @{handle}（{display_name}），这是定时触发器对同一个 Codex 会话的一次唤醒。{project_context}\n\
-         当前工作目录是本次分配的隔离工作区，worktree key 为 {worktree_key}，当前 Agent 分支为 {branch}。触发器只负责唤醒，不会替你理解或处理业务。\n\
-         本工作区已经生成与你当前身份、职业、项目类型和权限一致的最新版 Relay Skill。必须先使用 `${employee_skill}` 和 `${profession_skill}`{staffing_skill}{project_skill}；Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准；Human 项目 Rule 不得弱化系统项目类型规则。\n\
+        "你是 Relay 公司 Agent @{handle}（{display_name}），这是控制会话的一次有效唤醒。{project_context}\n\
+         当前工作目录是专属于本 Agent 的 Relay 控制工作区，worktree key 为 {worktree_key}。这里用于消息分诊、协调和派工，不是项目代码工作区。\n\
+         必须先使用 `${employee_skill}`、`${profession_skill}` 和 `${session_skill}`{staffing_skill}；职业执行 Skill 在控制会话中同样生效，用于判断职责、拆解、质量要求和是否需要启动项目工作。Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准。\n\
          宿主机 Codex CLI 已加载管理员启用的插件。当前任务需要浏览器、文档、表格、设计、安全扫描或外部服务能力时，优先使用匹配的已安装插件及其 Skill/MCP；不要假设未安装的插件可用，也不要自行绕过插件认证策略。\n\
-         请先调用 required Relay MCP 的 agent.bootstrap，再调用 company.task 的 my 区分可执行任务和等待前置任务，然后调用 agent.inbox.wait（不要无限等待）读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。\n\
-         你的长期记忆已经固化在 `${employee_skill}` 的“Agent 固化长期记忆”章节中，本轮必须遵循；短期记忆不会自动进入上下文，只有当前任务需要历史线索时才调用 agent.memory search。结束前只有在产生可跨会话长期指导工作的稳定规则时才保存为 long_term，一般阶段性结论保存为 short_term。写入前先按 topic_key 搜索并更新已有记忆，禁止保存原始聊天、任务正文、运行日志、临时进度或任何凭证。没有新知识就不要写记忆。\n\
-         {asset_refresh_context}\n\
-         由你自行查看消息、项目和任务，完成必要的代码修改与测试；仅在消息明确 @/私聊要求你回应、正式任务要求沟通，或你掌握能立即避免当前交付失败或解除已确认阻塞的新证据时，才通过 Relay MCP 发消息。普通优化想法、字段补充和命名建议不要在无任务时主动群发。不要发送纯粹的“收到”“暂无待办”“还没轮到我”或等待状态。\n\
-         需要共享的代码或文档应提交到当前 Agent 分支并执行 git push；不要直接提交或推送受保护的默认分支。首次 push 可以直接使用 git push，工作区已配置自动建立远端上游分支。\n\
-         当前工作区已预配置 GIT_DIR 和 GIT_WORK_TREE，Git 元数据位于工作区内可写的 .relay-git，Git 命令网络也已启用。直接使用普通 git status/add/commit/push；不要取消或覆盖这两个环境变量，不要创建替代 gitdir、嵌套仓库、导出仓库或 bundle。如果标准命令仍失败，保留原始错误并报告，不要自行改造仓库结构。\n\
-         需要处理的事项完成后更新任务并 ack Inbox；已经确认无需行动的事件也应 ack 或标记已读，避免重复触发。不要让触发器代发消息，也不要输出给触发器解析的自定义行动 JSON。\n\
+         先调用 required Relay MCP 的 agent.bootstrap，查看其中的 work_sessions，再调用 company.task 的 my 和 agent.inbox.wait 读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。需要更多会话信息时调用 agent.work_session 的 list/get。\n\
+         你的 Agent 核心与控制长期记忆已经固化在 `${employee_skill}` 中；短期记忆只在需要历史线索时通过 agent.memory search 查询。控制会话不得读取或固化其他项目的实现细节。\n\
+         {asset_refresh_context} 如果它或其他事项需要项目执行，调用 agent.work_session 的 dispatch 创建结构化 Intent；项目工作会话由 Relay 按 Agent + Project 绑定解析。不要在控制工作区修改代码、运行项目测试、提交 Git，也不要自行选择 Thread ID。\n\
+         仅在消息明确 @/私聊要求回应、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。不要发送纯粹的“收到”“暂无待办”或等待占位消息。\n\
+         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
          如果没有分配给你的可执行工作、依赖尚未完成或还没有轮到你，不发送 Relay 消息，直接结束本轮。切勿操作当前工作目录之外的项目。",
         handle = agent.handle.trim_start_matches('@'),
         display_name = agent.display_name,
         worktree_key = workspace.worktree_key,
-        branch = workspace.branch,
         employee_skill = relay_skills.employee_name,
         profession_skill = relay_skills.profession_name,
+        session_skill = relay_skills.session_name,
+    )
+}
+
+pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
+    let criteria = if context.intent.acceptance_criteria.is_empty() {
+        "- 按项目 Rule 和职业 Skill 完成可验证交付".into()
+    } else {
+        context
+            .intent
+            .acceptance_criteria
+            .iter()
+            .map(|item| format!("- {item}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let task_ids = context
+        .intent
+        .task_ids
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let event_ids = context
+        .intent
+        .source_event_ids
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let project_skill = context
+        .relay_skills
+        .project_name
+        .as_deref()
+        .unwrap_or("relay-project-context");
+    format!(
+        "你是 Relay 公司 Agent @{handle}（{display_name}），本轮已进入项目 `{project_name}` 的独立工作会话。\n\
+         当前工作目录是该 Agent 在本项目的隔离工作区，worktree key 为 {worktree_key}，分支为 {branch}。\n\
+         必须使用 `${employee_skill}`、`${profession_skill}`、`${session_skill}` 和 `${project_skill}`。职业 Skill 与项目 Rule 的流程和质量门槛不能省略。\n\
+         本轮 Execution Intent ID：{intent_id}\n\
+         目标：{objective}\n\
+         优先级：{priority}\n\
+         关联 Task IDs：{task_ids}\n\
+         来源 Event IDs：{event_ids}\n\
+         验收标准：\n{criteria}\n\
+         先调用 agent.bootstrap，再用 company.project get 和 company.task get/list 核实实时状态。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
+         完成必要的设计、实现、测试、文档和 Git 提交推送；不要直接写受保护默认分支。更新关联任务与项目状态。\n\
+         长期记忆只保存稳定知识：跨项目通用内容使用 agent scope，当前项目特有内容使用 project scope 并带 project_id；阶段性线索使用 short_term。禁止保存聊天原文、任务正文、日志和凭证。\n\
+         最终回复必须简洁列出：已完成、验证、未完成/阻塞、下一步、分支和 Commit。",
+        handle = context.agent.handle.trim_start_matches('@'),
+        display_name = context.agent.display_name,
+        project_name = context.project.name,
+        worktree_key = context.workspace.worktree_key,
+        branch = context.workspace.branch,
+        employee_skill = context.relay_skills.employee_name,
+        profession_skill = context.relay_skills.profession_name,
+        session_skill = context.relay_skills.session_name,
         project_skill = project_skill,
+        intent_id = context.intent.id,
+        objective = context.intent.objective,
+        priority = context.intent.priority,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare_relay_skills(
     workspace_path: &Path,
+    bundle_kind: &str,
     agent: &AgentProfile,
     job_title: &str,
     permissions: &[String],
@@ -82,11 +143,17 @@ pub(super) fn prepare_relay_skills(
         "{managed_prefix}profession-{}",
         profession.key.replace('_', "-")
     );
-    let staffing_name = permissions
-        .iter()
-        .any(|permission| permission.starts_with("agent.staff."))
-        .then(|| format!("{managed_prefix}staffing"));
-    let project_name = project.map(|project| {
+    let session_name = format!("{managed_prefix}{bundle_kind}");
+    let is_control = bundle_kind == RELAY_SKILL_BUNDLE_CONTROL;
+    let staffing_name = is_control
+        .then_some(())
+        .filter(|_| {
+            permissions
+                .iter()
+                .any(|permission| permission.starts_with("agent.staff."))
+        })
+        .map(|_| format!("{managed_prefix}staffing"));
+    let project_name = (!is_control).then_some(project).flatten().map(|project| {
         format!(
             "{managed_prefix}project-{}",
             project
@@ -126,6 +193,13 @@ pub(super) fn prepare_relay_skills(
         &employee_name,
         skill_language,
     );
+    let session_content = bind_relay_skill(
+        &session_skill_template(bundle_kind, skill_language),
+        &session_name,
+        agent,
+        &employee_name,
+        skill_language,
+    );
     let staffing_content = staffing_name.as_ref().map(|name| {
         bind_relay_skill(
             &tailor_relay_skill_to_permissions(staffing_template, permissions),
@@ -155,6 +229,7 @@ pub(super) fn prepare_relay_skills(
     remove_stale_managed_skills(&skills_root, &managed_prefix)?;
     write_managed_skill(&skills_root, &employee_name, &employee_content)?;
     write_managed_skill(&skills_root, &profession_name, &profession_content)?;
+    write_managed_skill(&skills_root, &session_name, &session_content)?;
     if let (Some(name), Some(content)) = (staffing_name.as_deref(), staffing_content.as_deref()) {
         write_managed_skill(&skills_root, name, content)?;
     }
@@ -163,24 +238,36 @@ pub(super) fn prepare_relay_skills(
     }
     exclude_managed_skills_from_git(workspace_path, &managed_prefix)?;
 
-    #[cfg(test)]
     let version_source = format!(
-        "{employee_name}\n{employee_base_content}\n{profession_name}\n{profession_content}\n{}\n{}\n{}\n{}",
+        "{employee_name}\n{employee_base_content}\n{profession_name}\n{profession_content}\n{session_name}\n{session_content}\n{}\n{}\n{}\n{}",
         staffing_name.as_deref().unwrap_or_default(),
         staffing_content.as_deref().unwrap_or_default(),
         project_name.as_deref().unwrap_or_default(),
         project_content.as_deref().unwrap_or_default()
     );
-    #[cfg(test)]
     let version_hash = hash_secret(&version_source).chars().take(16).collect();
     Ok(PreparedRelaySkills {
         employee_name,
         profession_name,
+        session_name,
         project_name,
         staffing_name,
-        #[cfg(test)]
         version_hash,
     })
+}
+
+fn session_skill_template(bundle_kind: &str, skill_language: &str) -> String {
+    let english = skill_language == COMPANY_SKILL_LANGUAGE_EN;
+    if bundle_kind == RELAY_SKILL_BUNDLE_CONTROL {
+        if english {
+            return "---\nname: relay-control-session\ndescription: Mandatory Relay control-plane workflow for inbox triage, communication, task coordination, work-session selection, and structured project dispatch. Use on every control-session wake.\n---\n\n# Relay Control Session\n\n- Inspect inbox, assigned tasks, project hints, and the work-session directory before deciding.\n- Apply the profession Skill when judging ownership, decomposition, quality expectations, and whether project execution is required.\n- Handle communication and coordination here. Do not edit project files or run project delivery work from the control workspace.\n- Start project work only through `agent.work_session` with action `dispatch`. Supply a project ID, concise objective, acceptance criteria, relevant task IDs, and source event IDs.\n- Existing sessions are selected by project binding; never invent or pass a Codex thread ID.\n- If no project execution is needed, reply or acknowledge the event and finish without dispatching.\n- Agent and control long-term memories may guide routing. Project memory belongs to the selected worker session.\n".into();
+        }
+        return "---\nname: relay-control-session\ndescription: Relay 控制会话的强制工作流，用于 Inbox 分诊、通信、任务协调、工作会话选择和结构化项目派工。每次控制会话唤醒都必须使用。\n---\n\n# Relay 控制会话\n\n- 决策前检查 Inbox、分配任务、项目提示和工作会话目录。\n- 判断职责归属、任务拆解、质量要求和是否需要项目执行时，必须同时遵循职业 Skill。\n- 通信和协调在本会话完成；不得在控制工作区修改项目文件或执行项目交付。\n- 只有确实需要项目工作时，才调用 `agent.work_session` 的 `dispatch`，提供项目 ID、精简目标、验收标准、关联任务 ID 和来源事件 ID。\n- 会话由项目绑定解析，禁止自行编造或传递 Codex Thread ID。\n- 不需要项目执行时，直接回复或 Ack 后结束，不得创建占位派工。\n- Agent 与控制长期记忆可以指导路由；项目记忆只属于被选中的工作会话。\n".into();
+    }
+    if english {
+        return "---\nname: relay-project-worker\ndescription: Mandatory Relay project-worker workflow for executing one structured intent in the project-bound workspace, validating the result, committing delivery, and updating Relay state. Use on every project worker turn.\n---\n\n# Relay Project Worker\n\n- Execute only the supplied project-bound intent and verify the live project, tasks, and Rule through Relay MCP.\n- Follow the profession Skill and project Skill throughout implementation.\n- Use only the current project workspace; never inspect another project workspace.\n- Complete the required design, implementation, validation, documentation, and Git delivery steps.\n- Update tasks and project status with verified results. Save project-scoped memory only for durable project knowledge.\n- Finish with a concise checkpoint: completed work, pending work, blockers, next steps, branch, and commit.\n".into();
+    }
+    "---\nname: relay-project-worker\ndescription: Relay 项目工作会话的强制执行流程，用于在项目绑定工作区完成一个结构化 Intent、验证结果、提交交付并回写 Relay 状态。每次项目工作会话都必须使用。\n---\n\n# Relay 项目工作会话\n\n- 只执行本轮传入且已绑定当前项目的 Intent，并通过 Relay MCP 核实项目、任务和 Rule 的实时状态。\n- 实施全过程必须遵循职业 Skill 和当前项目 Skill。\n- 只能使用当前项目工作区，禁止检查其他项目工作区。\n- 完成必要的设计、实现、验证、文档和 Git 交付步骤。\n- 使用已验证结果更新任务和项目状态；只有稳定的项目知识才能保存为 project scope 记忆。\n- 结束时提供精简检查点：已完成、未完成、阻塞、下一步、分支和 Commit。\n".into()
 }
 
 pub(super) fn build_project_skill_template(

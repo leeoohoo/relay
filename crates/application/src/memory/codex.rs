@@ -573,15 +573,85 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
 
     fn save_agent_codex_session(&self, session: AgentCodexSession) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        guard
-            .agent_codex_sessions
-            .insert(session.agent_profile_id, session);
+        guard.agent_codex_sessions.insert(
+            (session.agent_profile_id, session.scope_key.clone()),
+            session,
+        );
         Ok(())
     }
 
-    fn get_agent_codex_session(&self, agent_id: Uuid) -> Option<AgentCodexSession> {
+    fn get_agent_codex_session(
+        &self,
+        agent_id: Uuid,
+        scope_key: &str,
+    ) -> Option<AgentCodexSession> {
         let guard = self.inner.read().expect("memory repo lock poisoned");
-        guard.agent_codex_sessions.get(&agent_id).cloned()
+        guard
+            .agent_codex_sessions
+            .get(&(agent_id, scope_key.to_string()))
+            .cloned()
+    }
+
+    fn list_agent_codex_sessions(&self, agent_id: Uuid, limit: usize) -> Vec<AgentCodexSession> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        let mut sessions = guard
+            .agent_codex_sessions
+            .values()
+            .filter(|session| session.agent_profile_id == agent_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| right.last_used_at.cmp(&left.last_used_at));
+        sessions.truncate(limit);
+        sessions
+    }
+
+    fn insert_agent_execution_intent(&self, intent: AgentExecutionIntent) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if guard.agent_execution_intents.values().any(|existing| {
+            existing.agent_profile_id == intent.agent_profile_id
+                && existing.dedupe_key == intent.dedupe_key
+        }) {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "Agent execution intent dedupe key already exists".into(),
+            ));
+        }
+        guard.agent_execution_intents.insert(intent.id, intent);
+        Ok(())
+    }
+
+    fn update_agent_execution_intent(&self, intent: AgentExecutionIntent) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if !guard.agent_execution_intents.contains_key(&intent.id) {
+            return Err(ai_chat_shared::AppError::NotFound(
+                "Agent execution intent not found".into(),
+            ));
+        }
+        guard.agent_execution_intents.insert(intent.id, intent);
+        Ok(())
+    }
+
+    fn get_agent_execution_intent(&self, intent_id: Uuid) -> Option<AgentExecutionIntent> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        guard.agent_execution_intents.get(&intent_id).cloned()
+    }
+
+    fn list_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Vec<AgentExecutionIntent> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        let mut intents = guard
+            .agent_execution_intents
+            .values()
+            .filter(|intent| intent.agent_profile_id == agent_id)
+            .filter(|intent| status.is_none_or(|status| intent.status == status))
+            .cloned()
+            .collect::<Vec<_>>();
+        intents.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        intents.truncate(limit);
+        intents
     }
 
     fn insert_agent_codex_run_token(&self, token: AgentCodexRunToken) -> AppResult<()> {

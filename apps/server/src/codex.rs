@@ -630,3 +630,22 @@ pub(super) async fn list_company_agent_codex_runs(
     )?;
     Ok(Json(serde_json::json!({ "runs": runs })))
 }
+
+pub(super) async fn list_company_agent_codex_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, agent_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<CodexSessionsQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let sessions = state.platform.list_company_agent_codex_sessions_for_human(
+        ListCompanyAgentCodexSessionsForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            agent_id,
+            project_id: query.project_id,
+            limit: query.limit.unwrap_or(50),
+        },
+    )?;
+    Ok(Json(serde_json::json!({ "sessions": sessions })))
+}

@@ -78,6 +78,7 @@ fn bootstrap_agent(
 
 mod auth_company;
 mod chat;
+mod codex_sessions;
 mod git;
 mod governance_language;
 mod memory;

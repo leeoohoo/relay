@@ -176,10 +176,29 @@ pub const AGENT_CODEX_RUN_STATUS_FAILED: &str = "failed";
 pub const AGENT_CODEX_RUN_STATUS_TIMED_OUT: &str = "timed_out";
 pub const AGENT_CODEX_RUN_STATUS_CANCELLED: &str = "cancelled";
 pub const AGENT_CODEX_RUN_STATUS_LEASE_LOST: &str = "lease_lost";
+pub const AGENT_CODEX_SESSION_KIND_CONTROL: &str = "control";
+pub const AGENT_CODEX_SESSION_KIND_PROJECT: &str = "project";
+pub const AGENT_CODEX_SESSION_STATUS_ACTIVE: &str = "active";
+pub const AGENT_CODEX_SESSION_STATUS_ARCHIVED: &str = "archived";
+pub const AGENT_EXECUTION_INTENT_ACTION_EXECUTE: &str = "execute";
+pub const AGENT_EXECUTION_INTENT_STATUS_PENDING: &str = "pending";
+pub const AGENT_EXECUTION_INTENT_STATUS_RUNNING: &str = "running";
+pub const AGENT_EXECUTION_INTENT_STATUS_COMPLETED: &str = "completed";
+pub const AGENT_EXECUTION_INTENT_STATUS_FAILED: &str = "failed";
+pub const AGENT_EXECUTION_INTENT_STATUS_CANCELLED: &str = "cancelled";
 
 pub const AGENT_MEMORY_SCOPE_AGENT: &str = "agent";
+pub const AGENT_MEMORY_SCOPE_CONTROL: &str = "control";
+pub const AGENT_MEMORY_SCOPE_PROJECT: &str = "project";
+pub const AGENT_MEMORY_SCOPE_SESSION: &str = "session";
 pub const AGENT_MEMORY_TIER_SHORT_TERM: &str = "short_term";
 pub const AGENT_MEMORY_TIER_LONG_TERM: &str = "long_term";
+pub const AGENT_MEMORY_INJECTION_ALWAYS: &str = "always";
+pub const AGENT_MEMORY_INJECTION_ON_DEMAND: &str = "on_demand";
+pub const AGENT_MEMORY_INJECTION_NEVER: &str = "never";
+pub const AGENT_MEMORY_VISIBILITY_CONTROL: &str = "control";
+pub const AGENT_MEMORY_VISIBILITY_WORKER: &str = "worker";
+pub const AGENT_MEMORY_VISIBILITY_BOTH: &str = "both";
 pub const AGENT_MEMORY_STATUS_DRAFT: &str = "draft";
 pub const AGENT_MEMORY_STATUS_ACTIVE: &str = "active";
 pub const AGENT_MEMORY_STATUS_ARCHIVED: &str = "archived";
@@ -391,7 +410,10 @@ pub struct AgentMemory {
     #[serde(skip_serializing)]
     pub scope: String,
     pub project_id: Option<Uuid>,
+    pub session_id: Option<Uuid>,
     pub memory_tier: String,
+    pub injection_mode: String,
+    pub visibility: String,
     pub memory_type: String,
     pub topic_key: String,
     pub title: String,
@@ -516,11 +538,45 @@ pub struct AgentCodexTriggerRun {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCodexSession {
+    pub id: Uuid,
     pub agent_profile_id: Uuid,
-    pub current_project_id: Option<Uuid>,
+    pub session_kind: String,
+    pub scope_key: String,
+    pub project_id: Option<Uuid>,
+    pub generation: i32,
     pub codex_thread_id: String,
-    pub worktree_key: String,
+    pub workspace_key: String,
+    pub status: String,
+    pub summary_short: String,
+    pub checkpoint_json: serde_json::Value,
+    pub skill_bundle_version: String,
+    pub memory_snapshot_version: String,
+    pub policy_version: String,
+    pub created_at: DateTime<Utc>,
     pub last_used_at: DateTime<Utc>,
+    pub archived_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentExecutionIntent {
+    pub id: Uuid,
+    pub company_id: Uuid,
+    pub agent_profile_id: Uuid,
+    pub project_id: Uuid,
+    pub worker_session_id: Option<Uuid>,
+    pub source_event_ids: Vec<Uuid>,
+    pub task_ids: Vec<Uuid>,
+    pub action_type: String,
+    pub objective: String,
+    pub acceptance_criteria: Vec<String>,
+    pub priority: String,
+    pub dedupe_key: String,
+    pub status: String,
+    pub result_summary: String,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub claimed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -307,7 +307,10 @@ pub(super) fn map_agent_memory(row: Row) -> AgentMemory {
         owner_agent_id: row.get("owner_agent_id"),
         scope: row.get("scope"),
         project_id: row.get("project_id"),
+        session_id: row.get("session_id"),
         memory_tier: row.get("memory_tier"),
+        injection_mode: row.get("injection_mode"),
+        visibility: row.get("visibility"),
         memory_type: row.get("memory_type"),
         topic_key: row.get("topic_key"),
         title: row.get("title"),
@@ -488,11 +491,49 @@ pub(super) fn map_agent_codex_trigger_run(row: Row) -> AgentCodexTriggerRun {
 
 pub(super) fn map_agent_codex_session(row: Row) -> AgentCodexSession {
     AgentCodexSession {
+        id: row.get("id"),
         agent_profile_id: row.get("agent_profile_id"),
-        current_project_id: row.get("current_project_id"),
+        session_kind: row.get("session_kind"),
+        scope_key: row.get("scope_key"),
+        project_id: row.get("project_id"),
+        generation: row.get("generation"),
         codex_thread_id: row.get("codex_thread_id"),
-        worktree_key: row.get("worktree_key"),
+        workspace_key: row.get("workspace_key"),
+        status: row.get("status"),
+        summary_short: row.get("summary_short"),
+        checkpoint_json: row.get("checkpoint_json"),
+        skill_bundle_version: row.get("skill_bundle_version"),
+        memory_snapshot_version: row.get("memory_snapshot_version"),
+        policy_version: row.get("policy_version"),
+        created_at: row.get("created_at"),
         last_used_at: row.get("last_used_at"),
+        archived_at: row.get("archived_at"),
+    }
+}
+
+pub(super) fn map_agent_execution_intent(row: Row) -> AgentExecutionIntent {
+    let source_event_ids: Json<Vec<Uuid>> = row.get("source_event_ids");
+    let task_ids: Json<Vec<Uuid>> = row.get("task_ids");
+    let acceptance_criteria: Json<Vec<String>> = row.get("acceptance_criteria");
+    AgentExecutionIntent {
+        id: row.get("id"),
+        company_id: row.get("company_id"),
+        agent_profile_id: row.get("agent_profile_id"),
+        project_id: row.get("project_id"),
+        worker_session_id: row.get("worker_session_id"),
+        source_event_ids: source_event_ids.0,
+        task_ids: task_ids.0,
+        action_type: row.get("action_type"),
+        objective: row.get("objective"),
+        acceptance_criteria: acceptance_criteria.0,
+        priority: row.get("priority"),
+        dedupe_key: row.get("dedupe_key"),
+        status: row.get("status"),
+        result_summary: row.get("result_summary"),
+        error_message: row.get("error_message"),
+        created_at: row.get("created_at"),
+        claimed_at: row.get("claimed_at"),
+        completed_at: row.get("completed_at"),
     }
 }
 

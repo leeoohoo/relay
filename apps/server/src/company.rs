@@ -65,6 +65,7 @@ pub(super) async fn list_company_memories(
                 human_user_id: human.id,
                 company_id,
                 owner_agent_id: query.owner_agent_id,
+                scope: query.scope,
                 project_id: query.project_id,
                 memory_tier: query.memory_tier,
                 status: query.status,

@@ -53,6 +53,10 @@
 .control-center-tabs small { display: none; }
 .control-center-tabs > button.active::after { right: 10px; bottom: -5px; left: 10px; }
 .codex-trigger-heading .eyebrow { display: none; }
+@media (max-width: 760px) {
+  .codex-work-session-row { grid-template-columns: auto minmax(0,1fr); }
+  .codex-work-session-row p, .codex-work-session-row time { grid-column: 2; }
+}
 .project-overview-metrics { gap: 6px; margin: 10px 0; }
 .project-overview-metrics > span { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; border-radius: 8px; padding: 8px 10px; }
 .project-overview-metrics strong { font-size: 15px; }
