@@ -1,6 +1,6 @@
 /* Compact workbench pass: prioritize controls and live state over explanatory presentation. */
 .main-content { padding: 22px 28px 36px; }
-.page-header { margin-bottom: 10px; padding-bottom: 10px; }
+.page-header { position: sticky; top: 0; z-index: 18; margin-bottom: 10px; padding: 10px 2px; background: rgba(7, 11, 16, .96); box-shadow: 0 10px 24px rgba(0, 0, 0, .16); backdrop-filter: blur(14px); }
 .page-header h1 { margin: 2px 0 0; font-size: 24px; }
 .page-header p { display: none; }
 .content-stack { gap: 10px; }
