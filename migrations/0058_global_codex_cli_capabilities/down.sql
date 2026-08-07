@@ -1,0 +1,2 @@
+-- Historical per-runner capability overrides cannot be reconstructed after
+-- they have been consolidated into company-level CLI settings.

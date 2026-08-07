@@ -378,7 +378,7 @@ fn failed_runs_retry_quickly_before_the_trigger_enters_error_state() {
 }
 
 #[test]
-fn runner_overrides_resolve_without_losing_company_defaults() {
+fn global_cli_capabilities_ignore_legacy_runner_overrides() {
     let company_id = Uuid::new_v4();
     let mut company = CompanyCodexCliSettings::new(company_id);
     company.model = Some("company-model".into());
@@ -429,9 +429,10 @@ fn runner_overrides_resolve_without_losing_company_defaults() {
     assert_eq!(effective.model.as_deref(), Some("company-model"));
     assert_eq!(effective.reasoning_effort.as_deref(), Some("high"));
     assert_eq!(effective.approval_policy, "on-request");
+    assert_eq!(effective.service_tier, None);
     assert!(!effective.network_access);
-    assert_eq!(effective.web_search, "live");
-    assert!(!effective.feature_remote_plugin);
+    assert_eq!(effective.web_search, "indexed");
+    assert!(effective.feature_remote_plugin);
     assert!(effective.feature_hooks);
 }
 

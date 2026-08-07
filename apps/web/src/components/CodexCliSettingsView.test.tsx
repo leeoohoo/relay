@@ -52,5 +52,6 @@ describe("CodexCliSettingsView", () => {
     expect(screen.getByRole("option", { name: "开发运行器（默认）" })).toBeInTheDocument();
     expect(screen.getAllByText("features.shell_tool")).toHaveLength(2);
     expect(screen.getAllByText("运行配置").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("全局统一")).toHaveLength(8);
   });
 });

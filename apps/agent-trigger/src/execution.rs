@@ -79,10 +79,7 @@ pub(super) fn resolve_effective_cli_settings(
             .personality
             .clone()
             .or_else(|| company.personality.clone()),
-        service_tier: trigger
-            .service_tier
-            .clone()
-            .or_else(|| company.service_tier.clone()),
+        service_tier: company.service_tier.clone(),
         sandbox_mode: if trigger.sandbox_mode == AGENT_CODEX_SETTING_INHERIT {
             company.sandbox_mode.clone()
         } else {
@@ -93,22 +90,13 @@ pub(super) fn resolve_effective_cli_settings(
         } else {
             trigger.approval_policy.clone()
         },
-        network_access: trigger.network_access.unwrap_or(company.network_access),
-        web_search: trigger
-            .web_search
-            .clone()
-            .unwrap_or_else(|| company.web_search.clone()),
-        feature_multi_agent: trigger
-            .feature_multi_agent
-            .unwrap_or(company.feature_multi_agent),
-        feature_remote_plugin: trigger
-            .feature_remote_plugin
-            .unwrap_or(company.feature_remote_plugin),
-        feature_hooks: trigger.feature_hooks.unwrap_or(company.feature_hooks),
-        feature_goals: trigger.feature_goals.unwrap_or(company.feature_goals),
-        feature_shell_tool: trigger
-            .feature_shell_tool
-            .unwrap_or(company.feature_shell_tool),
+        network_access: company.network_access,
+        web_search: company.web_search.clone(),
+        feature_multi_agent: company.feature_multi_agent,
+        feature_remote_plugin: company.feature_remote_plugin,
+        feature_hooks: company.feature_hooks,
+        feature_goals: company.feature_goals,
+        feature_shell_tool: company.feature_shell_tool,
     }
 }
 

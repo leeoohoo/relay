@@ -94,16 +94,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &["none", "friendly", "pragmatic"],
             "Codex runner profile personality",
         )?;
-        let service_tier = validate_optional_codex_choice(
-            input.service_tier,
-            &["fast"],
-            "Codex runner profile service_tier",
-        )?;
-        let web_search = validate_optional_codex_choice(
-            input.web_search,
-            &["disabled", "cached", "indexed", "live"],
-            "Codex runner profile web_search",
-        )?;
         let existing = input
             .profile_id
             .map(|profile_id| {
@@ -135,16 +125,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             reasoning_summary,
             verbosity,
             personality,
-            service_tier,
+            service_tier: None,
             sandbox_mode: input.sandbox_mode,
             approval_policy: input.approval_policy,
-            network_access: input.network_access,
-            web_search,
-            feature_multi_agent: input.feature_multi_agent,
-            feature_remote_plugin: input.feature_remote_plugin,
-            feature_hooks: input.feature_hooks,
-            feature_goals: input.feature_goals,
-            feature_shell_tool: input.feature_shell_tool,
+            network_access: None,
+            web_search: None,
+            feature_multi_agent: None,
+            feature_remote_plugin: None,
+            feature_hooks: None,
+            feature_goals: None,
+            feature_shell_tool: None,
             max_run_seconds: input.max_run_seconds,
             is_default,
             created_by_human_user_id: existing
@@ -177,16 +167,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 config.reasoning_summary = profile.reasoning_summary.clone();
                 config.verbosity = profile.verbosity.clone();
                 config.personality = profile.personality.clone();
-                config.service_tier = profile.service_tier.clone();
+                config.service_tier = None;
                 config.sandbox_mode = profile.sandbox_mode.clone();
                 config.approval_policy = profile.approval_policy.clone();
-                config.network_access = profile.network_access;
-                config.web_search = profile.web_search.clone();
-                config.feature_multi_agent = profile.feature_multi_agent;
-                config.feature_remote_plugin = profile.feature_remote_plugin;
-                config.feature_hooks = profile.feature_hooks;
-                config.feature_goals = profile.feature_goals;
-                config.feature_shell_tool = profile.feature_shell_tool;
+                config.network_access = None;
+                config.web_search = None;
+                config.feature_multi_agent = None;
+                config.feature_remote_plugin = None;
+                config.feature_hooks = None;
+                config.feature_goals = None;
+                config.feature_shell_tool = None;
                 config.max_run_seconds = profile.max_run_seconds;
                 config.updated_by_human_user_id = Some(input.human_user_id);
                 config.updated_at = now;
@@ -568,86 +558,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &["none", "friendly", "pragmatic"],
             "Codex trigger personality",
         )?;
-        let service_tier = validate_optional_codex_choice(
-            if let Some(profile) = runner_profile.as_ref() {
-                profile.service_tier.clone()
-            } else {
-                input.service_tier.or_else(|| {
-                    existing
-                        .as_ref()
-                        .and_then(|config| config.service_tier.clone())
-                })
-            },
-            &["fast"],
-            "Codex trigger service_tier",
-        )?;
-        let web_search = validate_optional_codex_choice(
-            if let Some(profile) = runner_profile.as_ref() {
-                profile.web_search.clone()
-            } else {
-                input.web_search.or_else(|| {
-                    existing
-                        .as_ref()
-                        .and_then(|config| config.web_search.clone())
-                })
-            },
-            &["disabled", "cached", "indexed", "live"],
-            "Codex trigger web_search",
-        )?;
-        let network_access = runner_profile.as_ref().map_or_else(
-            || {
-                input
-                    .network_access
-                    .or_else(|| existing.as_ref().and_then(|config| config.network_access))
-            },
-            |profile| profile.network_access,
-        );
-        let feature_multi_agent = runner_profile.as_ref().map_or_else(
-            || {
-                input.feature_multi_agent.or_else(|| {
-                    existing
-                        .as_ref()
-                        .and_then(|config| config.feature_multi_agent)
-                })
-            },
-            |profile| profile.feature_multi_agent,
-        );
-        let feature_remote_plugin = runner_profile.as_ref().map_or_else(
-            || {
-                input.feature_remote_plugin.or_else(|| {
-                    existing
-                        .as_ref()
-                        .and_then(|config| config.feature_remote_plugin)
-                })
-            },
-            |profile| profile.feature_remote_plugin,
-        );
-        let feature_hooks = runner_profile.as_ref().map_or_else(
-            || {
-                input
-                    .feature_hooks
-                    .or_else(|| existing.as_ref().and_then(|config| config.feature_hooks))
-            },
-            |profile| profile.feature_hooks,
-        );
-        let feature_goals = runner_profile.as_ref().map_or_else(
-            || {
-                input
-                    .feature_goals
-                    .or_else(|| existing.as_ref().and_then(|config| config.feature_goals))
-            },
-            |profile| profile.feature_goals,
-        );
-        let feature_shell_tool = runner_profile.as_ref().map_or_else(
-            || {
-                input.feature_shell_tool.or_else(|| {
-                    existing
-                        .as_ref()
-                        .and_then(|config| config.feature_shell_tool)
-                })
-            },
-            |profile| profile.feature_shell_tool,
-        );
         let now = now_utc();
         let config = AgentCodexTriggerConfig {
             id: existing
@@ -667,16 +577,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             reasoning_summary,
             verbosity,
             personality,
-            service_tier,
+            service_tier: None,
             sandbox_mode,
             approval_policy,
-            network_access,
-            web_search,
-            feature_multi_agent,
-            feature_remote_plugin,
-            feature_hooks,
-            feature_goals,
-            feature_shell_tool,
+            network_access: None,
+            web_search: None,
+            feature_multi_agent: None,
+            feature_remote_plugin: None,
+            feature_hooks: None,
+            feature_goals: None,
+            feature_shell_tool: None,
             max_run_seconds,
             next_run_at: existing
                 .as_ref()

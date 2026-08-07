@@ -90,5 +90,13 @@ describe("CodexRunnerProfilesPanel", () => {
     expect(screen.getByLabelText("Sandbox")).toBeVisible();
     expect(screen.getByLabelText("审批策略")).toBeVisible();
     expect(screen.getByLabelText("推理摘要")).not.toBeVisible();
+    expect(screen.queryByLabelText("Fast 模式")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("工作区网络")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Web Search")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("多 Agent")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("插件")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Hooks")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Goals")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Shell")).not.toBeInTheDocument();
   });
 });

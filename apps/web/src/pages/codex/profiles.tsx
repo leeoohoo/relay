@@ -3,7 +3,7 @@ import { api } from "../../api/client";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Field, Icon } from "../../components/ui";
 import { useUiLanguage, type UiLanguage } from "../../i18n/uiLanguage";
-import type { CodexApprovalPolicy, CodexAuthProfile, CodexCompanyCliSettings, CodexPersonality, CodexReasoningEffort, CodexReasoningSummary, CodexRunnerProfileView, CodexSandboxMode, CodexVerbosity, CodexWebSearch } from "../../types/platform";
+import type { CodexApprovalPolicy, CodexAuthProfile, CodexCompanyCliSettings, CodexPersonality, CodexReasoningEffort, CodexReasoningSummary, CodexRunnerProfileView, CodexSandboxMode, CodexVerbosity } from "../../types/platform";
 import { codexReasoningEffortLabel, formatAgentCount, formatInterval, formatRunSeconds } from "../app/shared";
 import { codexAuthStatusLabel } from "./auth";
 
@@ -109,16 +109,8 @@ function CodexRunnerProfileEditor(props: {
   const [reasoningSummary, setReasoningSummary] = useState<CodexReasoningSummary | "">(profile?.reasoning_summary ?? "");
   const [verbosity, setVerbosity] = useState<CodexVerbosity | "">(profile?.verbosity ?? "");
   const [personality, setPersonality] = useState<CodexPersonality | "">(profile?.personality ?? "");
-  const [serviceTier, setServiceTier] = useState<"fast" | "">(profile?.service_tier ?? "");
   const [sandboxMode, setSandboxMode] = useState<CodexSandboxMode>(profile?.sandbox_mode ?? "inherit");
   const [approvalPolicy, setApprovalPolicy] = useState<CodexApprovalPolicy>(profile?.approval_policy ?? "inherit");
-  const [networkAccess, setNetworkAccess] = useState<"inherit" | "true" | "false">(profile?.network_access == null ? "inherit" : String(profile.network_access) as "true" | "false");
-  const [webSearch, setWebSearch] = useState<CodexWebSearch | "">(profile?.web_search ?? "");
-  const [featureMultiAgent, setFeatureMultiAgent] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_multi_agent));
-  const [featureRemotePlugin, setFeatureRemotePlugin] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_remote_plugin));
-  const [featureHooks, setFeatureHooks] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_hooks));
-  const [featureGoals, setFeatureGoals] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_goals));
-  const [featureShellTool, setFeatureShellTool] = useState<"inherit" | "true" | "false">(codexBooleanOverride(profile?.feature_shell_tool));
   const [maxRunSeconds, setMaxRunSeconds] = useState(profile?.max_run_seconds ?? 3600);
   const [isDefault, setIsDefault] = useState(profile?.is_default ?? false);
   const [busy, setBusy] = useState(false);
@@ -160,14 +152,8 @@ function CodexRunnerProfileEditor(props: {
             name, interval_seconds: intervalSeconds, codex_profile: codexProfile || "default",
             model: model || null, reasoning_effort: reasoningEffort || null,
             reasoning_summary: reasoningSummary || null, verbosity: verbosity || null,
-            personality: personality || null, service_tier: serviceTier || null,
+            personality: personality || null,
             sandbox_mode: sandboxMode, approval_policy: approvalPolicy,
-            network_access: codexBooleanOverrideValue(networkAccess), web_search: webSearch || null,
-            feature_multi_agent: codexBooleanOverrideValue(featureMultiAgent),
-            feature_remote_plugin: codexBooleanOverrideValue(featureRemotePlugin),
-            feature_hooks: codexBooleanOverrideValue(featureHooks),
-            feature_goals: codexBooleanOverrideValue(featureGoals),
-            feature_shell_tool: codexBooleanOverrideValue(featureShellTool),
             max_run_seconds: maxRunSeconds, is_default: isDefault,
           }),
         },
@@ -235,12 +221,9 @@ function CodexRunnerProfileEditor(props: {
   const companyReasoningValue = reasoningEffortValue(props.cliSettings, language, defaultReasoningLabel);
   const companyVerbosityValue = props.cliSettings?.verbosity ?? (language === "en" ? "Codex default" : "Codex 默认");
   const companyPersonalityValue = props.cliSettings?.personality ?? (language === "en" ? "Codex default" : "Codex 默认");
-  const companyServiceTierValue = props.cliSettings?.service_tier ?? (language === "en" ? "standard / Codex config" : "标准 / Codex 配置");
   const advancedOverrideCount = [
     intervalSeconds !== 3600, Boolean(reasoningSummary), Boolean(verbosity), Boolean(personality),
-    Boolean(serviceTier), networkAccess !== "inherit", Boolean(webSearch), featureMultiAgent !== "inherit",
-    featureRemotePlugin !== "inherit", featureHooks !== "inherit", featureGoals !== "inherit",
-    featureShellTool !== "inherit", maxRunSeconds !== 3600,
+    maxRunSeconds !== 3600,
   ].filter(Boolean).length;
   return (
     <form className="runner-profile-form" onSubmit={save}>
@@ -260,39 +243,12 @@ function CodexRunnerProfileEditor(props: {
         <Field label="推理摘要"><select value={reasoningSummary} onChange={(event) => setReasoningSummary(event.target.value as CodexReasoningSummary | "")}><option value="">{cliSettingsOption(props.cliSettings?.reasoning_summary ?? "auto", language)}</option><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
         <Field label="输出详细度"><select value={verbosity} onChange={(event) => setVerbosity(event.target.value as CodexVerbosity | "")}><option value="">{cliSettingsOption(companyVerbosityValue, language)}</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
         <Field label="Personality"><select value={personality} onChange={(event) => setPersonality(event.target.value as CodexPersonality | "")}><option value="">{cliSettingsOption(companyPersonalityValue, language)}</option><option value="none">none</option><option value="friendly">friendly</option><option value="pragmatic">pragmatic</option></select></Field>
-        <Field label="Fast 模式"><select value={serviceTier} onChange={(event) => setServiceTier(event.target.value as "fast" | "")}><option value="">{cliSettingsOption(companyServiceTierValue, language)}</option><option value="fast">开启 fast</option></select></Field>
-        <Field label="工作区网络"><CodexBooleanOverrideSelect value={networkAccess} companyValue={props.cliSettings?.network_access} language={language} onChange={setNetworkAccess} /></Field>
-        <Field label="Web Search"><select value={webSearch} onChange={(event) => setWebSearch(event.target.value as CodexWebSearch | "")}><option value="">{cliSettingsOption(webSearchValue(props.cliSettings?.web_search, language), language)}</option><option value="disabled">关闭</option><option value="cached">缓存</option><option value="indexed">索引</option><option value="live">实时</option></select></Field>
-        <Field label="多 Agent"><CodexBooleanOverrideSelect value={featureMultiAgent} companyValue={props.cliSettings?.feature_multi_agent} language={language} onChange={setFeatureMultiAgent} /></Field>
-        <Field label="插件"><CodexBooleanOverrideSelect value={featureRemotePlugin} companyValue={props.cliSettings?.feature_remote_plugin} language={language} onChange={setFeatureRemotePlugin} /></Field>
-        <Field label="Hooks"><CodexBooleanOverrideSelect value={featureHooks} companyValue={props.cliSettings?.feature_hooks} language={language} onChange={setFeatureHooks} /></Field>
-        <Field label="Goals"><CodexBooleanOverrideSelect value={featureGoals} companyValue={props.cliSettings?.feature_goals} language={language} onChange={setFeatureGoals} /></Field>
-        <Field label="Shell"><CodexBooleanOverrideSelect value={featureShellTool} companyValue={props.cliSettings?.feature_shell_tool} language={language} onChange={setFeatureShellTool} /></Field>
         <Field label="单次最长运行（秒）"><input type="number" min={60} max={7200} value={maxRunSeconds} onChange={(event) => setMaxRunSeconds(Number(event.target.value))} /></Field>
         </div>
       </details>
       <div className="runner-profile-form-actions"><button className="button small" type="button" onClick={() => { setEditing(false); props.onCancel(); }} disabled={busy}>取消</button><button className="button primary small" disabled={busy}>{busy ? "正在保存…" : "保存运行配置"}</button></div>
     </form>
   );
-}
-
-type CodexBooleanOverride = "inherit" | "true" | "false";
-
-function codexBooleanOverride(value: boolean | null | undefined): CodexBooleanOverride {
-  return value == null ? "inherit" : value ? "true" : "false";
-}
-
-function codexBooleanOverrideValue(value: CodexBooleanOverride): boolean | null {
-  return value === "inherit" ? null : value === "true";
-}
-
-function CodexBooleanOverrideSelect(props: {
-  value: CodexBooleanOverride;
-  companyValue: boolean | undefined;
-  language: UiLanguage;
-  onChange: (value: CodexBooleanOverride) => void;
-}) {
-  return <select value={props.value} onChange={(event) => props.onChange(event.target.value as CodexBooleanOverride)}><option value="inherit">{cliSettingsOption(booleanValue(props.companyValue, props.language), props.language)}</option><option value="true">开启</option><option value="false">关闭</option></select>;
 }
 
 function cliSettingsOption(value: string, language: UiLanguage) {
@@ -316,15 +272,4 @@ function sandboxValue(value: "read_only" | "workspace_write" | undefined, langua
 function approvalValue(value: "never" | "on-request" | undefined, language: UiLanguage) {
   if (language === "en") return value === "never" ? "never" : value === "on-request" ? "on-request" : "company value";
   return value === "never" ? "无需审批" : value === "on-request" ? "Human 审批" : "公司级基础值";
-}
-
-function webSearchValue(value: CodexWebSearch | undefined, language: UiLanguage) {
-  if (!value) return language === "en" ? "company value" : "公司级基础值";
-  if (language === "en") return value;
-  return ({ disabled: "关闭", cached: "缓存", indexed: "索引", live: "实时" } as const)[value];
-}
-
-function booleanValue(value: boolean | undefined, language: UiLanguage) {
-  if (value === undefined) return language === "en" ? "company value" : "公司级基础值";
-  return language === "en" ? (value ? "On" : "Off") : value ? "开启" : "关闭";
 }
