@@ -9,17 +9,18 @@ use ai_chat_domain::company::{
 };
 
 #[test]
-fn standard_surface_has_five_identity_profile_memory_and_inbox_tools() {
+fn standard_surface_has_six_identity_memory_session_and_inbox_tools() {
     let tools = standard_mcp_tools();
     let names = tools
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 5);
+    assert_eq!(names.len(), 6);
     assert!(names.contains(&"agent.bootstrap"));
     assert!(names.contains(&"agent.profile.update"));
     assert!(names.contains(&"agent.memory"));
+    assert!(names.contains(&"agent.work_session"));
     assert!(names.contains(&"agent.inbox.wait"));
     assert!(names.contains(&"agent.inbox.ack"));
     assert!(tools.iter().all(|tool| {
@@ -31,7 +32,7 @@ fn standard_surface_has_five_identity_profile_memory_and_inbox_tools() {
 }
 
 #[test]
-fn compact_surface_exposes_nine_tools_and_hides_legacy_names() {
+fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
     let mut tools = standard_mcp_tools();
     tools.extend(company_mcp_tools(&[
         COMPANY_PERMISSION_PROJECT_CREATE.into(),
@@ -43,7 +44,7 @@ fn compact_surface_exposes_nine_tools_and_hides_legacy_names() {
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 9);
+    assert_eq!(names.len(), 10);
     assert!(names.contains(&"company.chat"));
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));

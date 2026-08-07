@@ -70,6 +70,33 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .list_agent_codex_trigger_runs(input.agent_id, input.limit.clamp(1, 100)))
     }
 
+    pub fn list_company_agent_codex_sessions_for_human(
+        &self,
+        input: ListCompanyAgentCodexSessionsForHumanInput,
+    ) -> AppResult<Vec<AgentCodexSession>> {
+        self.repo
+            .get_company_human_member_result(input.company_id, input.human_user_id)?
+            .filter(|membership| membership.status == "active")
+            .ok_or_else(|| {
+                AppError::Unauthorized("human user is not an active company member".into())
+            })?;
+        self.repo
+            .get_company_agent_membership(input.agent_id)
+            .filter(|membership| membership.company_id == input.company_id)
+            .ok_or_else(|| AppError::NotFound("company Agent not found".into()))?;
+        let sessions = self
+            .repo
+            .list_agent_codex_sessions(input.agent_id, input.limit.clamp(1, 100))
+            .into_iter()
+            .filter(|session| {
+                input
+                    .project_id
+                    .is_none_or(|project_id| session.project_id == Some(project_id))
+            })
+            .collect();
+        Ok(sessions)
+    }
+
     pub fn claim_due_agent_codex_triggers(
         &self,
         lease_owner: &str,
@@ -248,15 +275,24 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let git = project
             .as_ref()
             .and_then(|project| self.repo.get_company_project_git_config(project.id));
+        let pending_execution_intent_count = self
+            .repo
+            .list_agent_execution_intents(
+                config.agent_profile_id,
+                Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+                100,
+            )
+            .len();
         let should_run = manual
             || !pending_events.is_empty()
             || !active_tasks.is_empty()
-            || asset_refresh.is_some();
+            || asset_refresh.is_some()
+            || pending_execution_intent_count > 0;
         let trigger_type = if manual {
             AGENT_CODEX_TRIGGER_TYPE_MANUAL
         } else if !pending_events.is_empty() {
             AGENT_CODEX_TRIGGER_TYPE_MESSAGE
-        } else if !active_tasks.is_empty() {
+        } else if !active_tasks.is_empty() || pending_execution_intent_count > 0 {
             AGENT_CODEX_TRIGGER_TYPE_TASK
         } else if asset_refresh.is_some() {
             AGENT_CODEX_TRIGGER_TYPE_ASSET_REFRESH
@@ -272,6 +308,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             active_task_count: active_tasks.len(),
             waiting_task_count,
             asset_refresh_due: asset_refresh.is_some(),
+            pending_execution_intent_count,
         })
     }
 
@@ -354,12 +391,71 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.repo.revoke_agent_codex_run_tokens(run_id, now_utc())
     }
 
-    pub fn get_agent_codex_session(&self, agent_id: Uuid) -> Option<AgentCodexSession> {
-        self.repo.get_agent_codex_session(agent_id)
+    pub fn get_agent_codex_session(
+        &self,
+        agent_id: Uuid,
+        scope_key: &str,
+    ) -> Option<AgentCodexSession> {
+        self.repo.get_agent_codex_session(agent_id, scope_key)
     }
 
     pub fn save_agent_codex_session(&self, session: AgentCodexSession) -> AppResult<()> {
         self.repo.save_agent_codex_session(session)
+    }
+
+    pub fn list_agent_codex_sessions(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentCodexSession> {
+        self.repo
+            .list_agent_codex_sessions(agent_id, limit.clamp(1, 100))
+    }
+
+    pub fn create_agent_execution_intent(
+        &self,
+        intent: AgentExecutionIntent,
+    ) -> AppResult<AgentExecutionIntent> {
+        self.ensure_agent_can_act(intent.agent_profile_id)?;
+        let membership = self.get_active_company_agent_membership(intent.agent_profile_id)?;
+        if membership.company_id != intent.company_id {
+            return Err(AppError::Unauthorized(
+                "Agent does not belong to the execution intent company".into(),
+            ));
+        }
+        self.ensure_company_project_access(
+            intent.company_id,
+            intent.project_id,
+            intent.agent_profile_id,
+        )?;
+        self.repo.insert_agent_execution_intent(intent.clone())?;
+        Ok(intent)
+    }
+
+    pub fn get_agent_project_git_config(
+        &self,
+        agent_id: Uuid,
+        company_id: Uuid,
+        project_id: Uuid,
+    ) -> AppResult<CompanyProjectGitConfig> {
+        self.ensure_company_project_access(company_id, project_id, agent_id)?;
+        self.repo
+            .get_company_project_git_config(project_id)
+            .ok_or_else(|| AppError::NotFound("project Git configuration not found".into()))
+    }
+
+    pub fn list_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Vec<AgentExecutionIntent> {
+        self.repo
+            .list_agent_execution_intents(agent_id, status, limit.clamp(1, 100))
+    }
+
+    pub fn update_agent_execution_intent(&self, intent: AgentExecutionIntent) -> AppResult<()> {
+        self.repo.update_agent_execution_intent(intent)
     }
 
     pub fn list_company_realtime_events_for_human(

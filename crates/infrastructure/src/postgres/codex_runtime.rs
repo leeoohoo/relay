@@ -552,43 +552,206 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
             client.execute(
                 r#"
                 INSERT INTO agent_codex_sessions (
-                    agent_profile_id, current_project_id, codex_thread_id,
-                    worktree_key, last_used_at
+                    id, agent_profile_id, session_kind, scope_key, project_id, generation,
+                    codex_thread_id, workspace_key, status, summary_short, checkpoint_json,
+                    skill_bundle_version, memory_snapshot_version, policy_version,
+                    created_at, last_used_at, archived_at
                 )
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (agent_profile_id) DO UPDATE
-                SET current_project_id = EXCLUDED.current_project_id,
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17
+                )
+                ON CONFLICT (agent_profile_id, scope_key, generation) DO UPDATE
+                SET session_kind = EXCLUDED.session_kind,
+                    project_id = EXCLUDED.project_id,
                     codex_thread_id = EXCLUDED.codex_thread_id,
-                    worktree_key = EXCLUDED.worktree_key,
-                    last_used_at = EXCLUDED.last_used_at
+                    workspace_key = EXCLUDED.workspace_key,
+                    status = EXCLUDED.status,
+                    summary_short = EXCLUDED.summary_short,
+                    checkpoint_json = EXCLUDED.checkpoint_json,
+                    skill_bundle_version = EXCLUDED.skill_bundle_version,
+                    memory_snapshot_version = EXCLUDED.memory_snapshot_version,
+                    policy_version = EXCLUDED.policy_version,
+                    last_used_at = EXCLUDED.last_used_at,
+                    archived_at = EXCLUDED.archived_at
                 "#,
                 &[
+                    &session.id,
                     &session.agent_profile_id,
-                    &session.current_project_id,
+                    &session.session_kind,
+                    &session.scope_key,
+                    &session.project_id,
+                    &session.generation,
                     &session.codex_thread_id,
-                    &session.worktree_key,
+                    &session.workspace_key,
+                    &session.status,
+                    &session.summary_short,
+                    &session.checkpoint_json,
+                    &session.skill_bundle_version,
+                    &session.memory_snapshot_version,
+                    &session.policy_version,
+                    &session.created_at,
                     &session.last_used_at,
+                    &session.archived_at,
                 ],
             )?;
             Ok(())
         })
     }
 
-    fn get_agent_codex_session(&self, agent_id: Uuid) -> Option<AgentCodexSession> {
+    fn get_agent_codex_session(
+        &self,
+        agent_id: Uuid,
+        scope_key: &str,
+    ) -> Option<AgentCodexSession> {
         self.with_client(|client| {
             client.query_opt(
                 r#"
-                SELECT agent_profile_id, current_project_id, codex_thread_id,
-                       worktree_key, last_used_at
+                SELECT id, agent_profile_id, session_kind, scope_key, project_id, generation,
+                       codex_thread_id, workspace_key, status, summary_short, checkpoint_json,
+                       skill_bundle_version, memory_snapshot_version, policy_version,
+                       created_at, last_used_at, archived_at
                 FROM agent_codex_sessions
-                WHERE agent_profile_id = $1
+                WHERE agent_profile_id = $1 AND scope_key = $2 AND status = 'active'
                 "#,
-                &[&agent_id],
+                &[&agent_id, &scope_key],
             )
         })
         .ok()
         .flatten()
         .map(map_agent_codex_session)
+    }
+
+    fn list_agent_codex_sessions(&self, agent_id: Uuid, limit: usize) -> Vec<AgentCodexSession> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, agent_profile_id, session_kind, scope_key, project_id, generation,
+                       codex_thread_id, workspace_key, status, summary_short, checkpoint_json,
+                       skill_bundle_version, memory_snapshot_version, policy_version,
+                       created_at, last_used_at, archived_at
+                FROM agent_codex_sessions
+                WHERE agent_profile_id = $1
+                ORDER BY (status = 'active') DESC, last_used_at DESC, id DESC
+                LIMIT $2
+                "#,
+                &[&agent_id, &(limit as i64)],
+            )
+        })
+        .map(|rows| rows.into_iter().map(map_agent_codex_session).collect())
+        .unwrap_or_default()
+    }
+
+    fn insert_agent_execution_intent(&self, intent: AgentExecutionIntent) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                INSERT INTO agent_execution_intents (
+                    id, company_id, agent_profile_id, project_id, worker_session_id,
+                    source_event_ids, task_ids, action_type, objective, acceptance_criteria,
+                    priority, dedupe_key, status, result_summary, error_message,
+                    created_at, claimed_at, completed_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17, $18
+                )
+                "#,
+                &[
+                    &intent.id,
+                    &intent.company_id,
+                    &intent.agent_profile_id,
+                    &intent.project_id,
+                    &intent.worker_session_id,
+                    &Json(&intent.source_event_ids),
+                    &Json(&intent.task_ids),
+                    &intent.action_type,
+                    &intent.objective,
+                    &Json(&intent.acceptance_criteria),
+                    &intent.priority,
+                    &intent.dedupe_key,
+                    &intent.status,
+                    &intent.result_summary,
+                    &intent.error_message,
+                    &intent.created_at,
+                    &intent.claimed_at,
+                    &intent.completed_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn update_agent_execution_intent(&self, intent: AgentExecutionIntent) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                UPDATE agent_execution_intents
+                SET worker_session_id = $2,
+                    status = $3,
+                    result_summary = $4,
+                    error_message = $5,
+                    claimed_at = $6,
+                    completed_at = $7
+                WHERE id = $1
+                "#,
+                &[
+                    &intent.id,
+                    &intent.worker_session_id,
+                    &intent.status,
+                    &intent.result_summary,
+                    &intent.error_message,
+                    &intent.claimed_at,
+                    &intent.completed_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn get_agent_execution_intent(&self, intent_id: Uuid) -> Option<AgentExecutionIntent> {
+        self.with_client(|client| {
+            client.query_opt(
+                r#"
+                SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
+                       source_event_ids, task_ids, action_type, objective, acceptance_criteria,
+                       priority, dedupe_key, status, result_summary, error_message,
+                       created_at, claimed_at, completed_at
+                FROM agent_execution_intents
+                WHERE id = $1
+                "#,
+                &[&intent_id],
+            )
+        })
+        .ok()
+        .flatten()
+        .map(map_agent_execution_intent)
+    }
+
+    fn list_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+        status: Option<&str>,
+        limit: usize,
+    ) -> Vec<AgentExecutionIntent> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
+                       source_event_ids, task_ids, action_type, objective, acceptance_criteria,
+                       priority, dedupe_key, status, result_summary, error_message,
+                       created_at, claimed_at, completed_at
+                FROM agent_execution_intents
+                WHERE agent_profile_id = $1
+                  AND ($2::TEXT IS NULL OR status = $2)
+                ORDER BY created_at ASC, id ASC
+                LIMIT $3
+                "#,
+                &[&agent_id, &status, &(limit as i64)],
+            )
+        })
+        .map(|rows| rows.into_iter().map(map_agent_execution_intent).collect())
+        .unwrap_or_default()
     }
 
     fn insert_agent_codex_run_token(&self, token: AgentCodexRunToken) -> AppResult<()> {

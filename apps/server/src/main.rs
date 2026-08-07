@@ -47,18 +47,19 @@ use ai_chat_application::{
     DeleteAgentMemoryForHumanInput, DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
     GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
-    ListCompanyCodexPluginsForHumanInput, ListCompanyCodexRunnerProfilesForHumanInput,
-    ListCompanyMemoriesForHumanInput, LoginHumanInput, OpenHumanCompanyDirectConversationInput,
-    PlatformApp, PublishCompanyGovernancePolicyInput, RegisterHumanInput,
-    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
-    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
-    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
-    SetCompanyProjectPauseForHumanInput, TransferCompanyProjectOwnerForHumanInput,
-    UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
-    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
-    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
-    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
-    UpsertCompanyProjectAssetRefreshForHumanInput, UpsertCompanyProjectGitForHumanInput,
+    ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
+    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
+    OpenHumanCompanyDirectConversationInput, PlatformApp, PublishCompanyGovernancePolicyInput,
+    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
+    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
+    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
+    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
+    TransferCompanyProjectOwnerForHumanInput, UpdateAgentMemoryForHumanInput,
+    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
+    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
+    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
+    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
+    UpsertCompanyProjectGitForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -531,6 +532,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/codex-runs",
             get(list_company_agent_codex_runs),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/agents/{agent_id}/codex-sessions",
+            get(list_company_agent_codex_sessions),
         )
         .route(
             "/api/v1/companies/{company_id}/governance-policy",

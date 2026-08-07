@@ -141,6 +141,7 @@ export function CodexRunnersView(props: {
                   companyId={props.consoleData.company.id}
                   agentId={agent.agent_profile.id}
                   agentName={agent.agent_profile.display_name}
+                  projects={props.consoleData.projects.map((project) => ({ id: project.project.id, name: project.project.name }))}
                   active
                   profiles={profiles}
                   token={props.token}

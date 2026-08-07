@@ -11,6 +11,8 @@ import {
   Dialog,
   formatTime,
   memoryStatusLabel,
+  memoryInjectionLabel,
+  memoryScopeLabel,
   memoryTierLabel,
   memoryTypeLabel,
   Metric,
@@ -30,6 +32,7 @@ export function MemoriesView(props: {
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
+  const [scope, setScope] = useState("");
   const [memoryTier, setMemoryTier] = useState("");
   const [status, setStatus] = useState("");
   const [editing, setEditing] = useState<AgentMemory | null>(null);
@@ -44,6 +47,7 @@ export function MemoriesView(props: {
     if (query.trim()) params.set("query", query.trim());
     if (agentId) params.set("owner_agent_id", agentId);
     if (projectId) params.set("project_id", projectId);
+    if (scope) params.set("scope", scope);
     if (memoryTier) params.set("memory_tier", memoryTier);
     if (status) params.set("status", status);
     const response = await api<{ memories: AgentMemory[] }>(
@@ -63,7 +67,7 @@ export function MemoriesView(props: {
         .finally(() => { if (active) setLoading(false); });
     }, query ? 250 : 0);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [companyId, props.token, query, agentId, projectId, memoryTier, status]);
+  }, [companyId, props.token, query, agentId, projectId, scope, memoryTier, status]);
 
   async function updateMemory(memory: AgentMemory, values: Record<string, unknown>, notice: string) {
     try {
@@ -97,13 +101,13 @@ export function MemoriesView(props: {
   const pinnedCount = memories.filter((memory) => memory.pinned).length;
   const agentNames = new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent.agent_profile.display_name]));
   const projectNames = new Map(props.consoleData.projects.map((project) => [project.project.id, project.project.name]));
-  const memoryPagination = usePagination(memories, 9, `${query}:${agentId}:${projectId}:${memoryTier}:${status}`);
+  const memoryPagination = usePagination(memories, 9, `${query}:${agentId}:${projectId}:${scope}:${memoryTier}:${status}`);
 
   return (
     <div className={`content-stack memory-center ${props.embedded ? "embedded-memory-center" : ""}`}>
       <section className="memory-metrics">
         <Metric label="有效记忆" value={String(activeCount)} detail="全部为所属 Agent 私有" />
-        <Metric label="长期记忆" value={String(longTermCount)} detail="每次唤醒自动进入 Skill" />
+        <Metric label="长期记忆" value={String(longTermCount)} detail="按作用域注入对应会话" />
         <Metric label="短期记忆" value={String(shortTermCount)} detail="仅通过 MCP 按需检索" />
         <Metric label="已置顶" value={String(pinnedCount)} detail="在同类记忆中优先展示" />
       </section>
@@ -121,7 +125,8 @@ export function MemoriesView(props: {
           <label className="task-search"><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索主题、结论、标签或使用场景" /></label>
           {!props.fixedAgentId ? <select value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}><option value="">全部 Agent</option>{props.consoleData.agents.map((agent) => <option key={agent.agent_profile.id} value={agent.agent_profile.id}>{agent.agent_profile.display_name}</option>)}</select> : null}
           {!props.fixedProjectId ? <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}><option value="">全部项目</option>{props.consoleData.projects.map((project) => <option key={project.project.id} value={project.project.id}>{project.project.name}</option>)}</select> : null}
-          <select value={memoryTier} onChange={(event) => setMemoryTier(event.target.value)}><option value="">全部类型</option><option value="long_term">长期记忆 · 自动进入 Skill</option><option value="short_term">短期记忆 · MCP 按需查询</option></select>
+          <select value={scope} onChange={(event) => setScope(event.target.value)}><option value="">全部作用域</option><option value="agent">Agent 全局</option><option value="control">控制会话</option><option value="project">项目工作</option><option value="session">指定会话</option></select>
+          <select value={memoryTier} onChange={(event) => setMemoryTier(event.target.value)}><option value="">全部类型</option><option value="long_term">长期记忆 · 按作用域注入</option><option value="short_term">短期记忆 · MCP 按需查询</option></select>
           <select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="active">有效</option><option value="archived">已归档</option><option value="superseded">已替代</option></select>
         </div>
 
@@ -130,7 +135,7 @@ export function MemoriesView(props: {
             {memoryPagination.pageItems.map((memory) => (
               <article className={`memory-card ${memory.status} ${memory.pinned ? "pinned" : ""}`} key={memory.id}>
                 <header>
-                  <div className="memory-card-kinds"><span className={`memory-tier ${memory.memory_tier}`}>{memoryTierLabel(memory.memory_tier)}</span><span className={`memory-type ${memory.memory_type}`}>{memoryTypeLabel(memory.memory_type)}</span></div>
+                  <div className="memory-card-kinds"><span className={`memory-tier ${memory.memory_tier}`}>{memoryTierLabel(memory.memory_tier)}</span><span className="memory-type">{memoryScopeLabel(memory.scope)}</span><span className={`memory-type ${memory.memory_type}`}>{memoryTypeLabel(memory.memory_type)}</span></div>
                   <div className="memory-card-state">{memory.pinned ? <span title="已置顶">置顶</span> : null}<span className={`memory-status ${memory.status}`}>{memoryStatusLabel(memory.status)}</span></div>
                 </header>
                 <div className="memory-title"><h3>{memory.title}</h3><code>{memory.topic_key}</code></div>
@@ -140,7 +145,7 @@ export function MemoriesView(props: {
                 <div className="memory-facts">
                   <span><strong>{memory.importance}/5</strong>重要度</span>
                   <span><strong>{memory.confidence}%</strong>置信度</span>
-                  <span><strong>{memory.memory_tier === "long_term" ? "自动注入 Skill" : "MCP 按需检索"}</strong>{memory.project_id ? projectNames.get(memory.project_id) ?? "相关项目" : "Agent 私有"}</span>
+                  <span><strong>{memoryInjectionLabel(memory.injection_mode)}</strong>{memory.scope === "project" && memory.project_id ? `${projectNames.get(memory.project_id) ?? "相关项目"}工作会话` : memory.scope === "control" ? "仅控制会话" : memory.scope === "session" ? "仅指定会话" : "控制与项目工作会话"}</span>
                 </div>
                 <footer>
                   <div><span className="agent-avatar tiny">{(agentNames.get(memory.owner_agent_id) ?? "A").slice(0, 1)}</span><span><strong>{agentNames.get(memory.owner_agent_id) ?? "未知 Agent"}</strong><small>更新于 {formatTime(memory.updated_at)}{memory.source_refs.length ? ` · ${memory.source_refs.length} 个来源引用` : ""}</small></span></div>
@@ -191,7 +196,7 @@ export function MemoryEditDialog(props: { memory: AgentMemory; onClose: () => vo
     }
   }
 
-  return <Dialog title="编辑精华记忆" description={`主题键 ${props.memory.topic_key} 保持稳定，用于 Agent 去重和更新同一主题。`} onClose={props.onClose} wide><form className="stack-form memory-edit-form" onSubmit={(event) => void submit(event)}><Field label="记忆层级"><select value={memoryTier} onChange={(event) => setMemoryTier(event.target.value as AgentMemory["memory_tier"])}><option value="long_term">长期记忆 · 每次唤醒自动进入 Agent Skill</option><option value="short_term">短期记忆 · Agent 需要时通过 MCP 查询</option></select><small>只有稳定、长期指导工作的规则才应升级为长期记忆。</small></Field><Field label="标题"><input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="精华结论（不是原始记录）"><textarea value={summary} minLength={10} maxLength={2000} onChange={(event) => setSummary(event.target.value)} required /></Field><Field label="何时使用"><textarea value={whenToUse} maxLength={1000} onChange={(event) => setWhenToUse(event.target.value)} placeholder="说明适用的任务、模块、条件或决策场景" /></Field><div className="form-grid"><Field label="标签（逗号分隔）"><input value={tags} onChange={(event) => setTags(event.target.value)} /></Field><Field label="重要度（1–5）"><input type="number" min={1} max={5} value={importance} onChange={(event) => setImportance(Number(event.target.value))} /></Field><Field label="置信度（0–100）"><input type="number" min={0} max={100} value={confidence} onChange={(event) => setConfidence(Number(event.target.value))} /></Field></div>{props.memory.source_refs.length ? <div className="memory-source-list"><strong>来源引用</strong>{props.memory.source_refs.map((source) => <span key={`${source.source_type}-${source.source_id}`}><b>{source.source_type}</b><code>{source.source_id}</code>{source.label ? <small>{source.label}</small> : null}</span>)}</div> : null}<div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy}>{busy ? "保存中…" : "保存精华"}</button></div></form></Dialog>;
+  return <Dialog title="编辑精华记忆" description={`主题键 ${props.memory.topic_key} 保持稳定，用于 Agent 去重和更新同一主题。`} onClose={props.onClose} wide><form className="stack-form memory-edit-form" onSubmit={(event) => void submit(event)}><Field label="生效范围"><input value={`${memoryScopeLabel(props.memory.scope)} · ${memoryInjectionLabel(props.memory.injection_mode)}`} disabled /><small>作用域由 Agent 在形成记忆时确定，项目记忆只会进入对应项目工作会话。</small></Field><Field label="记忆层级"><select value={memoryTier} onChange={(event) => setMemoryTier(event.target.value as AgentMemory["memory_tier"])}><option value="long_term">长期记忆 · 按当前作用域自动注入</option><option value="short_term">短期记忆 · Agent 需要时通过 MCP 查询</option></select><small>只有稳定、长期指导工作的规则才应升级为长期记忆。</small></Field><Field label="标题"><input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} required /></Field><Field label="精华结论（不是原始记录）"><textarea value={summary} minLength={10} maxLength={2000} onChange={(event) => setSummary(event.target.value)} required /></Field><Field label="何时使用"><textarea value={whenToUse} maxLength={1000} onChange={(event) => setWhenToUse(event.target.value)} placeholder="说明适用的任务、模块、条件或决策场景" /></Field><div className="form-grid"><Field label="标签（逗号分隔）"><input value={tags} onChange={(event) => setTags(event.target.value)} /></Field><Field label="重要度（1–5）"><input type="number" min={1} max={5} value={importance} onChange={(event) => setImportance(Number(event.target.value))} /></Field><Field label="置信度（0–100）"><input type="number" min={0} max={100} value={confidence} onChange={(event) => setConfidence(Number(event.target.value))} /></Field></div>{props.memory.source_refs.length ? <div className="memory-source-list"><strong>来源引用</strong>{props.memory.source_refs.map((source) => <span key={`${source.source_type}-${source.source_id}`}><b>{source.source_type}</b><code>{source.source_id}</code>{source.label ? <small>{source.label}</small> : null}</span>)}</div> : null}<div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy}>{busy ? "保存中…" : "保存精华"}</button></div></form></Dialog>;
 }
 
 export function ApprovalsView(props: {

@@ -344,8 +344,15 @@ pub(super) struct ApprovalRequestsQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct CodexSessionsQuery {
+    pub(super) project_id: Option<Uuid>,
+    pub(super) limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct CompanyMemoriesQuery {
     pub(super) owner_agent_id: Option<Uuid>,
+    pub(super) scope: Option<String>,
     pub(super) project_id: Option<Uuid>,
     pub(super) memory_tier: Option<String>,
     pub(super) status: Option<String>,

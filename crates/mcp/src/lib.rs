@@ -16,12 +16,13 @@ use ai_chat_application::{
 };
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
-    company_profession_by_key, infer_company_profession, AgentMemorySourceRef,
-    AGENT_MEMORY_STATUS_ARCHIVED, AGENT_MEMORY_STATUS_SUPERSEDED,
-    COMPANY_PERMISSION_PROJECT_CREATE, COMPANY_PERMISSION_PROJECT_MANAGE,
-    COMPANY_PERMISSION_STAFF_HIRE, COMPANY_PERMISSION_STAFF_SUSPEND,
-    COMPANY_PERMISSION_STAFF_TERMINATE, COMPANY_PERMISSION_TASK_ASSIGN,
-    COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
+    company_profession_by_key, infer_company_profession, AgentExecutionIntent,
+    AgentMemorySourceRef, AGENT_EXECUTION_INTENT_ACTION_EXECUTE,
+    AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_MEMORY_STATUS_ARCHIVED,
+    AGENT_MEMORY_STATUS_SUPERSEDED, COMPANY_PERMISSION_PROJECT_CREATE,
+    COMPANY_PERMISSION_PROJECT_MANAGE, COMPANY_PERMISSION_STAFF_HIRE,
+    COMPANY_PERMISSION_STAFF_SUSPEND, COMPANY_PERMISSION_STAFF_TERMINATE,
+    COMPANY_PERMISSION_TASK_ASSIGN, COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
 };
 use ai_chat_infrastructure::project_git::{
     ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
@@ -111,7 +112,10 @@ enum AgentMemoryOperation {
     },
     Search {
         company_id: Uuid,
+        #[serde(default)]
+        scopes: Vec<String>,
         project_id: Option<Uuid>,
+        session_id: Option<Uuid>,
         query: Option<String>,
         #[serde(default)]
         memory_tiers: Vec<String>,
@@ -128,9 +132,14 @@ enum AgentMemoryOperation {
     },
     Remember {
         company_id: Uuid,
-        project_id: Option<Uuid>,
         #[schemars(
-            description = "Memory tier: long_term is injected into this Agent's generated Skill on every wake-up; short_term is retrieved on demand through MCP search."
+            description = "Memory scope: agent, control, project, or session. Defaults to project when project_id is present, otherwise agent."
+        )]
+        scope: Option<String>,
+        project_id: Option<Uuid>,
+        session_id: Option<Uuid>,
+        #[schemars(
+            description = "Memory tier: long_term is injected only into sessions allowed by its scope (agent, control, project, or session); short_term is retrieved on demand through MCP search."
         )]
         memory_tier: String,
         #[schemars(
@@ -207,6 +216,42 @@ impl From<AgentMemorySourceRefToolInput> for AgentMemorySourceRef {
             label: value.label,
         }
     }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AgentWorkSessionToolInput {
+    #[serde(flatten)]
+    operation: AgentWorkSessionOperation,
+    #[schemars(description = "Optional retry key for dispatch operations.")]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum AgentWorkSessionOperation {
+    List {
+        company_id: Uuid,
+        project_id: Option<Uuid>,
+        status: Option<String>,
+        limit: Option<usize>,
+    },
+    Get {
+        company_id: Uuid,
+        session_id: Uuid,
+    },
+    Dispatch {
+        company_id: Uuid,
+        project_id: Uuid,
+        #[serde(default)]
+        source_event_ids: Vec<Uuid>,
+        #[serde(default)]
+        task_ids: Vec<Uuid>,
+        objective: String,
+        #[serde(default)]
+        acceptance_criteria: Vec<String>,
+        priority: Option<String>,
+        dedupe_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

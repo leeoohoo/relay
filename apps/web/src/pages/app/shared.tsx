@@ -144,6 +144,8 @@ export function projectTypeLabel(value: string, types: CompanyProjectType[], lan
 export function memoryTypeLabel(value: AgentMemory["memory_type"]) { return ({ fact: "事实", decision: "决策", lesson: "教训", preference: "偏好", procedure: "操作规则", relationship: "协作关系", handoff: "交接" } as Record<AgentMemory["memory_type"], string>)[value]; }
 export function memoryStatusLabel(value: AgentMemory["status"]) { return ({ draft: "待验证", active: "有效", archived: "已归档", superseded: "已替代" } as Record<AgentMemory["status"], string>)[value]; }
 export function memoryTierLabel(value: AgentMemory["memory_tier"]) { return value === "long_term" ? "长期" : "短期"; }
+export function memoryScopeLabel(value: AgentMemory["scope"]) { return ({ agent: "Agent 全局", control: "控制会话", project: "项目工作", session: "指定会话" } as Record<AgentMemory["scope"], string>)[value]; }
+export function memoryInjectionLabel(value: AgentMemory["injection_mode"]) { return value === "always" ? "自动注入" : "MCP 按需检索"; }
 export function taskStatusLabel(value: CompanyProjectTask["status"]) { return { todo: "待处理", in_progress: "进行中", blocked: "阻塞", done: "已完成", failed: "失败", cancelled: "已取消" }[value]; }
 export function taskPriorityLabel(value: CompanyProjectTask["priority"]) { return { low: "低", normal: "普通", high: "高", urgent: "紧急" }[value]; }
 export function formatTaskDue(value: string) { return new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); }

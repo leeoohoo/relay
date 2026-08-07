@@ -3,13 +3,14 @@ import { api } from "../../api/client";
 import type { CompanyRealtimeEvent } from "../../api/types";
 import { Field } from "../../components/ui";
 import { useUiLanguage } from "../../i18n/uiLanguage";
-import type { CodexRunnerProfileView, CodexTriggerView } from "../../types/platform";
+import type { CodexRunnerProfileView, CodexSession, CodexTriggerView } from "../../types/platform";
 import { codexActivityPhaseLabel, codexOperationalStatusLabel, codexReasoningEffortLabel, codexRunDisplayMessage, codexTriggerStatusLabel, codexTriggerTypeLabel, formatElapsed, formatInterval, formatRunSeconds, formatTime, StatusBadge } from "../app/shared";
 
 export function CodexTriggerPanel(props: {
   companyId: string;
   agentId: string;
   agentName: string;
+  projects: Array<{ id: string; name: string }>;
   active: boolean;
   profiles: CodexRunnerProfileView[];
   token: string;
@@ -20,10 +21,10 @@ export function CodexTriggerPanel(props: {
 }) {
   const { language } = useUiLanguage();
   const [trigger, setTrigger] = useState<CodexTriggerView | null>(null);
+  const [sessions, setSessions] = useState<CodexSession[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const persistentThreadId = trigger?.recent_runs.find((run) => run.codex_thread_id)?.codex_thread_id ?? null;
   const selectedProfile = props.profiles.find((item) => item.profile.id === selectedProfileId)?.profile;
   const runningRun = trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const operationalStatus = trigger
@@ -37,6 +38,7 @@ export function CodexTriggerPanel(props: {
     : null;
 
   const endpoint = `/api/v1/companies/${props.companyId}/agents/${props.agentId}/codex-trigger`;
+  const sessionsEndpoint = `/api/v1/companies/${props.companyId}/agents/${props.agentId}/codex-sessions`;
 
   function applyTrigger(next: CodexTriggerView | null) {
     setTrigger(next);
@@ -46,23 +48,29 @@ export function CodexTriggerPanel(props: {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token)
-      .then(({ trigger }) => { if (active) applyTrigger(trigger); })
+    Promise.all([
+      api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token),
+      api<{ sessions: CodexSession[] }>(sessionsEndpoint, {}, props.token),
+    ])
+      .then(([{ trigger }, { sessions }]) => { if (active) { applyTrigger(trigger); setSessions(sessions); } })
       .catch(props.onError)
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [endpoint, props.token]);
+  }, [endpoint, sessionsEndpoint, props.token]);
 
   useEffect(() => {
     const event = props.realtimeEvent;
     if (!event || !event.event_type.startsWith("codex.")) return;
     if (event.payload.agent_profile_id !== props.agentId) return;
     let active = true;
-    api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token)
-      .then(({ trigger }) => { if (active) setTrigger(trigger); })
+    Promise.all([
+      api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token),
+      api<{ sessions: CodexSession[] }>(sessionsEndpoint, {}, props.token),
+    ])
+      .then(([{ trigger }, { sessions }]) => { if (active) { setTrigger(trigger); setSessions(sessions); } })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [endpoint, props.agentId, props.realtimeEvent, props.token]);
+  }, [endpoint, sessionsEndpoint, props.agentId, props.realtimeEvent, props.token]);
 
   useEffect(() => {
     if (!loading && !selectedProfileId && props.profiles.length) {
@@ -128,10 +136,29 @@ export function CodexTriggerPanel(props: {
       </div>
       {trigger ? (
         <div className="codex-session-strip">
-          <span><small>固定 Codex 会话</small><code title={persistentThreadId ?? undefined}>{persistentThreadId ?? "首次运行时创建"}</code></span>
+          <span><small>控制会话</small><strong>{sessions.some((session) => session.session_kind === "control" && session.status === "active") ? "已建立" : "首次有效唤醒时创建"}</strong></span>
+          <span><small>项目工作会话</small><strong>{sessions.filter((session) => session.session_kind === "project" && session.status === "active").length} 个</strong></span>
           <span><small>当前状态</small><strong>{runningRun ? `已运行 ${formatElapsed(runningRun.started_at)}` : trigger.config.lease_owner ? "已领取，等待本地 Codex 启动" : trigger.config.manual_run_requested_at ? "手动唤醒已排队" : trigger.config.wake_requested_at ? "消息唤醒已排队" : codexTriggerStatusLabel(trigger.config.status)}</strong></span>
           <span><small>下次兜底检查</small><strong>{formatTime(trigger.config.next_run_at)}</strong></span>
           <span><small>最近成功</small><strong>{trigger.config.last_success_at ? formatTime(trigger.config.last_success_at) : "尚未成功运行"}</strong></span>
+        </div>
+      ) : null}
+      {sessions.length ? (
+        <div className="codex-work-session-list">
+          <div className="codex-run-list-heading"><strong>工作会话目录</strong><small>控制会话负责判断；项目会话负责执行</small></div>
+          {sessions.slice(0, 12).map((session) => {
+            const projectName = session.project_id
+              ? props.projects.find((project) => project.id === session.project_id)?.name ?? `项目 ${session.project_id.slice(0, 8)}`
+              : "Relay 控制会话";
+            return (
+              <div className="codex-work-session-row" key={session.id}>
+                <StatusBadge value={session.status} />
+                <div><strong>{projectName}</strong><small>{session.session_kind === "control" ? "消息、协调与派工" : `项目工作会话 · 第 ${session.generation} 代`}</small></div>
+                <p>{session.summary_short || "尚未生成最近工作总结"}</p>
+                <time>{formatTime(session.last_used_at)}</time>
+              </div>
+            );
+          })}
         </div>
       ) : null}
       {runningRun ? (
@@ -199,4 +226,3 @@ export function CodexTriggerPanel(props: {
     </div>
   );
 }
-

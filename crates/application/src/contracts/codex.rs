@@ -132,6 +132,15 @@ pub struct ListCompanyAgentCodexRunsForHumanInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListCompanyAgentCodexSessionsForHumanInput {
+    pub human_user_id: Uuid,
+    pub company_id: Uuid,
+    pub agent_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCodexWorkDecision {
     pub should_run: bool,
     pub trigger_type: String,
@@ -141,6 +150,7 @@ pub struct AgentCodexWorkDecision {
     pub active_task_count: usize,
     pub waiting_task_count: usize,
     pub asset_refresh_due: bool,
+    pub pending_execution_intent_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

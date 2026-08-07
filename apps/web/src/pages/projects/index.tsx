@@ -11,6 +11,7 @@ import { ProjectGitCard } from "./git";
 import { ProjectOwnerDialog } from "./owner-dialog";
 import { ProjectRepositoryBrowser } from "./repository";
 import { ProjectRuleCard } from "./rule";
+import { ProjectSessionsCard } from "./sessions";
 import { TasksView } from "./tasks";
 
 export function ProjectsView(props: {
@@ -24,7 +25,7 @@ export function ProjectsView(props: {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showOwnerDialog, setShowOwnerDialog] = useState(false);
-  const [activeTab, setActiveTab] = useState<"git" | "repository" | "rule" | "assets" | "tasks" | "memories">("git");
+  const [activeTab, setActiveTab] = useState<"git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions">("git");
   const [projectActionBusy, setProjectActionBusy] = useState(false);
   const selectedProject = props.consoleData.projects.find((project) => project.project.id === selectedProjectId) ?? null;
   const projectStats = {
@@ -34,7 +35,7 @@ export function ProjectsView(props: {
   };
   const projectPagination = usePagination(props.consoleData.projects, 8, props.consoleData.company.id);
 
-  function openProject(projectId: string, tab: "git" | "repository" | "rule" | "assets" | "tasks" | "memories") {
+  function openProject(projectId: string, tab: "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions") {
     setSelectedProjectId(projectId);
     setActiveTab(tab);
   }
@@ -99,6 +100,7 @@ export function ProjectsView(props: {
             <button className={activeTab === "assets" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "assets"} onClick={() => setActiveTab("assets")}>项目资产 <span>{selectedProject.assets.length}</span></button>
             <button className={activeTab === "tasks" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "tasks"} onClick={() => setActiveTab("tasks")}>项目任务 <span>{selectedProject.tasks.length}</span></button>
             <button className={activeTab === "memories" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "memories"} onClick={() => setActiveTab("memories")}>项目记忆</button>
+            <button className={activeTab === "sessions" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "sessions"} onClick={() => setActiveTab("sessions")}>Agent 会话</button>
           </div>
           {activeTab === "git" ? (
             <ProjectGitCard
@@ -159,6 +161,14 @@ export function ProjectsView(props: {
               embedded
               onError={props.onError}
               onNotice={props.onNotice}
+            />
+          ) : null}
+          {activeTab === "sessions" ? (
+            <ProjectSessionsCard
+              companyId={props.consoleData.company.id}
+              project={selectedProject}
+              token={props.token}
+              onError={props.onError}
             />
           ) : null}
           {showOwnerDialog ? (

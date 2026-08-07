@@ -72,7 +72,9 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
         .remember_agent_memory(RememberAgentMemoryInput {
             actor_agent_id: alpha.agent_profile.id,
             company_id: company.company.id,
+            scope: None,
             project_id: Some(project.project.id),
+            session_id: None,
             memory_tier: AGENT_MEMORY_TIER_SHORT_TERM.into(),
             memory_type: "preference".into(),
             topic_key: "alpha-review-preference".into(),
@@ -88,12 +90,14 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
         })
         .expect("short-term memory should be stored");
     assert_eq!(short_term_memory.status, AGENT_MEMORY_STATUS_ACTIVE);
-    assert_eq!(short_term_memory.scope, AGENT_MEMORY_SCOPE_AGENT);
+    assert_eq!(short_term_memory.scope, AGENT_MEMORY_SCOPE_PROJECT);
     assert!(app
         .search_agent_memories(SearchAgentMemoriesInput {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
+            scopes: Vec::new(),
             project_id: Some(project.project.id),
+            session_id: None,
             query: Some("失败测试".into()),
             memory_tiers: vec![AGENT_MEMORY_TIER_SHORT_TERM.into()],
             memory_types: Vec::new(),
@@ -108,7 +112,9 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
         .remember_agent_memory(RememberAgentMemoryInput {
             actor_agent_id: alpha.agent_profile.id,
             company_id: company.company.id,
+            scope: None,
             project_id: Some(project.project.id),
+            session_id: None,
             memory_tier: AGENT_MEMORY_TIER_LONG_TERM.into(),
             memory_type: "decision".into(),
             topic_key: "order-concurrency-control".into(),
@@ -128,12 +134,14 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
         })
         .expect("long-term memory should be stored");
     assert_eq!(long_term_memory.status, AGENT_MEMORY_STATUS_ACTIVE);
-    assert_eq!(long_term_memory.scope, AGENT_MEMORY_SCOPE_AGENT);
+    assert_eq!(long_term_memory.scope, AGENT_MEMORY_SCOPE_PROJECT);
     assert!(app
         .search_agent_memories(SearchAgentMemoriesInput {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
+            scopes: Vec::new(),
             project_id: Some(project.project.id),
+            session_id: None,
             query: Some("乐观锁".into()),
             memory_tiers: vec![AGENT_MEMORY_TIER_LONG_TERM.into()],
             memory_types: Vec::new(),
@@ -148,7 +156,9 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
         .search_agent_memories(SearchAgentMemoriesInput {
             actor_agent_id: alpha.agent_profile.id,
             company_id: company.company.id,
+            scopes: Vec::new(),
             project_id: Some(project.project.id),
+            session_id: None,
             query: Some("订单".into()),
             memory_tiers: vec![AGENT_MEMORY_TIER_LONG_TERM.into()],
             memory_types: vec!["decision".into()],
@@ -171,6 +181,93 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
     assert_eq!(overview.short_term_count, 1);
     assert_eq!(overview.long_term_count, 1);
     assert_eq!(overview.long_term.len(), 1);
+
+    let now = now_utc();
+    let project_session = ai_chat_domain::company::AgentCodexSession {
+        id: Uuid::new_v4(),
+        agent_profile_id: alpha.agent_profile.id,
+        session_kind: ai_chat_domain::company::AGENT_CODEX_SESSION_KIND_PROJECT.into(),
+        scope_key: format!("project:{}", project.project.id),
+        project_id: Some(project.project.id),
+        generation: 1,
+        codex_thread_id: "alpha-memory-project-thread".into(),
+        workspace_key: "relay-scoped-sessions-v9:alpha-memory-project".into(),
+        status: ai_chat_domain::company::AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),
+        summary_short: "项目记忆会话".into(),
+        checkpoint_json: json!({}),
+        skill_bundle_version: "skills-v1".into(),
+        memory_snapshot_version: "memory-v1".into(),
+        policy_version: "relay-scoped-sessions-v9".into(),
+        created_at: now,
+        last_used_at: now,
+        archived_at: None,
+    };
+    app.save_agent_codex_session(project_session.clone())
+        .expect("project session should be saved");
+    let session_memory = app
+        .remember_agent_memory(RememberAgentMemoryInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            scope: Some(AGENT_MEMORY_SCOPE_SESSION.into()),
+            project_id: None,
+            session_id: Some(project_session.id),
+            memory_tier: AGENT_MEMORY_TIER_LONG_TERM.into(),
+            memory_type: "handoff".into(),
+            topic_key: "project-session-checkpoint".into(),
+            title: "工作会话检查点".into(),
+            summary: "这个结论只属于当前项目工作会话，不能进入其他项目或控制会话。".into(),
+            when_to_use: Some("恢复当前项目工作会话时".into()),
+            tags: vec!["session".into()],
+            importance: Some(4),
+            confidence: Some(95),
+            source_refs: Vec::new(),
+            expires_at: None,
+            supersedes_memory_id: None,
+        })
+        .expect("session memory should be stored");
+    assert_eq!(
+        session_memory.visibility,
+        ai_chat_domain::company::AGENT_MEMORY_VISIBILITY_WORKER
+    );
+    let project_without_session = app
+        .agent_long_term_memories_for_project_session(
+            alpha.agent_profile.id,
+            company.company.id,
+            project.project.id,
+            None,
+        )
+        .expect("project memories should load");
+    assert_eq!(project_without_session.len(), 1);
+    let project_with_session = app
+        .agent_long_term_memories_for_project_session(
+            alpha.agent_profile.id,
+            company.company.id,
+            project.project.id,
+            Some(project_session.id),
+        )
+        .expect("project and session memories should load together");
+    assert_eq!(project_with_session.len(), 2);
+    assert!(project_with_session
+        .iter()
+        .any(|memory| memory.id == session_memory.id));
+
+    let searched_session_memory = app
+        .search_agent_memories(SearchAgentMemoriesInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            scopes: Vec::new(),
+            project_id: Some(project.project.id),
+            session_id: Some(project_session.id),
+            query: Some("当前项目工作会话".into()),
+            memory_tiers: vec![AGENT_MEMORY_TIER_LONG_TERM.into()],
+            memory_types: Vec::new(),
+            tags: Vec::new(),
+            status: None,
+            limit: None,
+        })
+        .expect("session-scoped search should succeed");
+    assert_eq!(searched_session_memory.len(), 1);
+    assert_eq!(searched_session_memory[0].id, session_memory.id);
 
     let beta_overview = app
         .agent_memory_overview(
@@ -234,7 +331,9 @@ fn distilled_memory_rejects_duplicate_topics_and_secrets() {
         app.remember_agent_memory(RememberAgentMemoryInput {
             actor_agent_id: agent.agent_profile.id,
             company_id: company.company.id,
+            scope: None,
             project_id: None,
+            session_id: None,
             memory_tier: AGENT_MEMORY_TIER_SHORT_TERM.into(),
             memory_type: "lesson".into(),
             topic_key: topic_key.into(),

@@ -44,15 +44,15 @@ fn session_key_is_stable_when_skills_language_or_plugins_change() {
     };
     assert_eq!(
         codex_session_key(&workspace),
-        "relay-skills-v8:project/agent"
+        "relay-scoped-sessions-v9:project/agent"
     );
     assert!(codex_session_key_matches(
-        "relay-skills-v8:project/agent:old-skill-hash:old-plugin-hash",
-        "relay-skills-v8:project/agent"
+        "relay-scoped-sessions-v9:project/agent:old-skill-hash:old-plugin-hash",
+        "relay-scoped-sessions-v9:project/agent"
     ));
     assert!(!codex_session_key_matches(
-        "relay-skills-v8:another-project/agent:old-skill-hash:old-plugin-hash",
-        "relay-skills-v8:project/agent"
+        "relay-scoped-sessions-v9:another-project/agent:old-skill-hash:old-plugin-hash",
+        "relay-scoped-sessions-v9:project/agent"
     ));
 }
 
@@ -105,7 +105,7 @@ fn permission_blocks_are_removed_when_the_agent_lacks_the_permission() {
 }
 
 #[test]
-fn relay_skills_are_materialized_in_the_codex_repo_skill_location() {
+fn control_session_loads_profession_skill_without_project_skill() {
     let workspace = std::env::temp_dir().join(format!("relay-skill-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&workspace).expect("test workspace should be created");
     let agent = AgentProfile {
@@ -120,6 +120,7 @@ fn relay_skills_are_materialized_in_the_codex_repo_skill_location() {
     };
     let prepared = prepare_relay_skills(
         &workspace,
+        RELAY_SKILL_BUNDLE_CONTROL,
         &agent,
         "软件工程师",
         &["task.update".into()],
@@ -139,6 +140,23 @@ fn relay_skills_are_materialized_in_the_codex_repo_skill_location() {
         .join(&prepared.profession_name)
         .join("SKILL.md")
         .is_file());
+    let profession_skill = fs::read_to_string(
+        workspace
+            .join(".agents/skills")
+            .join(&prepared.profession_name)
+            .join("SKILL.md"),
+    )
+    .expect("control profession skill should be readable");
+    let control_skill = fs::read_to_string(
+        workspace
+            .join(".agents/skills")
+            .join(&prepared.session_name)
+            .join("SKILL.md"),
+    )
+    .expect("control session skill should be readable");
+    assert!(profession_skill.contains("软件工程师"));
+    assert!(control_skill.contains("必须同时遵循职业 Skill"));
+    assert!(prepared.project_name.is_none());
     assert!(!prepared.version_hash.is_empty());
     fs::remove_dir_all(workspace).expect("test workspace should be removed");
 }
@@ -159,6 +177,7 @@ fn english_relay_skills_are_materialized_without_chinese_operating_rules() {
     };
     let prepared = prepare_relay_skills(
         &workspace,
+        RELAY_SKILL_BUNDLE_CONTROL,
         &agent,
         "Security Engineer",
         &["task.update".into()],
@@ -205,6 +224,7 @@ fn long_term_memories_are_injected_without_rotating_the_codex_session() {
     };
     let without_memory = prepare_relay_skills(
         &workspace,
+        RELAY_SKILL_BUNDLE_CONTROL,
         &agent,
         "软件工程师",
         &[],
@@ -221,7 +241,10 @@ fn long_term_memories_are_injected_without_rotating_the_codex_session() {
         owner_agent_id: agent.id,
         scope: "agent".into(),
         project_id: None,
+        session_id: None,
         memory_tier: "long_term".into(),
+        injection_mode: "always".into(),
+        visibility: "both".into(),
         memory_type: "procedure".into(),
         topic_key: "always-run-migrations".into(),
         title: "发布前验证迁移".into(),
@@ -247,6 +270,7 @@ fn long_term_memories_are_injected_without_rotating_the_codex_session() {
     };
     let with_memory = prepare_relay_skills(
         &workspace,
+        RELAY_SKILL_BUNDLE_CONTROL,
         &agent,
         "软件工程师",
         &[],

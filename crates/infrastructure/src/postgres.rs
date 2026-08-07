@@ -28,12 +28,12 @@ use ai_chat_domain::agent_identity::{
 };
 use ai_chat_domain::company::{
     AgentCodexRunActivity, AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig,
-    AgentCodexTriggerRun, AgentMemory, AgentMemorySourceRef, AgentStaffingAction,
-    AgentToolApprovalRequest, CodexPluginCatalogSnapshot, CodexPluginOperation, Company,
-    CompanyAgentMembership, CompanyCodexRunnerProfile, CompanyGovernancePolicySettings,
-    CompanyGovernancePolicyVersion, CompanyHumanMember, CompanyProject, CompanyProjectAsset,
-    CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig, CompanyProjectMember,
-    CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
+    AgentCodexTriggerRun, AgentExecutionIntent, AgentMemory, AgentMemorySourceRef,
+    AgentStaffingAction, AgentToolApprovalRequest, CodexPluginCatalogSnapshot,
+    CodexPluginOperation, Company, CompanyAgentMembership, CompanyCodexRunnerProfile,
+    CompanyGovernancePolicySettings, CompanyGovernancePolicyVersion, CompanyHumanMember,
+    CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig,
+    CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
     CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRealtimeEvent, OrgUnit,
     COMPANY_AGENT_ROLE_MANAGER,
 };
