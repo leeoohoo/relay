@@ -23,7 +23,7 @@ use ai_chat_domain::company::{
     COMPANY_PERMISSION_STAFF_TERMINATE, COMPANY_PERMISSION_TASK_ASSIGN,
     COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
 };
-use ai_chat_infrastructure::gitness::{
+use ai_chat_infrastructure::project_git::{
     ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
 };
 use ai_chat_shared::{AppError, AppResult};
@@ -319,19 +319,10 @@ enum CompanyProjectOperation {
         name: String,
         description: Option<String>,
         member_agent_ids: Vec<Uuid>,
-        #[schemars(
-            description = "Automatically create a private repository and project token. Defaults to true when omitted."
-        )]
-        provision_git: Option<bool>,
     },
     GitProvision {
         company_id: Uuid,
         project_id: Uuid,
-        #[schemars(
-            description = "Optional safe repository identifier. Relay generates one from the project name and UUID when omitted."
-        )]
-        repository_identifier: Option<String>,
-        is_public: Option<bool>,
     },
     Update {
         company_id: Uuid,

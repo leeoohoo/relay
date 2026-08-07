@@ -468,5 +468,36 @@
 .task-status.waiting,
 .task-priority.high { color: #ffd087; background: rgba(255, 197, 109, .1); }
 .task-priority.urgent { color: #ff9ca4; background: rgba(255, 125, 135, .1); }
+
+.project-git-managed-url,
+.project-git-managed-grid > div,
+.project-repository-browser-toolbar,
+.project-repository-browser-grid,
+.project-repository-browser-tree { color: #dce7ef; border-color: var(--relay-line); background: #0b1118; }
+.project-git-managed-url small,
+.project-git-managed-grid small,
+.project-git-managed-path,
+.project-repository-browser-state > code,
+.repository-entry-size,
+.repository-entry-name small,
+.repository-loading { color: #8194a2; }
+.project-git-managed-url code,
+.project-git-managed-grid strong { color: #dce8ef; }
+.project-repository-ref-control > svg { color: var(--relay-cyan); }
+.project-repository-ref-control select { color: #dce7ef; border-color: var(--relay-line); background: #080e14; }
+.repository-source { color: #c8ff9f; background: rgba(168,255,96,.09); }
+.project-repository-browser-error { color: #ffabb1; border-color: rgba(255,125,135,.22); background: rgba(255,125,135,.07); }
+.project-repository-browser-tree { border-right-color: var(--relay-line); background: #090f16; }
+.repository-breadcrumbs,
+.project-repository-browser-tree > .pagination { border-color: var(--relay-line); }
+.repository-breadcrumbs button { color: #9fb0bc; }
+.repository-breadcrumbs button:hover { color: #e6f0f5; background: rgba(77,226,255,.055); }
+.repository-entry-list > button { color: #acbbc5; }
+.repository-entry-list > button:hover:not(:disabled),
+.repository-entry-list > button.active { color: #e5eef3; background: rgba(77,226,255,.055); }
+.repository-entry-icon { color: #91a5b3; background: rgba(122,143,160,.1); }
+.repository-entry-list .directory .repository-entry-icon { color: #c8ff9f; background: rgba(168,255,96,.08); }
+.repository-entry-list > button > svg { color: #657987; }
+.project-git-missing svg { color: #ff9ca4; }
 .plugin-summary small,
 .project-overview-metrics small { color: #91a5b5; }

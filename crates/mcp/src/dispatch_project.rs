@@ -19,7 +19,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         name,
                         description,
                         member_agent_ids,
-                        provision_git,
                     } => {
                         let project =
                             self.platform
@@ -30,10 +29,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                     description,
                                     member_agent_ids,
                                 })?;
-                        let git_provisioning = if provision_git.unwrap_or(true) {
-                            match self
-                                .provision_project_git(agent_id, company_id, &project, None, false)
-                            {
+                        let git_provisioning =
+                            match self.provision_project_git(agent_id, company_id, &project) {
                                 Ok(git) => json!({ "status": "ready", "git": git }),
                                 Err(error) => json!({
                                     "status": "failed",
@@ -41,10 +38,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                     "message": error.to_string(),
                                     "retry_action": "git_provision"
                                 }),
-                            }
-                        } else {
-                            json!({ "status": "skipped" })
-                        };
+                            };
                         let project =
                             self.platform.get_company_project(GetCompanyProjectInput {
                                 actor_agent_id: agent_id,
@@ -59,8 +53,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     CompanyProjectOperation::GitProvision {
                         company_id,
                         project_id,
-                        repository_identifier,
-                        is_public,
                     } => {
                         let project =
                             self.platform.get_company_project(GetCompanyProjectInput {
@@ -68,13 +60,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                 company_id,
                                 project_id,
                             })?;
-                        let git = self.provision_project_git(
-                            agent_id,
-                            company_id,
-                            &project,
-                            repository_identifier,
-                            is_public.unwrap_or(false),
-                        )?;
+                        let git = self.provision_project_git(agent_id, company_id, &project)?;
                         let project =
                             self.platform.get_company_project(GetCompanyProjectInput {
                                 actor_agent_id: agent_id,

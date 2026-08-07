@@ -87,6 +87,52 @@ export type ProjectGitAdminView = {
   updated_at: string;
 };
 
+export type ProjectRepositoryRef = {
+  name: string;
+  full_name: string;
+  commit: string;
+  kind: "branch" | "tag";
+  is_default: boolean;
+};
+
+export type ProjectRepositoryRefsResponse = {
+  refs: ProjectRepositoryRef[];
+  default_ref: string;
+  refreshed_at: string;
+  source: "harness_api";
+};
+
+export type ProjectRepositoryEntry = {
+  name: string;
+  path: string;
+  kind: "directory" | "file" | "symlink" | "submodule";
+  size: number | null;
+  mode: string;
+};
+
+export type ProjectRepositoryTreeResponse = {
+  reference: string;
+  commit: string;
+  path: string;
+  entries: ProjectRepositoryEntry[];
+  page: number;
+  per_page: number;
+  total: number;
+  total_pages: number;
+};
+
+export type ProjectRepositoryFileResponse = {
+  reference: string;
+  commit: string;
+  path: string;
+  name: string;
+  size: number;
+  line_count: number | null;
+  binary: boolean;
+  content: string | null;
+  language: string;
+};
+
 export type CompanyProjectTask = {
   id: string;
   project_id: string;

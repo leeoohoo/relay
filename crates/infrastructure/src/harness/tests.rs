@@ -6,8 +6,9 @@ use std::sync::{
 
 use ai_chat_application::{AuthPlatformRepository, MemoryPlatformRepository};
 use axum::{
-    extract::State,
-    routing::{patch, post},
+    extract::{Query, State},
+    http::HeaderMap,
+    routing::{get, patch, post},
     Json, Router,
 };
 
@@ -108,6 +109,135 @@ async fn provisions_once_and_reuses_the_persisted_harness_account() {
     let second = provisioner.ensure_account(&user).await.unwrap().unwrap();
     assert_eq!(second.attempt_count, 1);
     assert_eq!(register_calls.load(Ordering::SeqCst), 1);
+
+    server.abort();
+    let _ = fs::remove_dir_all(credentials_root);
+}
+
+#[tokio::test]
+async fn repository_browser_reads_branches_and_files_through_harness_api() {
+    let app = Router::new()
+        .route(
+            "/api/v1/repos/u-relay-7533e6e649ad/demo/+/branches",
+            get(|headers: HeaderMap| async move {
+                assert_eq!(
+                    headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("Bearer harness-access-token")
+                );
+                Json(serde_json::json!([{
+                    "name": "main",
+                    "sha": "1111111111111111111111111111111111111111",
+                    "is_default": true
+                }]))
+            }),
+        )
+        .route(
+            "/api/v1/repos/u-relay-7533e6e649ad/demo/+/content/",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(query.get("git_ref").map(String::as_str), Some("main"));
+                Json(serde_json::json!({
+                    "type": "dir",
+                    "path": "",
+                    "content": {"entries": [{
+                        "type": "file",
+                        "name": "README.md",
+                        "path": "README.md"
+                    }]}
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/repos/u-relay-7533e6e649ad/demo/+/content/README.md",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(query.get("git_ref").map(String::as_str), Some("main"));
+                Json(serde_json::json!({
+                    "type": "file",
+                    "name": "README.md",
+                    "path": "README.md",
+                    "content": {
+                        "encoding": "base64",
+                        "data": "IyBEZW1vCg==",
+                        "size": 7,
+                        "data_size": 7
+                    }
+                }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let base_url = format!("http://{address}");
+    let credentials_root = std::env::temp_dir().join(format!(
+        "relay-harness-repository-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    let user_id = Uuid::parse_str("7533e6e6-49ad-41b9-812b-048f720c368a").unwrap();
+    let repo = MemoryPlatformRepository::default();
+    repo.upsert_human_harness_account(HumanHarnessAccount {
+        human_user_id: user_id,
+        provider_mode: "official".into(),
+        harness_base_url: base_url.clone(),
+        harness_uid: "relay-7533e6e649ad".into(),
+        harness_email: "human@example.test".into(),
+        space_identifier: "u-relay-7533e6e649ad".into(),
+        status: HUMAN_HARNESS_STATUS_ACTIVE.into(),
+        attempt_count: 1,
+        last_error: None,
+        last_attempt_at: Some(Utc::now()),
+        provisioned_at: Some(Utc::now()),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    })
+    .unwrap();
+    let credentials = HarnessCredentialStore::at(credentials_root.clone()).unwrap();
+    credentials
+        .store_access_token(user_id, "harness-access-token")
+        .unwrap();
+    let provisioner = HarnessProvisioner {
+        repo,
+        config: HarnessProvisioningConfig {
+            mode: HarnessMode::Official,
+            api_base_url: Some(base_url.clone()),
+            public_base_url: Some(base_url.clone()),
+            space_prefix: "u-".into(),
+            admin_email: None,
+            admin_password: None,
+        },
+        credentials,
+        client: reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap(),
+        user_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
+    let remote_url = format!("{base_url}/git/u-relay-7533e6e649ad/demo.git");
+
+    let refs = provisioner
+        .list_repository_refs(user_id, remote_url.as_str())
+        .await
+        .unwrap()
+        .expect("Harness route");
+    assert_eq!(refs[0].name, "main");
+    let root = provisioner
+        .get_repository_content(user_id, remote_url.as_str(), "main", "")
+        .await
+        .unwrap()
+        .expect("root");
+    let HarnessRepositoryContent::Directory { entries, .. } = root else {
+        panic!("expected directory");
+    };
+    assert_eq!(entries[0].path, "README.md");
+    let file = provisioner
+        .get_repository_content(user_id, remote_url.as_str(), "main", "README.md")
+        .await
+        .unwrap()
+        .expect("file");
+    let HarnessRepositoryContent::File(file) = file else {
+        panic!("expected file");
+    };
+    assert_eq!(file.bytes, b"# Demo\n");
 
     server.abort();
     let _ = fs::remove_dir_all(credentials_root);

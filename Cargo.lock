@@ -67,6 +67,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64",
  "chrono",
  "fallible-iterator",
  "fs2",

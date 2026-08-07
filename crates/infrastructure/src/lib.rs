@@ -3,10 +3,10 @@ pub mod codex_trigger;
 pub mod config;
 pub mod git_credentials;
 pub mod git_workspace;
-pub mod gitness;
 pub mod harness;
 pub mod ownership_proof;
 pub mod postgres;
+pub mod project_git;
 pub mod realtime;
 
 use anyhow::Context;

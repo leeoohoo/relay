@@ -22,7 +22,16 @@ use ai_chat_shared::{AppError, AppResult};
 
 use crate::config::{ApiConfig, HarnessMode};
 use crate::git_credentials::GitCredentialStore;
-use crate::gitness::{generated_repository_identifier, ProvisionedProjectGit};
+use crate::project_git::{
+    generated_repository_identifier, ProjectGitProvisionRequest, ProjectGitProvisioner,
+    ProvisionedProjectGit,
+};
+
+mod repository;
+
+pub use repository::{
+    HarnessRepositoryContent, HarnessRepositoryEntry, HarnessRepositoryFile, HarnessRepositoryRef,
+};
 
 const MAX_HARNESS_ERROR_CHARS: usize = 1_000;
 
@@ -43,6 +52,64 @@ pub struct HarnessProvisioner<R> {
     credentials: HarnessCredentialStore,
     client: reqwest::Client,
     user_locks: Arc<Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>>,
+}
+
+#[derive(Clone)]
+pub struct HarnessProjectGitProvisioner<R> {
+    harness: HarnessProvisioner<R>,
+    git_credentials: GitCredentialStore,
+}
+
+impl<R> HarnessProjectGitProvisioner<R> {
+    pub fn new(harness: HarnessProvisioner<R>, git_credentials: GitCredentialStore) -> Self {
+        Self {
+            harness,
+            git_credentials,
+        }
+    }
+}
+
+impl<R: PlatformRepository> ProjectGitProvisioner for HarnessProjectGitProvisioner<R> {
+    fn provision(&self, request: ProjectGitProvisionRequest) -> AppResult<ProvisionedProjectGit> {
+        let company = self
+            .harness
+            .repo
+            .get_company_result(request.company_id)?
+            .ok_or_else(|| AppError::NotFound("company not found".into()))?;
+        let human = self
+            .harness
+            .repo
+            .get_human_user_result(company.owner_user_id)?
+            .ok_or_else(|| AppError::NotFound("company owner not found".into()))?;
+        let harness = self.harness.clone();
+        let git_credentials = self.git_credentials.clone();
+        run_harness_operation(async move {
+            harness.ensure_active_account(&human).await?;
+            harness
+                .provision_project_git(
+                    human.id,
+                    request.project_id,
+                    request.project_name.as_str(),
+                    request.description.as_str(),
+                    &git_credentials,
+                )
+                .await
+        })
+    }
+}
+
+fn run_harness_operation<F, T>(future: F) -> AppResult<T>
+where
+    F: std::future::Future<Output = AppResult<T>>,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return tokio::task::block_in_place(|| handle.block_on(future));
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| AppError::Internal(format!("create Harness runtime: {error}")))?
+        .block_on(future)
 }
 
 impl<R: PlatformRepository> HarnessProvisioner<R> {

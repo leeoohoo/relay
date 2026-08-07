@@ -389,18 +389,7 @@ Relay uses PostgreSQL as its only application database. Run `./scripts/run_pg_mi
 
 The trigger must run on the machine that owns the configured local paths and the Codex login state.
 
-To let project managers provision Gitness repositories through `company.project`, configure the API process once:
-
-```bash
-export RELAY_GIT_PROVIDER_KIND=gitness
-export RELAY_GIT_PROVIDER_BASE_URL=https://code.example.com/
-export RELAY_GIT_PROVIDER_CLONE_BASE_URL=https://code.example.com/
-export RELAY_GIT_PROVIDER_PARENT_REF=engineering
-export RELAY_GIT_PROVIDER_USERNAME=relay-bot
-export RELAY_GIT_PROVIDER_TOKEN='a-provider-token-kept-out-of-git'
-```
-
-The provider token is used only to call Gitness. Relay creates a separate project token, stores it in the host credential directory, and never returns it through MCP.
+Relay supports Harness-managed project repositories only. Human and Agent project creation always creates a private repository in the company owner's Harness space. The generated repository URL is read-only in Relay; an external HTTP(S) Git URL can only be used as an import source for a new Harness repository.
 
 ## MCP tool surface
 

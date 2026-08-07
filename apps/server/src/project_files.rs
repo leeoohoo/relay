@@ -226,6 +226,68 @@ pub(super) fn import_project_folder(source: &FsPath, destination: &FsPath) -> Ap
     result
 }
 
+pub(super) fn import_project_git(
+    remote_url: &str,
+    branch: Option<&str>,
+    destination: &FsPath,
+) -> AppResult<()> {
+    let remote = reqwest::Url::parse(remote_url)
+        .map_err(|error| AppError::Validation(format!("invalid Git import URL: {error}")))?;
+    if !matches!(remote.scheme(), "http" | "https")
+        || remote.host_str().is_none()
+        || !remote.username().is_empty()
+        || remote.password().is_some()
+    {
+        return Err(AppError::Validation(
+            "Git import URL must be an HTTP(S) repository URL without embedded credentials".into(),
+        ));
+    }
+    let branch = branch.map(str::trim).filter(|value| !value.is_empty());
+    if branch.is_some_and(|value| {
+        value.len() > 255
+            || value.starts_with('-')
+            || value.chars().any(char::is_whitespace)
+            || value.contains("..")
+            || value.contains(['~', '^', ':', '?', '*', '[', '\\'])
+    }) {
+        return Err(AppError::Validation("invalid Git import branch".into()));
+    }
+    if destination.exists() {
+        return Err(AppError::Conflict(
+            "managed project destination already exists".into(),
+        ));
+    }
+    let mut command = Command::new("git");
+    command.args(["clone", "--depth", "1", "--single-branch"]);
+    if let Some(branch) = branch {
+        command.args(["--branch", branch]);
+    }
+    let output = command
+        .arg("--")
+        .arg(remote.as_str())
+        .arg(destination)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "credential.helper")
+        .env("GIT_CONFIG_VALUE_0", "")
+        .env("GIT_HTTP_LOW_SPEED_LIMIT", "1")
+        .env("GIT_HTTP_LOW_SPEED_TIME", "30")
+        .output()
+        .map_err(|error| AppError::Internal(format!("failed to start Git import: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let _ = fs::remove_dir_all(destination);
+    Err(AppError::Validation(format!(
+        "failed to import Git repository: {}",
+        String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(2_000)
+            .collect::<String>()
+            .trim()
+    )))
+}
+
 pub(super) fn initialize_managed_project_git(path: &FsPath) -> AppResult<()> {
     fn run(path: &FsPath, args: &[&str]) -> AppResult<()> {
         let output = Command::new("git")
@@ -375,37 +437,4 @@ pub(super) fn normalize_uploaded_project_path(raw: &str) -> AppResult<Option<Str
         return Ok(None);
     }
     Ok(Some(normalized))
-}
-
-pub(super) fn rollback_company_project_git(
-    state: &AppState,
-    human_user_id: Uuid,
-    company_id: Uuid,
-    project_id: Uuid,
-    existing: Option<ai_chat_application::CompanyProjectGitAdminView>,
-) -> Result<(), AppError> {
-    if let Some(existing) = existing {
-        state.platform.upsert_company_project_git_for_human(
-            UpsertCompanyProjectGitForHumanInput {
-                human_user_id,
-                company_id,
-                project_id,
-                remote_url: existing.remote_url,
-                host_local_path: Some(existing.host_local_path),
-                default_branch: Some(existing.default_branch),
-                auth_profile: existing.auth_profile,
-                allow_agent_push: Some(existing.allow_agent_push),
-                branch_prefix: Some(existing.branch_prefix),
-            },
-        )?;
-    } else {
-        state.platform.delete_company_project_git_for_human(
-            DeleteCompanyProjectGitForHumanInput {
-                human_user_id,
-                company_id,
-                project_id,
-            },
-        )?;
-    }
-    Ok(())
 }

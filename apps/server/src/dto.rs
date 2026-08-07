@@ -157,19 +157,6 @@ pub(super) struct PublishCompanyGovernancePolicyRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct UpsertCompanyProjectGitRequest {
-    pub(super) remote_url: String,
-    pub(super) host_local_path: Option<String>,
-    pub(super) default_branch: Option<String>,
-    pub(super) auth_profile: Option<String>,
-    pub(super) github_token: Option<String>,
-    #[serde(default)]
-    pub(super) clear_github_token: bool,
-    pub(super) allow_agent_push: Option<bool>,
-    pub(super) branch_prefix: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub(super) struct CreateCompanyProjectRequest {
     pub(super) name: String,
     pub(super) description: Option<String>,
@@ -181,7 +168,6 @@ pub(super) struct CreateCompanyProjectRequest {
     pub(super) source_local_path: Option<String>,
     pub(super) git_remote_url: Option<String>,
     pub(super) default_branch: Option<String>,
-    pub(super) auth_profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

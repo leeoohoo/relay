@@ -44,21 +44,21 @@ use rmcp::transport::streamable_http_server::{
 use ai_chat_application::{
     ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
     CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput,
-    DeleteAgentMemoryForHumanInput, DeleteCompanyCodexRunnerProfileForHumanInput,
-    DeleteCompanyProjectGitForHumanInput, DevLoginInput, GetCompanyAgentCodexTriggerForHumanInput,
-    GetCompanyProjectGitForHumanInput, HumanCompanyStaffingStatusInput,
-    ListCompanyAgentCodexRunsForHumanInput, ListCompanyCodexPluginsForHumanInput,
-    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
-    OpenHumanCompanyDirectConversationInput, PlatformApp, PublishCompanyGovernancePolicyInput,
-    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
-    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
-    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
-    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
-    UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
-    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
-    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
-    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
-    UpsertCompanyProjectAssetRefreshForHumanInput, UpsertCompanyProjectGitForHumanInput,
+    DeleteAgentMemoryForHumanInput, DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
+    GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
+    HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
+    ListCompanyCodexPluginsForHumanInput, ListCompanyCodexRunnerProfilesForHumanInput,
+    ListCompanyMemoriesForHumanInput, LoginHumanInput, OpenHumanCompanyDirectConversationInput,
+    PlatformApp, PublishCompanyGovernancePolicyInput, RegisterHumanInput,
+    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
+    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
+    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
+    SetCompanyProjectPauseForHumanInput, UpdateAgentMemoryForHumanInput,
+    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
+    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
+    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
+    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
+    UpsertCompanyProjectGitForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -74,13 +74,12 @@ use ai_chat_infrastructure::codex_control::{
 };
 use ai_chat_infrastructure::codex_trigger::CodexModelCatalogFile;
 use ai_chat_infrastructure::config::{ApiConfig, HarnessMode, McpConfig};
-use ai_chat_infrastructure::git_credentials::{
-    github_token_profile_name, managed_token_profile_name, validate_github_token,
-    GitCredentialStore,
+use ai_chat_infrastructure::git_credentials::{managed_token_profile_name, GitCredentialStore};
+use ai_chat_infrastructure::harness::{
+    HarnessProjectGitProvisioner, HarnessProvisioner, HarnessRepositoryContent,
 };
-use ai_chat_infrastructure::gitness::{GitnessProjectGitProvisioner, ProvisionedProjectGit};
-use ai_chat_infrastructure::harness::HarnessProvisioner;
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
+use ai_chat_infrastructure::project_git::ProvisionedProjectGit;
 use ai_chat_infrastructure::realtime::spawn_postgres_realtime_listener;
 use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
@@ -178,6 +177,7 @@ mod codex;
 mod company;
 mod dto;
 mod project_files;
+mod project_repository;
 mod projects;
 
 use account::*;
@@ -188,6 +188,7 @@ use codex::*;
 use company::*;
 use dto::*;
 use project_files::*;
+use project_repository::*;
 use projects::*;
 
 #[tokio::main]
@@ -263,8 +264,17 @@ async fn main() -> anyhow::Result<()> {
     let mcp_config = McpConfig::from_env();
     let platform = PlatformApp::with_verifier(repository, verifier);
     let git_credential_store = GitCredentialStore::from_env()?;
-    let project_git_provisioner =
-        GitnessProjectGitProvisioner::from_env(git_credential_store.clone())?;
+    let project_git_provisioner = if harness_provisioner.is_enabled() {
+        Some(Arc::new(HarnessProjectGitProvisioner::new(
+            harness_provisioner.clone(),
+            git_credential_store.clone(),
+        ))
+            as Arc<
+                dyn ai_chat_infrastructure::project_git::ProjectGitProvisioner,
+            >)
+    } else {
+        None
+    };
     let message_attachments_root = std::env::var("MESSAGE_ATTACHMENTS_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(".relay/attachments"));
@@ -394,10 +404,6 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/companies/{company_id}/projects/import-folder",
             post(import_company_project_folder_for_human)
                 .layer(DefaultBodyLimit::max(5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024)),
-        )
-        .route(
-            "/api/v1/companies/{company_id}/projects/{project_id}/git/provision-harness",
-            post(provision_existing_company_project_git),
         )
         .route(
             "/api/v1/companies/{company_id}/memories",
@@ -532,9 +538,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/git",
-            get(get_company_project_git)
-                .put(upsert_company_project_git)
-                .delete(delete_company_project_git),
+            get(get_company_project_git),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/repository/refs",
+            get(list_company_project_repository_refs),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/repository/tree",
+            get(list_company_project_repository_tree),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/repository/file",
+            get(get_company_project_repository_file),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/pause",

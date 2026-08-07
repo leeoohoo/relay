@@ -107,11 +107,11 @@ export function CreateProjectDialog(props: {
   }
 
   return (
-    <Dialog title="新建项目" description="选择本地文件夹或 Git 仓库。Relay 会创建托管副本、识别项目类型，并生成不可被弱化的固定项目 Skill。" onClose={props.onClose} extraWide>
+    <Dialog title="新建项目" description="选择本地文件夹或外部 Git 来源。项目会统一导入独立的 Harness 仓库。" onClose={props.onClose} extraWide>
       <form className="stack-form create-project-form" onSubmit={submit}>
         <div className="project-source-switch" role="tablist" aria-label="项目来源">
           <button className={sourceKind === "local_folder" ? "active" : ""} type="button" onClick={() => setSourceKind("local_folder")}><Icon name="folder" /><span><strong>导入本地文件夹</strong><small>复制到组织托管空间，不修改原目录</small></span></button>
-          <button className={sourceKind === "git" ? "active" : ""} type="button" onClick={() => setSourceKind("git")}><Icon name="git" /><span><strong>从 Git 创建</strong><small>填写仓库地址，由 Trigger 创建工作区</small></span></button>
+          <button className={sourceKind === "git" ? "active" : ""} type="button" onClick={() => setSourceKind("git")}><Icon name="git" /><span><strong>从 Git 导入</strong><small>来源只用于导入，项目地址由 Harness 生成</small></span></button>
         </div>
         {sourceKind === "local_folder" ? (
           <>
@@ -124,8 +124,8 @@ export function CreateProjectDialog(props: {
           </>
         ) : (
           <div className="form-grid">
-            <Field label="Git 地址"><input value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} placeholder="https://github.com/org/repository.git" required /></Field>
-            <Field label="默认分支"><input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" required /></Field>
+            <Field label="来源 Git 地址"><input value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} placeholder="https://github.com/org/repository.git" required /></Field>
+            <Field label="导入分支"><input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" required /></Field>
           </div>
         )}
         <div className="form-grid">
@@ -150,4 +150,3 @@ export function CreateProjectDialog(props: {
     </Dialog>
   );
 }
-

@@ -168,3 +168,38 @@ fn uploaded_project_paths_are_normalized_and_exclude_generated_directories() {
     assert!(normalize_uploaded_project_path("../secret.txt").is_err());
     assert!(normalize_uploaded_project_path("/absolute/path").is_err());
 }
+
+#[test]
+fn repository_browser_accepts_only_enumerated_harness_refs_and_safe_paths() {
+    let refs = vec![
+        ProjectRepositoryRef {
+            name: "main".into(),
+            full_name: "main".into(),
+            commit: "1111111111111111111111111111111111111111".into(),
+            kind: "branch".into(),
+            is_default: true,
+        },
+        ProjectRepositoryRef {
+            name: "release".into(),
+            full_name: "release".into(),
+            commit: "2222222222222222222222222222222222222222".into(),
+            kind: "branch".into(),
+            is_default: false,
+        },
+    ];
+    let selected = selected_repository_ref(&refs, None).expect("default ref");
+    assert_eq!(selected.name, "main");
+    assert_eq!(
+        selected_repository_ref(&refs, Some("release"))
+            .expect("release ref")
+            .commit,
+        "2222222222222222222222222222222222222222"
+    );
+    assert!(selected_repository_ref(&refs, Some("refs/heads/unknown")).is_err());
+    assert_eq!(
+        normalize_repository_path("src\\main.rs", false).expect("safe path"),
+        "src/main.rs"
+    );
+    assert!(normalize_repository_path("../secret", false).is_err());
+    assert!(normalize_repository_path("/absolute", false).is_err());
+}

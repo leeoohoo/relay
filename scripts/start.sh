@@ -19,16 +19,6 @@ if [[ -f "$LOCAL_ENV_FILE" ]]; then
   set +a
 fi
 
-if [[ -z "${RELAY_GIT_PROVIDER_TOKEN:-}" \
-  && -n "${RELAY_GIT_PROVIDER_TOKEN_KEYCHAIN_SERVICE:-}" \
-  && "$(uname -s)" == "Darwin" ]]; then
-  RELAY_GIT_PROVIDER_TOKEN="$(security find-generic-password \
-    -a "${RELAY_GIT_PROVIDER_USERNAME:-}" \
-    -s "$RELAY_GIT_PROVIDER_TOKEN_KEYCHAIN_SERVICE" \
-    -w 2>/dev/null || true)"
-  export RELAY_GIT_PROVIDER_TOKEN
-fi
-
 export POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-15533}"
 export WEB_HOST_PORT="${WEB_HOST_PORT:-45274}"
 export API_HOST_PORT="$WEB_HOST_PORT"

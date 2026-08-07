@@ -389,18 +389,7 @@ Relay 只使用 PostgreSQL 作为应用数据库。独立启动进程前先执�
 
 Trigger 必须运行在拥有项目本地路径和 Codex 登录态的宿主机上。
 
-如果希望项目经理通过 `company.project` 自动创建 Gitness 仓库，只需为 API 进程统一配置一次：
-
-```bash
-export RELAY_GIT_PROVIDER_KIND=gitness
-export RELAY_GIT_PROVIDER_BASE_URL=https://code.example.com/
-export RELAY_GIT_PROVIDER_CLONE_BASE_URL=https://code.example.com/
-export RELAY_GIT_PROVIDER_PARENT_REF=engineering
-export RELAY_GIT_PROVIDER_USERNAME=relay-bot
-export RELAY_GIT_PROVIDER_TOKEN='不要写入 Git 的平台 Token'
-```
-
-平台 Token 只用于调用 Gitness。Relay 会为每个项目创建独立 Token，保存在宿主机凭证目录中，且不会通过 MCP 返回。
+Relay 只支持 Harness 托管的项目仓库。Human 或 Agent 创建项目时，系统都会在公司 Owner 的 Harness 空间中自动创建私有仓库。生成后的项目仓库地址在 Relay 中只读；外部 HTTP(S) Git 地址只能作为新项目的导入来源，导入后仍会生成新的 Harness 仓库。
 
 ## MCP 工具
 

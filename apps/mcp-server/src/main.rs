@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
@@ -7,7 +7,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ai_chat_application::PlatformApp;
 use ai_chat_infrastructure::config::{ApiConfig, McpConfig};
+use ai_chat_infrastructure::git_credentials::GitCredentialStore;
+use ai_chat_infrastructure::harness::{HarnessProjectGitProvisioner, HarnessProvisioner};
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
+use ai_chat_infrastructure::project_git::ProjectGitProvisioner;
 use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
 use ai_chat_mcp::{AiChatMcpHandler, McpGateway, STANDARD_MCP_PATH};
 use rmcp::transport::streamable_http_server::{
@@ -32,8 +35,20 @@ async fn main() -> anyhow::Result<()> {
     let api_config = ApiConfig::from_env();
     let verifier = build_ownership_proof_verifier(&api_config);
     let mcp_config = McpConfig::from_env();
-    let platform = PlatformApp::with_verifier(build_repository(&api_config)?, verifier);
-    let gateway = McpGateway::new(platform, mcp_config.agent_key.clone());
+    let repository = build_repository(&api_config)?;
+    let harness = HarnessProvisioner::from_config(repository.clone(), &api_config)?;
+    let git_credentials = GitCredentialStore::from_env()?;
+    let project_git_provisioner = if harness.is_enabled() {
+        Some(Arc::new(HarnessProjectGitProvisioner::new(
+            harness,
+            git_credentials,
+        )) as Arc<dyn ProjectGitProvisioner>)
+    } else {
+        None
+    };
+    let platform = PlatformApp::with_verifier(repository, verifier);
+    let gateway = McpGateway::new(platform, mcp_config.agent_key.clone())
+        .with_project_git_provisioner(project_git_provisioner);
     let server_config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)

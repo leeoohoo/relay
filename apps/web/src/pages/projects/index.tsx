@@ -8,6 +8,7 @@ import { projectStatusLabel, projectTypeLabel } from "../app/shared";
 import { ProjectAssetsCard } from "./assets";
 import { CreateProjectDialog } from "./create-project-dialog";
 import { ProjectGitCard } from "./git";
+import { ProjectRepositoryBrowser } from "./repository";
 import { ProjectRuleCard } from "./rule";
 import { TasksView } from "./tasks";
 
@@ -21,7 +22,7 @@ export function ProjectsView(props: {
   const canManage = ["owner", "admin"].includes(props.consoleData.human_membership.role);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
-  const [activeTab, setActiveTab] = useState<"git" | "rule" | "assets" | "tasks" | "memories">("git");
+  const [activeTab, setActiveTab] = useState<"git" | "repository" | "rule" | "assets" | "tasks" | "memories">("git");
   const [projectActionBusy, setProjectActionBusy] = useState(false);
   const selectedProject = props.consoleData.projects.find((project) => project.project.id === selectedProjectId) ?? null;
   const projectStats = {
@@ -31,7 +32,7 @@ export function ProjectsView(props: {
   };
   const projectPagination = usePagination(props.consoleData.projects, 8, props.consoleData.company.id);
 
-  function openProject(projectId: string, tab: "git" | "rule" | "assets" | "tasks" | "memories") {
+  function openProject(projectId: string, tab: "git" | "repository" | "rule" | "assets" | "tasks" | "memories") {
     setSelectedProjectId(projectId);
     setActiveTab(tab);
   }
@@ -85,6 +86,7 @@ export function ProjectsView(props: {
           {projectPaused ? <div className="project-paused-banner"><Icon name="pause" /><span><strong>项目已暂停</strong><small>项目群不可发送消息，Agent 不会因本项目任务、消息或资产维护启动；正在运行的项目 Codex 会被取消。</small></span></div> : null}
           <div className="project-detail-tabs" role="tablist" aria-label="项目详情">
             <button className={activeTab === "git" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "git"} onClick={() => setActiveTab("git")}>Git 仓库</button>
+            <button className={activeTab === "repository" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "repository"} onClick={() => setActiveTab("repository")}>项目目录</button>
             <button className={activeTab === "rule" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "rule"} onClick={() => setActiveTab("rule")}>Rule</button>
             <button className={activeTab === "assets" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "assets"} onClick={() => setActiveTab("assets")}>项目资产 <span>{selectedProject.assets.length}</span></button>
             <button className={activeTab === "tasks" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "tasks"} onClick={() => setActiveTab("tasks")}>项目任务 <span>{selectedProject.tasks.length}</span></button>
@@ -95,10 +97,15 @@ export function ProjectsView(props: {
               companyId={props.consoleData.company.id}
               project={selectedProject}
               token={props.token}
-              canManage={canManage && !projectPaused}
-              onChanged={props.onChanged}
               onError={props.onError}
-              onNotice={props.onNotice}
+            />
+          ) : null}
+          {activeTab === "repository" ? (
+            <ProjectRepositoryBrowser
+              companyId={props.consoleData.company.id}
+              project={selectedProject}
+              token={props.token}
+              onError={props.onError}
             />
           ) : null}
           {activeTab === "rule" ? (
@@ -228,4 +235,3 @@ export function ProjectsView(props: {
     </div>
   );
 }
-

@@ -26,8 +26,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
         agent_id: Uuid,
         company_id: Uuid,
         project: &ai_chat_application::CompanyProjectView,
-        repository_identifier: Option<String>,
-        is_public: bool,
     ) -> AppResult<ProvisionedProjectGit> {
         if project.project.status == PROJECT_STATUS_PAUSED {
             return Err(AppError::Conflict(
@@ -35,14 +33,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
             ));
         }
         let provisioner = self.project_git_provisioner.as_ref().ok_or_else(|| {
-            AppError::Validation("automatic Git provider is not configured".into())
+            AppError::Validation("Harness project repository provisioning is not configured".into())
         })?;
         let provisioned = provisioner.provision(ProjectGitProvisionRequest {
+            company_id,
             project_id: project.project.id,
             project_name: project.project.name.clone(),
             description: project.project.description.clone(),
-            repository_identifier,
-            is_public,
         })?;
         self.platform
             .upsert_company_project_git(UpsertCompanyProjectGitInput {
