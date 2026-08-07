@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type { CompanyRealtimeEvent } from "../api/types";
 import { MessageAttachments } from "./MessageAttachments";
 import { MessageHistoryControl } from "./MessageHistoryControl";
+import { GroupMembersDrawer } from "./GroupMembersDrawer";
 import { Pagination, usePagination } from "./Pagination";
 import { Field, Icon } from "./ui";
 import { useConversationMessages } from "../hooks/useConversationMessages";
@@ -59,7 +60,6 @@ export function MessagesView(props: {
     const agent = agentDirectory.get(agentId);
     return agent ? [agent] : [];
   });
-  const groupMemberPagination = usePagination(selectedGroupAgents, 8, selectedId);
   const selectedIsGroup = selected?.preview.conversation_type === "group";
   const mentionCandidates = selectedIsGroup && mentionQuery !== null
     ? selectedGroupAgents.filter((agent) => {
@@ -288,7 +288,7 @@ export function MessagesView(props: {
 
   return (
     <>
-      <section className="message-console">
+      <section className={`message-console ${showGroupMembers && selectedIsGroup ? "members-open" : ""}`}>
         <div className="conversation-list">
           <div className="conversation-list-head">
             <strong>会话</strong>
@@ -308,7 +308,7 @@ export function MessagesView(props: {
           <div className="message-head">
             <div><strong>{conversationDisplayTitle(selected, agentNames) || "选择一个会话"}</strong></div>
             <div className="message-head-actions">
-              {selectedIsGroup ? <button className="group-members-button" type="button" onClick={() => setShowGroupMembers(true)}><Icon name="group" /> 群成员 <span>{selected.member_agent_ids.length}</span></button> : null}
+              {selectedIsGroup ? <button className={`group-members-button ${showGroupMembers ? "active" : ""}`} type="button" aria-expanded={showGroupMembers} onClick={() => setShowGroupMembers((current) => !current)}><Icon name="group" /> 群成员 <span>{selected.member_agent_ids.length}</span></button> : null}
               {selected ? <span className="pill neutral">{formatConversationContext(selected.context.context_type)}</span> : null}
               {selectedProjectPaused ? <span className="pill paused">项目已暂停</span> : null}
             </div>
@@ -365,6 +365,18 @@ export function MessagesView(props: {
             </form>
           ) : <div className={`observer-note ${selectedProjectPaused ? "paused" : ""}`}><Icon name={selectedProjectPaused ? "pause" : "eye"} /> {selectedProjectPaused ? "项目已暂停，恢复后可发送消息" : "当前账号仅可查看消息"}</div>}
         </div>
+        {showGroupMembers && selectedIsGroup && selected ? (
+          <GroupMembersDrawer
+            companyId={props.consoleData.company.id}
+            conversationTitle={conversationDisplayTitle(selected, agentNames)}
+            humanName={props.humanUser.display_name}
+            agents={selectedGroupAgents}
+            project={selectedProject ?? null}
+            token={props.token}
+            realtimeEvent={props.realtimeEvent}
+            onClose={() => setShowGroupMembers(false)}
+          />
+        ) : null}
       </section>
       {showNewDirect ? (
         <Dialog title="新建 Human 私聊" description="选择一个活跃 Agent。重复选择同一个 Agent 会打开原有私聊。" onClose={() => setShowNewDirect(false)}>
@@ -373,23 +385,6 @@ export function MessagesView(props: {
             {!activeAgents.length ? <div className="git-security-note">当前没有可接收消息的活跃 Agent。</div> : null}
             <button className="button primary wide" disabled={!targetAgentId || busy}>{busy ? "正在建立…" : "建立私聊"}</button>
           </form>
-        </Dialog>
-      ) : null}
-      {showGroupMembers && selectedIsGroup && selected ? (
-        <Dialog title="群成员" description={`${conversationDisplayTitle(selected, agentNames)} · ${selected.member_agent_ids.length} 个 Agent，当前 Human 可参与通信。`} onClose={() => setShowGroupMembers(false)}>
-          <div className="conversation-member-list">
-            <div className="conversation-member-row human-member">
-              <span className="agent-avatar small">{props.humanUser.display_name.slice(0, 1)}</span>
-              <div><strong>{props.humanUser.display_name}</strong><small>Human · 当前登录用户</small></div>
-              <span className="member-kind human">可发送消息</span>
-            </div>
-            {groupMemberPagination.pageItems.map((agent) => {
-              const displayedStatus = agent.membership.employment_status === "active" ? agent.connection.status : agent.membership.employment_status;
-              return <div className="conversation-member-row" key={agent.agent_profile.id}><span className="agent-avatar small">{agent.agent_profile.display_name.slice(0, 1)}</span><div><strong>{agent.agent_profile.display_name}</strong><small>@{agent.agent_profile.handle.replace(/^@/, "")} · {agent.membership.job_title || "Agent"}</small></div><StatusBadge value={displayedStatus} /></div>;
-            })}
-            <Pagination {...groupMemberPagination} onPageChange={groupMemberPagination.setPage} compact />
-            {!selectedGroupAgents.length ? <div className="conversation-member-empty">这个群目前还没有 Agent 成员。</div> : null}
-          </div>
         </Dialog>
       ) : null}
     </>
