@@ -104,9 +104,7 @@ fn migrate_legacy_linked_worktree(
     environment: &HashMap<String, String>,
 ) -> AppResult<()> {
     let backup_root = relay_root.join("legacy-gitlinks");
-    fs::create_dir_all(&backup_root).map_err(file_error)?;
-    let backup_path = backup_root.join(format!("{}-{}.gitlink", agent_id, Uuid::new_v4().simple()));
-    fs::rename(worktree_path.join(".git"), backup_path).map_err(file_error)?;
+    archive_legacy_git_marker(&backup_root, worktree_path, agent_id)?;
     fs::create_dir_all(worktree_path.join(AGENT_GIT_DIR_NAME)).map_err(file_error)?;
     run_git(
         Some(worktree_path),
@@ -137,6 +135,20 @@ fn migrate_legacy_linked_worktree(
     )?;
     restore_missing_tracked_files(worktree_path, environment)?;
     configure_agent_repository(worktree_path, branch, environment)
+}
+
+fn archive_legacy_git_marker(
+    backup_root: &Path,
+    worktree_path: &Path,
+    agent_id: Uuid,
+) -> AppResult<()> {
+    fs::create_dir_all(backup_root).map_err(file_error)?;
+    let backup_path = backup_root.join(format!(
+        "{}-{}.git-metadata",
+        agent_id,
+        Uuid::new_v4().simple()
+    ));
+    fs::rename(worktree_path.join(".git"), backup_path).map_err(file_error)
 }
 
 fn restore_missing_tracked_files(
@@ -859,6 +871,87 @@ mod tests {
             ["add".into(), "agent.txt".into()],
         )
         .expect("relocated repository should remain writable");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn duplicate_project_git_metadata_is_archived_and_workspace_recovers() {
+        let root = std::env::temp_dir().join(format!(
+            "relay-duplicate-project-git-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("test root");
+        let remote = seed_remote(&root);
+        let project_root = root.join("project");
+        let git = project_git_config(&project_root, &remote);
+        let manager = test_manager(&root);
+        let agent_id = Uuid::new_v4();
+        let prepared = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("project workspace");
+        let duplicate_git = prepared.path.join(".git");
+        fs::create_dir_all(&duplicate_git).expect("duplicate metadata");
+        fs::write(
+            duplicate_git.join("sentinel"),
+            "preserve duplicate metadata\n",
+        )
+        .expect("duplicate sentinel");
+
+        let recovered = manager
+            .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
+            .expect("workspace should recover from duplicate metadata");
+
+        assert!(recovered.path.join(AGENT_GIT_DIR_NAME).is_dir());
+        assert!(!recovered.path.join(".git").exists());
+        let backups = project_root.join(".relay/legacy-gitlinks");
+        let backup = backups
+            .read_dir()
+            .expect("backup directory")
+            .next()
+            .expect("archived duplicate metadata")
+            .expect("backup entry")
+            .path();
+        assert_eq!(
+            fs::read_to_string(backup.join("sentinel")).expect("archived sentinel"),
+            "preserve duplicate metadata\n"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn duplicate_general_git_marker_is_archived_and_workspace_recovers() {
+        let root = std::env::temp_dir().join(format!(
+            "relay-duplicate-general-git-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("test root");
+        let manager = test_manager(&root);
+        let company_id = Uuid::new_v4();
+        let agent_id = Uuid::new_v4();
+        let prepared = manager
+            .prepare_general_workspace(company_id, agent_id)
+            .expect("general workspace");
+        fs::write(prepared.path.join(".git"), "legacy git marker\n").expect("duplicate git marker");
+
+        let recovered = manager
+            .prepare_general_workspace(company_id, agent_id)
+            .expect("general workspace should recover from duplicate metadata");
+
+        assert!(recovered.path.join(AGENT_GIT_DIR_NAME).is_dir());
+        assert!(!recovered.path.join(".git").exists());
+        let backup = manager
+            .general_workspace_root
+            .join("legacy-gitlinks")
+            .read_dir()
+            .expect("backup directory")
+            .next()
+            .expect("archived duplicate marker")
+            .expect("backup entry")
+            .path();
+        assert_eq!(
+            fs::read_to_string(backup).expect("archived marker"),
+            "legacy git marker\n"
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 

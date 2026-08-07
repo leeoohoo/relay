@@ -21,9 +21,9 @@ use super::validation::{
     validate_profile_environment, validate_profile_name, validate_project_root,
 };
 use super::{
-    agent_worktree_has_no_user_files, attach_detached_agent_repository, configure_agent_repository,
-    ensure_origin_remote, migrate_legacy_linked_worktree, preferred_remote_base,
-    remote_default_ref, AGENT_GIT_DIR_NAME,
+    agent_worktree_has_no_user_files, archive_legacy_git_marker, attach_detached_agent_repository,
+    configure_agent_repository, ensure_origin_remote, migrate_legacy_linked_worktree,
+    preferred_remote_base, remote_default_ref, AGENT_GIT_DIR_NAME,
 };
 
 #[derive(Debug, Clone)]
@@ -126,9 +126,11 @@ impl GitWorkspaceManager {
         let git_marker = worktree_path.join(".git");
         let agent_git_dir = worktree_path.join(AGENT_GIT_DIR_NAME);
         if git_marker.exists() && agent_git_dir.exists() {
-            return Err(AppError::Conflict(
-                "Agent worktree contains both .git and .relay-git metadata".into(),
-            ));
+            archive_legacy_git_marker(
+                &relay_root.join("legacy-gitlinks"),
+                &worktree_path,
+                agent_id,
+            )?;
         }
         if git_marker.is_dir() {
             fs::rename(&git_marker, &agent_git_dir).map_err(file_error)?;
@@ -203,9 +205,11 @@ impl GitWorkspaceManager {
         let legacy_git_dir = path.join(".git");
         let agent_git_dir = path.join(AGENT_GIT_DIR_NAME);
         if legacy_git_dir.exists() && agent_git_dir.exists() {
-            return Err(AppError::Conflict(
-                "general Agent workspace contains both .git and .relay-git metadata".into(),
-            ));
+            archive_legacy_git_marker(
+                &self.general_workspace_root.join("legacy-gitlinks"),
+                &path,
+                agent_id,
+            )?;
         }
         if legacy_git_dir.is_dir() && !agent_git_dir.exists() {
             fs::rename(&legacy_git_dir, &agent_git_dir).map_err(file_error)?;
