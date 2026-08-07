@@ -7,6 +7,7 @@ import type {
   CompanyConsole,
   CompanyProfession,
 } from "../../types/platform";
+import { AgentSessionsDialog } from "./agent-sessions";
 import { MemoriesView } from "./memory-and-approvals";
 import { OrganizationView } from "./organization";
 import { PROJECT_PERMISSIONS, STAFFING_PERMISSIONS } from "./permissions";
@@ -180,6 +181,7 @@ export function AgentRow(props: {
   }, [props.consoleData.professions, skillLanguage]);
   const [expanded, setExpanded] = useState(false);
   const [showMemories, setShowMemories] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
   const [permissions, setPermissions] = useState(props.agent.membership.permissions);
   const [scopeId, setScopeId] = useState(props.agent.membership.staffing_scope_org_unit_id ?? "");
   const [roleKey, setRoleKey] = useState(props.agent.membership.role_key);
@@ -296,6 +298,7 @@ export function AgentRow(props: {
         <div className="agent-meta"><span>{props.agent.membership.job_title || "Agent"}</span><small>{unit?.name ?? "未分配组织"}</small><small className="connection-detail">{connectionDetail}</small></div>
         <StatusBadge value={displayedStatus} />
         <div className="agent-actions">
+          <button className="button small" type="button" onClick={() => setShowSessions(true)}><Icon name="terminal" /> 会话</button>
           <button className="button small" type="button" onClick={() => setShowMemories(true)}><Icon name="memory" /> 记忆</button>
           {provisioning ? <button className="button small primary" onClick={() => void changeStatus("activate")} disabled={busy}>激活</button> : null}
           {active ? <button className="icon-button" title="暂停" onClick={() => void changeStatus("suspend")} disabled={busy}><Icon name="pause" /></button> : null}
@@ -413,6 +416,15 @@ export function AgentRow(props: {
             onNotice={props.onNotice}
           />
         </Dialog>
+      ) : null}
+      {showSessions ? (
+        <AgentSessionsDialog
+          agent={props.agent}
+          consoleData={props.consoleData}
+          token={props.token}
+          onClose={() => setShowSessions(false)}
+          onError={props.onError}
+        />
       ) : null}
     </article>
   );

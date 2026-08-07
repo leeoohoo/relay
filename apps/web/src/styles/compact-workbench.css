@@ -56,6 +56,8 @@
 @media (max-width: 760px) {
   .codex-work-session-row { grid-template-columns: auto minmax(0,1fr); }
   .codex-work-session-row p, .codex-work-session-row time { grid-column: 2; }
+  .agent-session-toolbar { align-items: stretch; flex-direction: column; }
+  .agent-session-counts { display: grid; grid-template-columns: repeat(3, 1fr); }
 }
 .project-overview-metrics { gap: 6px; margin: 10px 0; }
 .project-overview-metrics > span { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; border-radius: 8px; padding: 8px 10px; }

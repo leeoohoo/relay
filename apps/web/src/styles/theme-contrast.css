@@ -90,6 +90,9 @@
 .memory-facts strong { color: #dce7ef; }
 .memory-card footer strong { color: #d6e1e8; }
 .memory-card footer small { color: #8799a7; }
+.agent-session-counts > span { border-color: var(--relay-line); background: rgba(255, 255, 255, .025); }
+.agent-session-counts small { color: #899aa8; }
+.agent-session-counts strong { color: #e2edf3; }
 
 .control-center { display: flex; flex-direction: column; gap: 14px; max-width: 1680px; margin: 0 auto; }
 .localized-surface { display: contents; }
