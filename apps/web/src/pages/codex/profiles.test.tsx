@@ -86,6 +86,9 @@ describe("CodexRunnerProfilesPanel", () => {
     expect(screen.queryByRole("option", { name: "继承公司默认" })).not.toBeInTheDocument();
     expect(screen.getByText("高级设置").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByLabelText("配置名称")).toBeVisible();
-    expect(screen.getByLabelText("思考等级")).not.toBeVisible();
+    expect(screen.getByLabelText("思考等级")).toBeVisible();
+    expect(screen.getByLabelText("Sandbox")).toBeVisible();
+    expect(screen.getByLabelText("审批策略")).toBeVisible();
+    expect(screen.getByLabelText("推理摘要")).not.toBeVisible();
   });
 });
