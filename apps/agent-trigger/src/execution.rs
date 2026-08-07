@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) async fn process_claimed_trigger(
     platform: &TriggerPlatform,
+    harness: &TriggerHarnessProvisioner,
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
@@ -10,6 +11,7 @@ pub(super) async fn process_claimed_trigger(
 ) {
     let execution = execute_trigger(
         platform,
+        harness,
         workspace_manager,
         codex_runner,
         codex_control,
@@ -118,6 +120,7 @@ pub(super) fn next_trigger_run_at(
 
 pub(super) async fn execute_trigger(
     platform: &TriggerPlatform,
+    harness: &TriggerHarnessProvisioner,
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
@@ -146,13 +149,19 @@ pub(super) async fn execute_trigger(
     let agent = platform.get_agent_profile_by_id(trigger.agent_profile_id)?;
     let membership = platform.get_active_company_agent_membership(trigger.agent_profile_id)?;
     let workspace = match (decision.project.as_ref(), decision.git.as_ref()) {
-        (Some(project), Some(git)) => workspace_manager.prepare_project_workspace(
-            trigger.company_id,
-            project.id,
-            trigger.agent_profile_id,
-            &agent.handle,
-            git,
-        )?,
+        (Some(project), Some(git)) => {
+            prepare_project_workspace_with_credential_recovery(
+                harness,
+                workspace_manager,
+                trigger.company_id,
+                project.id,
+                trigger.agent_profile_id,
+                agent.owner_user_id,
+                &agent.handle,
+                git,
+            )
+            .await?
+        }
         _ => workspace_manager
             .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?,
     };
@@ -358,6 +367,65 @@ pub(super) async fn execute_trigger(
             .then_some(result.error_message)
             .flatten(),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_project_workspace_with_credential_recovery(
+    harness: &TriggerHarnessProvisioner,
+    workspace_manager: &GitWorkspaceManager,
+    company_id: Uuid,
+    project_id: Uuid,
+    agent_id: Uuid,
+    fallback_human_user_id: Uuid,
+    agent_handle: &str,
+    git: &ai_chat_domain::company::CompanyProjectGitConfig,
+) -> AppResult<PreparedGitWorkspace> {
+    let prepare = || {
+        workspace_manager.prepare_project_workspace(
+            company_id,
+            project_id,
+            agent_id,
+            agent_handle,
+            git,
+        )
+    };
+    match prepare() {
+        Ok(workspace) => Ok(workspace),
+        Err(error) if should_refresh_managed_git_credentials(git, &error) => {
+            let human_user_id = git
+                .created_by_human_user_id
+                .unwrap_or(fallback_human_user_id);
+            tracing::warn!(
+                project_id = %project_id,
+                agent_id = %agent_id,
+                human_user_id = %human_user_id,
+                "managed Git credentials were rejected; refreshing the project token once"
+            );
+            harness
+                .refresh_project_git_credentials(
+                    human_user_id,
+                    project_id,
+                    workspace_manager.credential_store(),
+                )
+                .await?;
+            prepare().map_err(|retry_error| {
+                AppError::Validation(format!(
+                    "Git authentication still failed after refreshing the managed project credential: {retry_error}"
+                ))
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn should_refresh_managed_git_credentials(
+    git: &ai_chat_domain::company::CompanyProjectGitConfig,
+    error: &AppError,
+) -> bool {
+    git.auth_profile
+        .as_deref()
+        .is_some_and(is_managed_token_profile)
+        && is_git_authentication_error(error)
 }
 
 pub(super) fn protect_trigger_decision<T>(decision: impl FnOnce() -> AppResult<T>) -> AppResult<T> {

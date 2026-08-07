@@ -171,14 +171,19 @@ impl GitWorkspaceManager {
             if let Some(parent) = worktree_path.parent() {
                 fs::create_dir_all(parent).map_err(file_error)?;
             }
-            clone_agent_repository(
+            if let Err(error) = clone_agent_repository(
                 &worktree_path,
                 &inbox_branch,
                 &git.default_branch,
                 &git.remote_url,
                 &auth_environment,
                 &repository_environment,
-            )?;
+            ) {
+                if is_git_authentication_error(&error) {
+                    cleanup_failed_clone(&worktree_path)?;
+                }
+                return Err(error);
+            }
             inbox_branch
         };
 
@@ -227,6 +232,10 @@ impl GitWorkspaceManager {
         })
     }
 
+    pub fn credential_store(&self) -> &GitCredentialStore {
+        &self.credential_store
+    }
+
     fn auth_environment(&self, profile_name: Option<&str>) -> AppResult<HashMap<String, String>> {
         let Some(profile_name) = profile_name else {
             return Ok(HashMap::new());
@@ -246,6 +255,27 @@ impl GitWorkspaceManager {
                 ))
             })
     }
+}
+
+pub fn is_git_authentication_error(error: &AppError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    [
+        "the requested url returned error: 401",
+        "the requested url returned error: 403",
+        "authentication failed",
+        "could not read username",
+        "invalid username or password",
+        "http basic: access denied",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
+}
+
+fn cleanup_failed_clone(worktree_path: &Path) -> AppResult<()> {
+    if !worktree_path.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(worktree_path).map_err(file_error)
 }
 
 fn clone_agent_repository(

@@ -301,6 +301,92 @@ async fn missing_access_token_is_recreated_with_the_retained_password() {
     let _ = fs::remove_dir_all(credentials_root);
 }
 
+#[tokio::test]
+async fn refreshes_project_git_credentials_for_the_repository_owner() {
+    let app = Router::new().route(
+        "/api/v1/user/tokens",
+        post(|| async {
+            Json(serde_json::json!({
+                "access_token": "fresh-project-token-1234567890"
+            }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let credentials_root = std::env::temp_dir().join(format!(
+        "relay-harness-project-token-refresh-{}",
+        Uuid::new_v4().simple()
+    ));
+    let git_credentials_root = std::env::temp_dir().join(format!(
+        "relay-git-project-token-refresh-{}",
+        Uuid::new_v4().simple()
+    ));
+    let repo = MemoryPlatformRepository::default();
+    let user = HumanUser {
+        id: Uuid::new_v4(),
+        email: "project-owner@example.test".into(),
+        display_name: "Project Owner".into(),
+        created_at: Utc::now(),
+    };
+    repo.insert_human_user(user.clone()).unwrap();
+    let identity = HarnessIdentity::for_user(&user, "u-");
+    let now = Utc::now();
+    repo.upsert_human_harness_account(HumanHarnessAccount {
+        human_user_id: user.id,
+        provider_mode: "self_hosted".into(),
+        harness_base_url: format!("http://{address}"),
+        harness_uid: identity.uid.clone(),
+        harness_email: identity.email,
+        space_identifier: identity.space_identifier,
+        status: HUMAN_HARNESS_STATUS_ACTIVE.into(),
+        attempt_count: 1,
+        last_error: None,
+        last_attempt_at: Some(now),
+        provisioned_at: Some(now),
+        created_at: now,
+        updated_at: now,
+    })
+    .unwrap();
+    let provisioner = HarnessProvisioner {
+        repo,
+        config: HarnessProvisioningConfig {
+            mode: HarnessMode::SelfHosted,
+            api_base_url: Some(format!("http://{address}")),
+            public_base_url: Some(format!("http://{address}")),
+            space_prefix: "u-".into(),
+            admin_email: None,
+            admin_password: None,
+        },
+        credentials: HarnessCredentialStore::at(credentials_root.clone()).unwrap(),
+        client: reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap(),
+        user_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
+    provisioner
+        .credentials
+        .store_access_token(user.id, "account-token")
+        .unwrap();
+    let git_credentials = GitCredentialStore::at(git_credentials_root.clone()).unwrap();
+    let project_id = Uuid::new_v4();
+
+    let profile = provisioner
+        .refresh_project_git_credentials(user.id, project_id, &git_credentials)
+        .await
+        .unwrap();
+    let environment = git_credentials.auth_environment(&profile).unwrap();
+    let username = fs::read_to_string(&environment["RELAY_GIT_USERNAME_FILE"]).unwrap();
+    let token = fs::read_to_string(&environment["RELAY_GIT_TOKEN_FILE"]).unwrap();
+    assert_eq!(username, identity.uid);
+    assert_eq!(token, "fresh-project-token-1234567890");
+
+    server.abort();
+    let _ = fs::remove_dir_all(credentials_root);
+    let _ = fs::remove_dir_all(git_credentials_root);
+}
+
 #[derive(Clone)]
 struct AdminRecoveryState {
     expected_user_uid: String,

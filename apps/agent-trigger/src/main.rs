@@ -48,12 +48,15 @@ use ai_chat_infrastructure::{
         CodexRunRequest, CodexRunStatus, CodexTriggerRunner,
     },
     config::ApiConfig,
-    git_workspace::{GitWorkspaceManager, PreparedGitWorkspace},
+    git_credentials::is_managed_token_profile,
+    git_workspace::{is_git_authentication_error, GitWorkspaceManager, PreparedGitWorkspace},
+    harness::HarnessProvisioner,
     RepositoryAdapter,
 };
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
 type TriggerPlatform = PlatformApp<RepositoryAdapter>;
+type TriggerHarnessProvisioner = HarnessProvisioner<RepositoryAdapter>;
 const CODEX_SESSION_POLICY_VERSION: &str = "relay-skills-v8";
 const EMPLOYEE_SKILL_TEMPLATE: &str =
     include_str!("../../../skills/relay-company-employee/SKILL.md");
@@ -248,7 +251,9 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let api_config = ApiConfig::from_env();
-    let platform = PlatformApp::new(build_repository(&api_config)?);
+    let repository = build_repository(&api_config)?;
+    let platform = PlatformApp::new(repository.clone());
+    let harness = HarnessProvisioner::from_config(repository, &api_config)?;
     let workspace_manager = GitWorkspaceManager::from_env()?;
     let codex_control = CodexControlStore::from_env()?;
     let codex_runner = CodexTriggerRunner::from_env()?;
@@ -258,6 +263,7 @@ fn main() -> anyhow::Result<()> {
         .build()?;
     runtime.block_on(run_trigger_loop(
         &platform,
+        &harness,
         &workspace_manager,
         &codex_runner,
         &codex_control,
@@ -267,6 +273,7 @@ fn main() -> anyhow::Result<()> {
 
 async fn run_trigger_loop(
     platform: &TriggerPlatform,
+    harness: &TriggerHarnessProvisioner,
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
@@ -391,6 +398,7 @@ async fn run_trigger_loop(
             for trigger in claimed {
                 running.push(process_claimed_trigger(
                     platform,
+                    harness,
                     workspace_manager,
                     codex_runner,
                     codex_control,

@@ -252,21 +252,8 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                 )))
             }
         };
-        let token_identifier = format!(
-            "relay-project-{}-{}",
-            short_identifier(project_id),
-            short_identifier(Uuid::new_v4())
-        );
-        let token_request = HarnessCreateAccessTokenRequest {
-            identifier: token_identifier.as_str(),
-        };
         let project_token = self
-            .request_json::<HarnessTokenResponse, _>(
-                Method::POST,
-                format!("{api_base_url}/api/v1/user/tokens").as_str(),
-                Some(access_token.as_str()),
-                Some(&token_request),
-            )
+            .create_project_access_token(api_base_url, access_token.as_str(), project_id)
             .await
             .map_err(|error| {
                 AppError::Internal(format!("create Harness project token: {error}"))
@@ -274,7 +261,7 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         let auth_profile = git_credentials.store_managed_git_token(
             project_id,
             account.harness_uid.as_str(),
-            project_token.access_token.as_str(),
+            project_token.as_str(),
         )?;
         let public_base =
             reqwest::Url::parse(account.harness_base_url.as_str()).map_err(|error| {
@@ -308,6 +295,96 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             auth_profile,
             repository_identifier,
         })
+    }
+
+    pub async fn refresh_project_git_credentials(
+        &self,
+        human_user_id: Uuid,
+        project_id: Uuid,
+        git_credentials: &GitCredentialStore,
+    ) -> AppResult<String> {
+        if !self.is_enabled() {
+            return Err(AppError::Validation(
+                "Harness is disabled; managed Git credentials cannot be refreshed".into(),
+            ));
+        }
+        let mut account = self.active_account(human_user_id)?;
+        let api_base_url = self.config.api_base_url.as_deref().ok_or_else(|| {
+            AppError::Validation("HARNESS_BASE_URL is required for Git provisioning".into())
+        })?;
+        let mut access_token = self.account_access_token(human_user_id)?;
+        let project_token = match self
+            .create_project_access_token(api_base_url, access_token.as_str(), project_id)
+            .await
+        {
+            Ok(token) => token,
+            Err(error) if error.is_unauthorized() => {
+                self.credentials.remove_access_token(human_user_id)?;
+                let user = self
+                    .repo
+                    .get_human_user_result(human_user_id)?
+                    .ok_or_else(|| AppError::NotFound("Human user not found".into()))?;
+                account = self.ensure_active_account(&user).await?;
+                access_token = self.account_access_token(human_user_id)?;
+                self.create_project_access_token(api_base_url, access_token.as_str(), project_id)
+                    .await
+                    .map_err(|retry_error| {
+                        AppError::Internal(format!(
+                            "refresh Harness project token after account recovery: {retry_error}"
+                        ))
+                    })?
+            }
+            Err(error) => {
+                return Err(AppError::Internal(format!(
+                    "refresh Harness project token: {error}"
+                )))
+            }
+        };
+        git_credentials.store_managed_git_token(
+            project_id,
+            account.harness_uid.as_str(),
+            project_token.as_str(),
+        )
+    }
+
+    fn active_account(&self, human_user_id: Uuid) -> AppResult<HumanHarnessAccount> {
+        self.repo
+            .get_human_harness_account_result(human_user_id)?
+            .filter(|account| account.status == HUMAN_HARNESS_STATUS_ACTIVE)
+            .ok_or_else(|| {
+                AppError::Validation("当前用户的 Harness 账户尚未就绪，无法刷新项目凭证".into())
+            })
+    }
+
+    fn account_access_token(&self, human_user_id: Uuid) -> AppResult<String> {
+        self.credentials
+            .read_access_token(human_user_id)?
+            .ok_or_else(|| AppError::Validation("Harness access token is unavailable".into()))
+    }
+
+    async fn create_project_access_token(
+        &self,
+        api_base_url: &str,
+        access_token: &str,
+        project_id: Uuid,
+    ) -> Result<String, HarnessRequestError> {
+        let token_identifier = format!(
+            "relay-project-{}-{}",
+            short_identifier(project_id),
+            short_identifier(Uuid::new_v4())
+        );
+        let token_request = HarnessCreateAccessTokenRequest {
+            identifier: token_identifier.as_str(),
+        };
+        let response = self
+            .request_json::<HarnessTokenResponse, _>(
+                Method::POST,
+                format!("{api_base_url}/api/v1/user/tokens").as_str(),
+                Some(access_token),
+                Some(&token_request),
+            )
+            .await?;
+        non_empty_token(response.access_token)
     }
 
     async fn provision_inner(
@@ -613,6 +690,13 @@ impl HarnessRequestError {
             || message.contains("duplicate")
             || message.contains("unique")
     }
+
+    fn is_unauthorized(&self) -> bool {
+        matches!(
+            self.status,
+            Some(StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        )
+    }
 }
 
 impl std::fmt::Display for HarnessRequestError {
@@ -719,7 +803,6 @@ impl HarnessCredentialStore {
         read_secret(self.token_path(human_user_id).as_path())
     }
 
-    #[cfg(test)]
     fn remove_access_token(&self, human_user_id: Uuid) -> AppResult<()> {
         remove_secret(self.token_path(human_user_id).as_path())
     }
@@ -780,7 +863,6 @@ fn atomic_write_secret(path: &Path, secret: &str) -> AppResult<()> {
     result
 }
 
-#[cfg(test)]
 fn remove_secret(path: &Path) -> AppResult<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),

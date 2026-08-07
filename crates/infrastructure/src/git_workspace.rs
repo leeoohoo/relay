@@ -9,7 +9,7 @@ use uuid::Uuid;
 use ai_chat_shared::{AppError, AppResult};
 
 use command::{ref_exists, run_git, run_git_bytes};
-pub use manager::{GitWorkspaceManager, PreparedGitWorkspace};
+pub use manager::{is_git_authentication_error, GitWorkspaceManager, PreparedGitWorkspace};
 use validation::file_error;
 
 #[cfg(test)]
@@ -1030,5 +1030,21 @@ mod tests {
         )
         .expect("migrated Agent should be able to create the Git index lock");
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn recognizes_only_explicit_git_authentication_failures() {
+        assert!(is_git_authentication_error(&AppError::Validation(
+            "Git command failed: The requested URL returned error: 403".into()
+        )));
+        assert!(is_git_authentication_error(&AppError::Validation(
+            "fatal: Authentication failed for repository".into()
+        )));
+        assert!(!is_git_authentication_error(&AppError::Validation(
+            "fatal: unable to access repository: Could not resolve host".into()
+        )));
+        assert!(!is_git_authentication_error(&AppError::Validation(
+            "The requested URL returned error: 404".into()
+        )));
     }
 }

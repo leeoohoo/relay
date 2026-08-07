@@ -124,7 +124,7 @@ impl GitCredentialStore {
                 ));
             }
             self.ensure_managed_askpass_script()?;
-            return Ok(HashMap::from([
+            return Ok(isolated_credential_environment([
                 (
                     "GIT_ASKPASS".into(),
                     path_string(&self.managed_askpass_path())?,
@@ -144,7 +144,7 @@ impl GitCredentialStore {
             ));
         }
         self.ensure_askpass_script()?;
-        Ok(HashMap::from([
+        Ok(isolated_credential_environment([
             ("GIT_ASKPASS".into(), path_string(&self.askpass_path())?),
             ("RELAY_GITHUB_TOKEN_FILE".into(), path_string(&token_path)?),
         ]))
@@ -188,6 +188,20 @@ impl GitCredentialStore {
         }
         atomic_write(&path, MANAGED_ASKPASS_SCRIPT.as_bytes(), 0o700)
     }
+}
+
+fn isolated_credential_environment<const N: usize>(
+    values: [(String, String); N],
+) -> HashMap<String, String> {
+    let mut environment = HashMap::from(values);
+    environment.extend([
+        ("GIT_CONFIG_COUNT".into(), "2".into()),
+        ("GIT_CONFIG_KEY_0".into(), "credential.helper".into()),
+        ("GIT_CONFIG_VALUE_0".into(), String::new()),
+        ("GIT_CONFIG_KEY_1".into(), "credential.useHttpPath".into()),
+        ("GIT_CONFIG_VALUE_1".into(), "true".into()),
+    ]);
+    environment
 }
 
 pub fn github_token_profile_name(project_id: Uuid) -> String {
@@ -379,6 +393,26 @@ mod tests {
         assert!(environment.contains_key("GIT_ASKPASS"));
         assert!(environment.contains_key("RELAY_GIT_USERNAME_FILE"));
         assert!(environment.contains_key("RELAY_GIT_TOKEN_FILE"));
+        assert_eq!(
+            environment.get("GIT_CONFIG_COUNT").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            environment.get("GIT_CONFIG_KEY_0").map(String::as_str),
+            Some("credential.helper")
+        );
+        assert_eq!(
+            environment.get("GIT_CONFIG_VALUE_0").map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            environment.get("GIT_CONFIG_KEY_1").map(String::as_str),
+            Some("credential.useHttpPath")
+        );
+        assert_eq!(
+            environment.get("GIT_CONFIG_VALUE_1").map(String::as_str),
+            Some("true")
+        );
         assert!(!environment
             .values()
             .any(|value| value.contains("managed_project_token")));
@@ -407,6 +441,10 @@ mod tests {
         assert!(environment.values().all(|value| !value.contains(token)));
         assert!(environment.contains_key("GIT_ASKPASS"));
         assert!(environment.contains_key("RELAY_GITHUB_TOKEN_FILE"));
+        assert_eq!(
+            environment.get("GIT_CONFIG_COUNT").map(String::as_str),
+            Some("2")
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 

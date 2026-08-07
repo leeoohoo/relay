@@ -107,7 +107,8 @@ resolve_trigger_binary() {
 }
 
 start_trigger() {
-  local trigger_bin postgres_port server_port attempt stable_checks
+  local trigger_bin postgres_port server_port harness_port trigger_harness_base_url
+  local trigger_harness_public_base_url attempt stable_checks
   local -a trigger_command
   stop_trigger
   trigger_bin="$(resolve_trigger_binary)"
@@ -120,6 +121,17 @@ start_trigger() {
 
   export DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${postgres_port}/ai_chat"
   export AGENT_TRIGGER_MCP_URL="http://127.0.0.1:${server_port}/mcp"
+  trigger_harness_base_url="${HARNESS_BASE_URL:-}"
+  trigger_harness_public_base_url="${HARNESS_PUBLIC_BASE_URL:-$trigger_harness_base_url}"
+  if [[ "$HARNESS_MODE" == "self_hosted" ]]; then
+    harness_port="$(container_host_port ai-chat-harness 3000/tcp)"
+    [[ -n "$harness_port" ]] || {
+      echo "Harness container is missing its host port; refusing to start Trigger." >&2
+      return 1
+    }
+    trigger_harness_base_url="http://127.0.0.1:${harness_port}"
+    trigger_harness_public_base_url="${HARNESS_PUBLIC_BASE_URL:-$trigger_harness_base_url}"
+  fi
 
   trigger_command=(
     bash
@@ -133,7 +145,16 @@ start_trigger() {
     "AGENT_TRIGGER_MANAGED_PROJECTS_ROOT=$AGENT_TRIGGER_MANAGED_PROJECTS_ROOT"
     "AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS=$AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS"
     "AGENT_TRIGGER_STATE_ROOT=$AGENT_TRIGGER_STATE_ROOT"
+    "AGENT_TRIGGER_GIT_CREDENTIALS_ROOT=$AGENT_TRIGGER_STATE_ROOT/git-credentials"
     "AGENT_TRIGGER_RUN_ONCE=false"
+    "HARNESS_MODE=$HARNESS_MODE"
+    "HARNESS_BASE_URL=$trigger_harness_base_url"
+    "HARNESS_PUBLIC_BASE_URL=$trigger_harness_public_base_url"
+    "HARNESS_SPACE_PREFIX=${HARNESS_SPACE_PREFIX:-u-}"
+    "HARNESS_REQUEST_TIMEOUT_SECONDS=${HARNESS_REQUEST_TIMEOUT_SECONDS:-15}"
+    "HARNESS_CREDENTIALS_ROOT=$RELAY_HARNESS_CREDENTIALS_ROOT"
+    "HARNESS_ADMIN_EMAIL=${HARNESS_ADMIN_EMAIL:-admin@relay.local}"
+    "HARNESS_ADMIN_PASSWORD=${HARNESS_ADMIN_PASSWORD:-change-me-harness-admin}"
     "APP_ENV=production"
     "$trigger_bin"
   )
