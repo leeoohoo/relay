@@ -8,9 +8,7 @@ import { useCompanyEvents } from "../hooks/useCompanyEvents";
 import type { Company, HumanUser, RuntimeConfig, Session, View } from "../types/appShell";
 import type {
   AgentToolApproval,
-  BatchCredentialResult,
   CompanyConsole,
-  Credential,
 } from "../types/platform";
 import {
   EmptyCompany,
@@ -19,13 +17,7 @@ import {
   readSession,
   Toast,
 } from "./app/shared";
-import {
-  BatchCredentialDialog,
-  CreateAgentDialog,
-  CreateCompanyDialog,
-  CredentialDialog,
-  UserPreferencesDialog,
-} from "./app/organization";
+import { CreateAgentDialog, CreateCompanyDialog, UserPreferencesDialog } from "./app/organization";
 import { ApprovalDialog } from "./app/memory-and-approvals";
 import { OrganizationAgentCenter } from "./app/agents";
 import { ChatCenter } from "./app/chat";
@@ -47,8 +39,6 @@ export function App() {
   const [showCompanyForm, setShowCompanyForm] = useState(false);
   const [showAgentForm, setShowAgentForm] = useState(false);
   const [showUserPreferences, setShowUserPreferences] = useState(false);
-  const [credential, setCredential] = useState<Credential | null>(null);
-  const [batchCredentials, setBatchCredentials] = useState<BatchCredentialResult | null>(null);
   const [approvals, setApprovals] = useState<AgentToolApproval[]>([]);
   const [dismissedApprovalIds, setDismissedApprovalIds] = useState<Set<string>>(() => new Set());
   const [realtimeEvent, setRealtimeEvent] = useState<CompanyRealtimeEvent | null>(null);
@@ -302,10 +292,7 @@ export function App() {
             {view === "agents" ? (
               <OrganizationAgentCenter
                 consoleData={companyConsole}
-                humanUserId={session.user.id}
                 token={session.token}
-                onCredential={setCredential}
-                onBatchCredentials={setBatchCredentials}
                 onChanged={refreshCompany}
                 onError={showError}
                 onNotice={setNotice}
@@ -376,16 +363,14 @@ export function App() {
           skillLanguage={companyConsole.governance_policy.effective_settings.skill_language}
           token={session.token}
           onClose={() => setShowAgentForm(false)}
-          onCreated={async (nextCredential) => {
+          onCreated={async () => {
             setShowAgentForm(false);
-            setCredential(nextCredential);
             await refreshCompany();
+            setNotice("Agent 已创建并完成托管配置。");
           }}
           onError={showError}
         />
       ) : null}
-      {credential ? <CredentialDialog credential={credential} onClose={() => setCredential(null)} /> : null}
-      {batchCredentials ? <BatchCredentialDialog result={batchCredentials} onClose={() => setBatchCredentials(null)} /> : null}
       {popupApproval && companyConsole ? (
         <ApprovalDialog
           approval={popupApproval}

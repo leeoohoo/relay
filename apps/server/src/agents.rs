@@ -33,7 +33,13 @@ pub(super) async fn rotate_owned_agent_key(
     let result = state
         .platform
         .rotate_owned_agent_key(human_user_id, agent_id)?;
-    Ok(Json(serde_json::json!({ "result": result })))
+    Ok(Json(serde_json::json!({
+        "result": {
+            "agent_profile_id": result.agent_profile_id,
+            "rotated": true,
+            "managed_identity": true
+        }
+    })))
 }
 
 pub(super) async fn update_admin_agent_status(

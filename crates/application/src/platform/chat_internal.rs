@@ -55,6 +55,17 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 input.mentioned_agent_ids,
                 input.mention_all,
             )?;
+        let project_owner_broadcast = if context.context_type == CONVERSATION_CONTEXT_PROJECT_GROUP
+        {
+            let project_id = context.project_id.ok_or_else(|| {
+                AppError::Internal("project group conversation is missing project_id".into())
+            })?;
+            self.repo
+                .get_company_project_result(project_id)?
+                .is_some_and(|project| project.owner_agent_id == input.actor_agent_id)
+        } else {
+            false
+        };
         let message = MessageView {
             id: Uuid::new_v4(),
             conversation_id: input.conversation_id,
@@ -79,7 +90,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             input.mention_all,
             context.context_type == CONVERSATION_CONTEXT_COMPANY_DIRECT
                 || input.mention_all
-                || !mentioned_agent_ids.is_empty(),
+                || !mentioned_agent_ids.is_empty()
+                || project_owner_broadcast,
         )?;
         Ok(message)
     }

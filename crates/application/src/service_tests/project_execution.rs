@@ -179,6 +179,74 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         Some(project.project.id)
     );
 
+    let future_check = now_utc() + Duration::hours(4);
+    for agent_id in [manager.agent_profile.id, engineer.agent_profile.id] {
+        app.repo
+            .save_agent_codex_trigger_config(AgentCodexTriggerConfig {
+                id: Uuid::new_v4(),
+                company_id: company.company.id,
+                agent_profile_id: agent_id,
+                status: AGENT_CODEX_TRIGGER_STATUS_ACTIVE.into(),
+                interval_seconds: 14_400,
+                codex_profile: "default".into(),
+                model: None,
+                reasoning_effort: None,
+                reasoning_summary: None,
+                verbosity: None,
+                personality: None,
+                service_tier: None,
+                sandbox_mode: AGENT_CODEX_SANDBOX_WORKSPACE_WRITE.into(),
+                approval_policy: AGENT_CODEX_APPROVAL_POLICY_NEVER.into(),
+                network_access: None,
+                web_search: None,
+                feature_multi_agent: None,
+                feature_remote_plugin: None,
+                feature_hooks: None,
+                feature_goals: None,
+                feature_shell_tool: None,
+                max_run_seconds: 1_800,
+                next_run_at: future_check,
+                lease_owner: None,
+                lease_expires_at: None,
+                manual_run_requested_at: None,
+                wake_requested_at: None,
+                wake_reason: None,
+                last_run_at: None,
+                last_success_at: None,
+                last_error: None,
+                consecutive_failure_count: 0,
+                created_by_human_user_id: owner.id,
+                updated_by_human_user_id: Some(owner.id),
+                created_at: now_utc(),
+                updated_at: now_utc(),
+            })
+            .expect("test should configure the Agent Codex trigger");
+    }
+    let owner_broadcast = app
+        .send_company_message(SendCompanyMessageInput {
+            actor_agent_id: manager.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: project.project_group.preview.id,
+            content: "阶段判断已完成，请项目成员按任务计划继续推进。".into(),
+        })
+        .expect("project owner should broadcast to the project group");
+    let engineer_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(engineer.agent_profile.id)
+        .expect("project member trigger should exist");
+    assert_eq!(
+        engineer_trigger.wake_requested_at,
+        Some(owner_broadcast.created_at)
+    );
+    assert_eq!(engineer_trigger.wake_reason.as_deref(), Some("message"));
+    assert!(engineer_trigger.next_run_at <= owner_broadcast.created_at);
+    assert!(app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(manager.agent_profile.id)
+        .expect("project owner trigger should exist")
+        .wake_requested_at
+        .is_none());
+
     let task = app
         .create_company_project_task(CreateCompanyProjectTaskInput {
             actor_agent_id: manager.agent_profile.id,

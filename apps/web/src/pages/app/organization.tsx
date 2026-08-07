@@ -1,28 +1,17 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { API_BASE_URL, api } from "../../api/client";
+import { api } from "../../api/client";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Field, Icon } from "../../components/ui";
 import { type UiLanguage, useUiLanguage } from "../../i18n/uiLanguage";
-import { getRelaySkillDocuments, type RelaySkillLanguage } from "../../relaySkills";
+import type { RelaySkillLanguage } from "../../relaySkills";
 import type { Company } from "../../types/appShell";
 import type {
-  AgentMembership,
-  AgentProfile,
-  BatchCredentialResult,
   CompanyAgent,
   CompanyConsole,
   CompanyProfession,
-  Credential,
   OrgUnit,
 } from "../../types/platform";
-import {
-  CodeBlock,
-  copyText,
-  Dialog,
-  formatSkillBundle,
-  relayAgentConnectionNames,
-  SkillCopyBlock,
-} from "./shared";
+import { Dialog } from "./shared";
 import { STAFFING_PERMISSIONS } from "./permissions";
 
 export function OrganizationView(props: {
@@ -128,7 +117,7 @@ export function CreateCompanyDialog(props: { token: string; onClose: () => void;
   return <Dialog title="创建公司" description="公司是 Agent 身份、组织和通信的租户边界。" onClose={props.onClose}><form className="stack-form" onSubmit={submit}><Field label="公司名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Northstar Studio" required /></Field><Field label="唯一标识（可选）"><input value={slug} onChange={(event) => setSlug(event.target.value)} placeholder="northstar" /></Field><Field label="简介"><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="这家公司负责什么？" /></Field><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "创建中…" : "创建公司"}</button></div></form></Dialog>;
 }
 
-export function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfession[]; skillLanguage: RelaySkillLanguage; token: string; onClose: () => void; onCreated: (credential: Credential) => Promise<void>; onError: (error: unknown) => void }) {
+export function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfession[]; skillLanguage: RelaySkillLanguage; token: string; onClose: () => void; onCreated: () => Promise<void>; onError: (error: unknown) => void }) {
   const hasActiveManager = props.agents.some((agent) => agent.membership.role_key === "company_manager" && agent.membership.employment_status === "active");
   const [displayName, setDisplayName] = useState("");
   const [handle, setHandle] = useState("");
@@ -149,73 +138,12 @@ export function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true);
     try {
-      const response = await api<{ result: { agent_profile: AgentProfile; membership: AgentMembership; agent_key_plaintext: string; agent_key_prefix: string } }>(`/api/v1/companies/${props.company.id}/agents`, { method: "POST", body: JSON.stringify({ display_name: displayName, handle: handle.replace(/^@/, ""), persona, profession_key: professionKey, org_unit_id: orgUnitId || null, reports_to_membership_id: reportsToId || null, role_key: roleKey }) }, props.token);
-      await props.onCreated({
-        agent: response.result.agent_profile,
-        key: response.result.agent_key_plaintext,
-        keyPrefix: response.result.agent_key_prefix,
-        permissions: response.result.membership.permissions,
-        professionKey,
-        profession: props.professions.find((profession) => profession.key === professionKey),
-        skillLanguage: props.skillLanguage,
-      });
+      await api(`/api/v1/companies/${props.company.id}/agents`, { method: "POST", body: JSON.stringify({ display_name: displayName, handle: handle.replace(/^@/, ""), persona, profession_key: professionKey, org_unit_id: orgUnitId || null, reports_to_membership_id: reportsToId || null, role_key: roleKey }) }, props.token);
+      await props.onCreated();
     } catch (error) { props.onError(error); } finally { setBusy(false); }
   }
   const selectedProfession = props.professions.find((profession) => profession.key === professionKey);
-  return <Dialog title="创建 Agent 账号" description={`为 ${props.company.name} 中的一个外部 Agent 签发身份。`} onClose={props.onClose}><form className="stack-form" onSubmit={submit}><div className="form-grid"><Field label="显示名称"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：Maya" required /></Field><Field label="Handle"><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="maya-product" required /></Field><Field label="职业"><select value={professionKey} onChange={(event) => setProfessionKey(event.target.value)} required>{professionGroups.map(([category, professions]) => <optgroup label={category} key={category}>{professions.map((profession) => <option key={profession.key} value={profession.key}>{props.skillLanguage === "en" ? profession.label_en : profession.label}</option>)}</optgroup>)}</select>{selectedProfession ? <small>{props.skillLanguage === "en" ? selectedProfession.description_en : selectedProfession.description}{selectedProfession.can_create_tasks ? " 可创建和分配任务。" : " 只能更新自己任务的执行状态。"}</small> : null}</Field><Field label="组织"><select value={orgUnitId} onChange={(event) => setOrgUnitId(event.target.value)}>{props.orgUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></Field><Field label="公司角色"><select value={roleKey} onChange={(event) => setRoleKey(event.target.value)} disabled={!hasActiveManager}><option value="member">普通成员</option><option value="company_manager">公司管理 Agent</option></select>{!hasActiveManager ? <small>公司当前没有活跃管理 Agent，因此本账号必须成为公司管理 Agent。公司角色与职业能力分别控制。</small> : <small>公司角色负责治理；任务创建能力由职业决定。</small>}</Field><Field label="直属上级"><select value={reportsToId} onChange={(event) => setReportsToId(event.target.value)}><option value="">无</option>{props.agents.filter((agent) => agent.membership.employment_status === "active").map((agent) => <option key={agent.membership.id} value={agent.membership.id}>{agent.agent_profile.display_name}</option>)}</select></Field></div><Field label="工作说明 / Persona"><textarea value={persona} onChange={(event) => setPersona(event.target.value)} placeholder="补充这个 Agent 在当前公司的具体职责、工作边界和擅长领域。" required /></Field><div className="security-note"><Icon name="shield" /><span><strong>Key 只会显示一次</strong><small>系统只保存哈希。关闭下一步窗口后无法找回，只能轮换。</small></span></div><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "签发中…" : "创建并签发 Key"}</button></div></form></Dialog>;
-}
-
-export function CredentialDialog(props: { credential: Credential; onClose: () => void }) {
-  const endpoint = `${API_BASE_URL.replace(/\/$/, "")}/mcp`;
-  const hasPlaintextKey = props.credential.key !== null;
-  const connectionNames = relayAgentConnectionNames(props.credential.agent);
-  const envCommand = `export ${connectionNames.environmentVariable}="${props.credential.key ?? "<粘贴该 Agent 的完整 Key>"}"`;
-  const config = `[mcp_servers.${connectionNames.mcpServer}]\nurl = "${endpoint}"\nenv_http_headers = { "x-agent-key" = "${connectionNames.environmentVariable}" }`;
-  const hasStaffingPermission = props.credential.permissions.some((permission) => permission.startsWith("agent.staff."));
-  const skillDocuments = getRelaySkillDocuments(props.credential.permissions, {
-    agentId: props.credential.agent.id,
-    handle: props.credential.agent.handle,
-    mcpServerName: connectionNames.mcpServer,
-  }, props.credential.professionKey, props.credential.skillLanguage, props.credential.profession);
-  const skillBundle = formatSkillBundle(skillDocuments);
-  const fullBundle = [
-    `# Relay Agent: ${props.credential.agent.display_name}`,
-    hasPlaintextKey
-      ? `## Agent Key\n${props.credential.key}`
-      : `## Agent Key\n系统只保存 Key 哈希，无法再次读取完整 Key。当前 Key 前缀：${props.credential.keyPrefix || "未知"}。如果完整 Key 已遗失，请在管理台轮换 Key。`,
-    `## 环境变量\n${envCommand}`,
-    `## Codex config.toml\n${config}`,
-    `## Agent Skill\n${skillBundle}`,
-  ].join("\n\n");
-  const title = hasPlaintextKey ? "Agent 已可连接" : "Agent 接入资料";
-  const description = hasPlaintextKey
-    ? `${props.credential.agent.display_name} 的 Key 和对应 Skill 已准备好。请现在复制，关闭后 Key 不会再次显示。`
-    : `重新查看 ${props.credential.agent.display_name} 的 MCP 配置和完整 Skill。`;
-  return <Dialog title={title} description={description} onClose={props.onClose} wide><div className="credential-stack"><div className="credential-warning"><Icon name="alert" /><p><strong>{hasPlaintextKey ? "这是唯一一次明文展示" : "完整 Key 无法再次读取"}</strong><span>Key 前缀：{props.credential.keyPrefix || "未知"} · MCP：{connectionNames.mcpServer} · {hasStaffingPermission ? "通用 + 职业 + 人员管理 Skill" : "通用 + 职业 Skill"}</span>{!hasPlaintextKey ? <small>系统只保存 Key 哈希。如果完整 Key 已遗失，请关闭本窗口后点击“轮换 Key”。</small> : null}</p></div>{hasPlaintextKey ? <CodeBlock label="1. 完整 Agent Key" value={props.credential.key ?? ""} secret /> : null}<CodeBlock label={`${hasPlaintextKey ? "2" : "1"}. Codex MCP 配置（可与其他 Agent 并存）`} value={`${envCommand}\n\n${config}`} /><SkillCopyBlock documents={skillDocuments} step={hasPlaintextKey ? "3" : "2"} /><div className="bootstrap-call"><span className="step-number">{hasPlaintextKey ? "4" : "3"}</span><div><strong>从 {connectionNames.mcpServer} 调用 agent.bootstrap</strong><p>确认返回的 handle 是 @{props.credential.agent.handle.replace(/^@/, "")}，再使用该身份处理公司消息和工作。</p></div></div><button className="button primary wide" onClick={() => void copyText(fullBundle)}><Icon name="copy" /> {hasPlaintextKey ? "复制 Key + 配置 + 完整 Skill" : "复制 MCP 配置 + 完整 Skill"}</button><button className="button ghost wide" onClick={props.onClose}>{hasPlaintextKey ? "我已安全保存" : "关闭"}</button></div></Dialog>;
-}
-
-export function BatchCredentialDialog(props: { result: BatchCredentialResult; onClose: () => void }) {
-  const endpoint = `${API_BASE_URL.replace(/\/$/, "")}/mcp`;
-  const bundles = props.result.credentials.map((credential) => {
-    const names = relayAgentConnectionNames(credential.agent);
-    const envCommand = `export ${names.environmentVariable}="${credential.key}"`;
-    const config = `[mcp_servers.${names.mcpServer}]\nurl = "${endpoint}"\nenv_http_headers = { "x-agent-key" = "${names.environmentVariable}" }`;
-    const documents = getRelaySkillDocuments(credential.permissions, {
-      agentId: credential.agent.id,
-      handle: credential.agent.handle,
-      mcpServerName: names.mcpServer,
-    }, credential.professionKey, credential.skillLanguage, credential.profession);
-    return {
-      credential,
-      names,
-      envCommand,
-      config,
-      documents,
-      full: [`# Relay Agent: ${credential.agent.display_name}`, `## Agent Key\n${credential.key}`, `## 环境变量\n${envCommand}`, `## Codex config.toml\n${config}`, `## Agent Skill\n${formatSkillBundle(documents)}`].join("\n\n"),
-    };
-  });
-  const fullBundle = bundles.map((bundle) => bundle.full).join("\n\n\n----------------------------------------\n\n");
-  return <Dialog title={`已激活 ${bundles.length} 个 Agent`} description="所有明文 Key 只展示这一次。请先复制全部接入资料，再关闭窗口。" onClose={props.onClose} wide><div className="credential-stack"><div className="credential-warning"><Icon name="alert" /><p><strong>请立即保存全部 Key</strong><span>{bundles.map((bundle) => `@${bundle.credential.agent.handle.replace(/^@/, "")} · ${bundle.names.mcpServer}`).join("  /  ")}</span></p></div><button className="button primary wide" onClick={() => void copyText(fullBundle)}><Icon name="copy" /> 复制全部 Agent 的 Key + 配置 + 完整 Skill</button>{props.result.failures.length ? <div className="batch-failures"><strong>{props.result.failures.length} 个 Agent 激活失败</strong>{props.result.failures.map((failure) => <span key={failure.agentName}>{failure.agentName}：{failure.message}</span>)}</div> : null}<div className="batch-credential-list">{bundles.map((bundle) => <details className="batch-credential-card" key={bundle.credential.agent.id}><summary><span><strong>{bundle.credential.agent.display_name}</strong><small>@{bundle.credential.agent.handle.replace(/^@/, "")} · {bundle.names.mcpServer}</small></span><Icon name="chevron-down" /></summary><div><CodeBlock label="完整 Agent Key" value={bundle.credential.key ?? ""} secret /><CodeBlock label="Codex MCP 配置" value={`${bundle.envCommand}\n\n${bundle.config}`} /><SkillCopyBlock documents={bundle.documents} step="3" /><button className="button wide" onClick={() => void copyText(bundle.full)}><Icon name="copy" /> 复制这个 Agent 的全部接入资料</button></div></details>)}</div><button className="button ghost wide" onClick={props.onClose}>我已安全保存</button></div></Dialog>;
+  return <Dialog title="创建 Agent 账号" description={`为 ${props.company.name} 添加一个托管 Agent。`} onClose={props.onClose}><form className="stack-form" onSubmit={submit}><div className="form-grid"><Field label="显示名称"><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：Maya" required /></Field><Field label="Handle"><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="maya-product" required /></Field><Field label="职业"><select value={professionKey} onChange={(event) => setProfessionKey(event.target.value)} required>{professionGroups.map(([category, professions]) => <optgroup label={category} key={category}>{professions.map((profession) => <option key={profession.key} value={profession.key}>{props.skillLanguage === "en" ? profession.label_en : profession.label}</option>)}</optgroup>)}</select>{selectedProfession ? <small>{props.skillLanguage === "en" ? selectedProfession.description_en : selectedProfession.description}{selectedProfession.can_create_tasks ? " 可创建和分配任务。" : " 只能更新自己任务的执行状态。"}</small> : null}</Field><Field label="组织"><select value={orgUnitId} onChange={(event) => setOrgUnitId(event.target.value)}>{props.orgUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></Field><Field label="公司角色"><select value={roleKey} onChange={(event) => setRoleKey(event.target.value)} disabled={!hasActiveManager}><option value="member">普通成员</option><option value="company_manager">公司管理 Agent</option></select>{!hasActiveManager ? <small>公司当前没有活跃管理 Agent，因此本账号必须成为公司管理 Agent。公司角色与职业能力分别控制。</small> : <small>公司角色负责治理；任务创建能力由职业决定。</small>}</Field><Field label="直属上级"><select value={reportsToId} onChange={(event) => setReportsToId(event.target.value)}><option value="">无</option>{props.agents.filter((agent) => agent.membership.employment_status === "active").map((agent) => <option key={agent.membership.id} value={agent.membership.id}>{agent.agent_profile.display_name}</option>)}</select></Field></div><Field label="工作说明 / Persona"><textarea value={persona} onChange={(event) => setPersona(event.target.value)} placeholder="补充这个 Agent 在当前公司的具体职责、工作边界和擅长领域。" required /></Field><div className="dialog-actions"><button type="button" className="button" onClick={props.onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? "创建中…" : "创建 Agent"}</button></div></form></Dialog>;
 }
 
 export function UserPreferencesDialog(props: {

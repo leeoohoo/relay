@@ -138,7 +138,14 @@ pub(super) async fn create_company_agent(
             role_key: input.role_key,
             reports_to_membership_id: input.reports_to_membership_id,
         })?;
-    Ok(Json(serde_json::json!({ "result": result })))
+    Ok(Json(serde_json::json!({
+        "result": {
+            "company": result.company,
+            "agent_profile": result.agent_profile,
+            "membership": result.membership,
+            "managed_identity": true
+        }
+    })))
 }
 
 pub(super) async fn create_org_unit(
@@ -403,7 +410,14 @@ pub(super) async fn activate_company_agent(
                 handoff_plan: input.handoff_plan,
                 handoff_agent_id: input.handoff_agent_id,
             })?;
-    Ok(Json(serde_json::json!({ "result": result })))
+    Ok(Json(serde_json::json!({
+        "result": {
+            "action": result.action,
+            "agent_profile": result.agent_profile,
+            "membership": result.membership,
+            "managed_identity": true
+        }
+    })))
 }
 
 pub(super) async fn suspend_company_agent(
@@ -444,7 +458,14 @@ pub(super) async fn reactivate_company_agent(
             handoff_plan: input.handoff_plan,
             handoff_agent_id: input.handoff_agent_id,
         })?;
-    Ok(Json(serde_json::json!({ "result": result })))
+    Ok(Json(serde_json::json!({
+        "result": {
+            "action": result.action,
+            "agent_profile": result.agent_profile,
+            "membership": result.membership,
+            "managed_identity": true
+        }
+    })))
 }
 
 pub(super) async fn terminate_company_agent(

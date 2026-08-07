@@ -3,12 +3,9 @@ import { api } from "../../api/client";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Field, Icon } from "../../components/ui";
 import type {
-  AgentMembership,
-  BatchCredentialResult,
   CompanyAgent,
   CompanyConsole,
   CompanyProfession,
-  Credential,
 } from "../../types/platform";
 import { MemoriesView } from "./memory-and-approvals";
 import { OrganizationView } from "./organization";
@@ -24,10 +21,7 @@ import {
 
 export function OrganizationAgentCenter(props: {
   consoleData: CompanyConsole;
-  humanUserId: string;
   token: string;
-  onCredential: (credential: Credential) => void;
-  onBatchCredentials: (result: BatchCredentialResult) => void;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
@@ -45,7 +39,7 @@ export function OrganizationAgentCenter(props: {
           onClick={() => setTab("agents")}
         >
           <span className="control-center-tab-icon"><Icon name="key" /></span>
-          <span><strong>Agent 成员</strong><small>身份、凭证、记忆与个人权限</small></span>
+          <span><strong>Agent 成员</strong><small>身份、状态、记忆与个人权限</small></span>
         </button>
         <button
           className={tab === "organization" ? "active" : ""}
@@ -63,10 +57,7 @@ export function OrganizationAgentCenter(props: {
         {tab === "agents" ? (
           <AgentsView
             consoleData={props.consoleData}
-            humanUserId={props.humanUserId}
             token={props.token}
-            onCredential={props.onCredential}
-            onBatchCredentials={props.onBatchCredentials}
             onChanged={props.onChanged}
             onError={props.onError}
             onNotice={props.onNotice}
@@ -91,10 +82,7 @@ export function OrganizationAgentCenter(props: {
 
 export function AgentsView(props: {
   consoleData: CompanyConsole;
-  humanUserId: string;
   token: string;
-  onCredential: (credential: Credential) => void;
-  onBatchCredentials: (result: BatchCredentialResult) => void;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
@@ -106,26 +94,18 @@ export function AgentsView(props: {
   const agentPagination = usePagination(props.consoleData.agents, 8, props.consoleData.company.id);
 
   async function activateAllProvisioningAgents() {
-    if (!window.confirm(`依次激活 ${provisioningAgents.length} 个 Agent 并签发一次性 Key？`)) return;
+    if (!window.confirm(`激活 ${provisioningAgents.length} 个 Agent？`)) return;
     setBatchBusy(true);
-    const credentials: Credential[] = [];
-    const failures: BatchCredentialResult["failures"] = [];
+    let activatedCount = 0;
+    const failures: Array<{ agentName: string; message: string }> = [];
     for (const agent of provisioningAgents) {
       try {
-        const response = await api<{ result: { membership: AgentMembership; agent_key_plaintext: string; agent_key_prefix: string } }>(
+        await api(
           `/api/v1/companies/${props.consoleData.company.id}/agents/${agent.agent_profile.id}/activate`,
           { method: "POST", body: JSON.stringify({ reason: "Human console: batch activate" }) },
           props.token,
         );
-        credentials.push({
-          agent: agent.agent_profile,
-          key: response.result.agent_key_plaintext,
-          keyPrefix: response.result.agent_key_prefix,
-          permissions: response.result.membership.permissions,
-          professionKey: companyAgentProfessionKey(agent, props.consoleData.professions),
-          profession: props.consoleData.professions.find((profession) => profession.key === companyAgentProfessionKey(agent, props.consoleData.professions)),
-          skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
-        });
+        activatedCount += 1;
       } catch (error) {
         failures.push({
           agentName: agent.agent_profile.display_name,
@@ -133,8 +113,10 @@ export function AgentsView(props: {
         });
       }
     }
-    if (credentials.length) {
-      props.onBatchCredentials({ credentials, failures });
+    if (activatedCount) {
+      props.onNotice(failures.length
+        ? `已激活 ${activatedCount} 个 Agent，${failures.length} 个失败。`
+        : `已激活 ${activatedCount} 个 Agent。`);
     } else {
       props.onError(new Error(failures.map((failure) => `${failure.agentName}: ${failure.message}`).join("；") || "批量激活失败"));
     }
@@ -171,7 +153,7 @@ export function AgentsView(props: {
             <Pagination {...agentPagination} onPageChange={agentPagination.setPage} />
           </div>
         ) : (
-          <div className="empty-inline"><Icon name="key" /><h3>还没有 Agent 账号</h3><p>点击右上角创建第一个账号，系统会签发一次性 Key。</p></div>
+          <div className="empty-inline"><Icon name="key" /><h3>还没有 Agent 账号</h3><p>点击右上角创建第一个托管 Agent。</p></div>
         )}
       </section>
     </div>
@@ -181,9 +163,7 @@ export function AgentsView(props: {
 export function AgentRow(props: {
   agent: CompanyAgent;
   consoleData: CompanyConsole;
-  humanUserId: string;
   token: string;
-  onCredential: (credential: Credential) => void;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
@@ -211,9 +191,9 @@ export function AgentRow(props: {
   const displayedStatus = active ? props.agent.connection.status : props.agent.membership.employment_status;
   const connectionDetail = props.agent.connection.last_used_at
     ? `最近连接 ${formatTime(props.agent.connection.last_used_at)}`
-    : props.agent.connection.key_expires_at
-      ? `Key 有效期至 ${formatTime(props.agent.connection.key_expires_at)}`
-      : "尚未签发可用 Key";
+    : active
+      ? "Relay 已托管"
+      : "等待激活";
 
   useEffect(() => {
     setPermissions(props.agent.membership.permissions);
@@ -222,67 +202,17 @@ export function AgentRow(props: {
     setProfessionKey(currentProfessionKey);
   }, [props.agent.membership.permissions, props.agent.membership.role_key, props.agent.membership.staffing_scope_org_unit_id, currentProfessionKey]);
 
-  async function rotateKey() {
-    if (!window.confirm(`轮换 ${props.agent.agent_profile.display_name} 的 Key？旧 Key 会立即失效。`)) return;
-    setBusy(true);
-    try {
-      const response = await api<{ result: { agent_key_plaintext: string; agent_key_prefix: string } }>(
-        `/api/v1/humans/${props.humanUserId}/agents/${props.agent.agent_profile.id}/rotate-key`,
-        { method: "POST" },
-        props.token,
-      );
-      props.onCredential({
-        agent: props.agent.agent_profile,
-        key: response.result.agent_key_plaintext,
-        keyPrefix: response.result.agent_key_prefix,
-        permissions: props.agent.membership.permissions,
-        professionKey: currentProfessionKey,
-        profession: props.consoleData.professions.find((profession) => profession.key === currentProfessionKey),
-        skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
-      });
-      await props.onChanged();
-    } catch (error) {
-      props.onError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function openConnectionGuide() {
-    props.onCredential({
-      agent: props.agent.agent_profile,
-      key: null,
-      keyPrefix: props.agent.connection.key_prefix ?? "",
-      permissions: props.agent.membership.permissions,
-      professionKey: currentProfessionKey,
-      profession: props.consoleData.professions.find((profession) => profession.key === currentProfessionKey),
-      skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
-    });
-  }
-
   async function changeStatus(action: "activate" | "suspend" | "reactivate" | "terminate") {
     const labels = { activate: "激活", suspend: "暂停", reactivate: "重新激活", terminate: "永久裁撤" };
     if (!window.confirm(`${labels[action]} ${props.agent.agent_profile.display_name}？${action === "terminate" ? "该操作不可恢复。" : ""}`)) return;
     setBusy(true);
     try {
-      const response = await api<{ result: { agent_key_plaintext?: string; agent_key_prefix?: string } }>(
+      await api(
         `/api/v1/companies/${props.consoleData.company.id}/agents/${props.agent.agent_profile.id}/${action}`,
         { method: "POST", body: JSON.stringify({ reason: `Human console: ${action}` }) },
         props.token,
       );
-      if (response.result.agent_key_plaintext) {
-        props.onCredential({
-          agent: props.agent.agent_profile,
-          key: response.result.agent_key_plaintext,
-          keyPrefix: response.result.agent_key_prefix ?? "",
-          permissions: props.agent.membership.permissions,
-          professionKey: currentProfessionKey,
-          profession: props.consoleData.professions.find((profession) => profession.key === currentProfessionKey),
-          skillLanguage: props.consoleData.governance_policy.effective_settings.skill_language,
-        });
-      } else {
-        props.onNotice(`${props.agent.agent_profile.display_name} 已${labels[action]}`);
-      }
+      props.onNotice(`${props.agent.agent_profile.display_name} 已${labels[action]}`);
       await props.onChanged();
     } catch (error) {
       props.onError(error);
@@ -327,7 +257,7 @@ export function AgentRow(props: {
         },
         props.token,
       );
-      props.onNotice("公司角色已更新，请重新复制该 Agent 的接入资料以获取最新 Skill");
+      props.onNotice("公司角色已更新，Agent 工作权限已自动同步。");
       await props.onChanged();
     } catch (error) {
       setRoleKey(props.agent.membership.role_key);
@@ -348,7 +278,7 @@ export function AgentRow(props: {
         },
         props.token,
       );
-      props.onNotice("职业已更新，任务权限和职业 Skill 已同步重算；请重新复制该 Agent 的接入资料");
+      props.onNotice("职业已更新，任务权限和职业 Skill 已自动同步。");
       await props.onChanged();
     } catch (error) {
       setProfessionKey(currentProfessionKey);
@@ -367,9 +297,7 @@ export function AgentRow(props: {
         <StatusBadge value={displayedStatus} />
         <div className="agent-actions">
           <button className="button small" type="button" onClick={() => setShowMemories(true)}><Icon name="memory" /> 记忆</button>
-          {props.agent.connection.key_prefix ? <button className="button small" onClick={openConnectionGuide}><Icon name="key" /> 接入资料</button> : null}
-          {active ? <button className="button small" onClick={() => void rotateKey()} disabled={busy}><Icon name="refresh" /> 轮换 Key</button> : null}
-          {provisioning ? <button className="button small primary" onClick={() => void changeStatus("activate")} disabled={busy}>激活并签发 Key</button> : null}
+          {provisioning ? <button className="button small primary" onClick={() => void changeStatus("activate")} disabled={busy}>激活</button> : null}
           {active ? <button className="icon-button" title="暂停" onClick={() => void changeStatus("suspend")} disabled={busy}><Icon name="pause" /></button> : null}
           {props.agent.membership.employment_status === "suspended" ? <button className="icon-button" title="重新激活" onClick={() => void changeStatus("reactivate")} disabled={busy}><Icon name="play" /></button> : null}
           {props.agent.membership.employment_status !== "terminated" ? <button className="icon-button danger" title="裁撤" onClick={() => void changeStatus("terminate")} disabled={busy}><Icon name="trash" /></button> : null}

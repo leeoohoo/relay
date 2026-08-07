@@ -551,18 +551,3 @@ export type CompanyConsole = {
     };
   };
 };
-
-export type Credential = {
-  agent: AgentProfile;
-  key: string | null;
-  keyPrefix: string;
-  permissions: string[];
-  professionKey: string;
-  profession?: CompanyProfession;
-  skillLanguage: RelaySkillLanguage;
-};
-
-export type BatchCredentialResult = {
-  credentials: Credential[];
-  failures: Array<{ agentName: string; message: string }>;
-};
