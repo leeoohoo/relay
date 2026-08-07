@@ -31,16 +31,6 @@ export function CodexControlCenter(props: {
           <span><strong>运行器</strong><small>配置与会话</small></span>
         </button>
         <button
-          className={tab === "settings" ? "active" : ""}
-          type="button"
-          role="tab"
-          aria-selected={tab === "settings"}
-          onClick={() => setTab("settings")}
-        >
-          <span className="control-center-tab-icon"><Icon name="settings" /></span>
-          <span><strong>CLI 设置</strong><small>默认值与覆盖</small></span>
-        </button>
-        <button
           className={tab === "mcp" ? "active" : ""}
           type="button"
           role="tab"
@@ -69,6 +59,16 @@ export function CodexControlCenter(props: {
         >
           <span className="control-center-tab-icon"><Icon name="key" /></span>
           <span><strong>CLI 与认证</strong><small>安装与账号环境</small></span>
+        </button>
+        <button
+          className={tab === "settings" ? "active" : ""}
+          type="button"
+          role="tab"
+          aria-selected={tab === "settings"}
+          onClick={() => setTab("settings")}
+        >
+          <span className="control-center-tab-icon"><Icon name="settings" /></span>
+          <span><strong>CLI 设置</strong><small>高级默认项</small></span>
         </button>
       </nav>
 
@@ -119,5 +119,4 @@ export function CodexControlCenter(props: {
     </div>
   );
 }
-
 

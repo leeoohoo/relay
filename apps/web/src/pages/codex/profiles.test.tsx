@@ -73,16 +73,19 @@ describe("CodexRunnerProfilesPanel", () => {
       />,
     );
 
-    expect(screen.getByText("CLI 设置 · 高 · high")).toBeInTheDocument();
-    expect(screen.getByText("CLI 设置 · 可写工作区")).toBeInTheDocument();
-    expect(screen.getByText("CLI 设置 · 无需审批")).toBeInTheDocument();
+    expect(screen.getByText("默认 · 高 · high")).toBeInTheDocument();
+    expect(screen.getByText("默认 · 可写工作区")).toBeInTheDocument();
+    expect(screen.getByText("默认 · 无需审批")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
 
-    expect(await screen.findByRole("option", { name: "使用「CLI 设置」：gpt-company" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "使用「CLI 设置」：高 · high" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "使用「CLI 设置」：concise" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "默认 · gpt-company" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "默认 · 高 · high" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "默认 · concise" })).toBeInTheDocument();
     expect(screen.getByText("新 Agent 默认使用")).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "继承公司默认" })).not.toBeInTheDocument();
+    expect(screen.getByText("高级设置").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByLabelText("配置名称")).toBeVisible();
+    expect(screen.getByLabelText("思考等级")).not.toBeVisible();
   });
 });

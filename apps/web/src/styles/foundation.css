@@ -146,6 +146,12 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .runner-profile-form-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .runner-profile-form-head h3 { margin: 4px 0 0; font-size: 15px; }
 .runner-profile-fields { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
+.runner-profile-basic-fields { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.runner-profile-advanced { border: 1px solid #e2e8e3; border-radius: 11px; background: #fbfcfb; }
+.runner-profile-advanced summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; padding: 11px 13px; color: #65736b; font-size: 11px; font-weight: 700; }
+.runner-profile-advanced summary small { color: #8a9790; font-size: 10px; font-weight: 500; }
+.runner-profile-advanced[open] summary { border-bottom: 1px solid #e8ece9; }
+.runner-profile-advanced .runner-profile-fields { padding: 13px; }
 
 .nav-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: auto; border-radius: 999px; padding: 0 5px; color: #fff; background: #d85e55; font-size: 8px; font-weight: 800; }
 .approval-metrics .metric:first-child { border-color: #efd6b0; background: #fffaf0; }

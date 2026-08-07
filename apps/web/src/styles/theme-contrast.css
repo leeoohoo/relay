@@ -224,6 +224,10 @@
   background: #0b1118;
 }
 .runner-profile-card.default { border-color: rgba(168, 255, 96, .24); }
+.runner-profile-advanced { color: #dce7ef; border-color: var(--relay-line); background: #080d13; }
+.runner-profile-advanced summary { color: #bdcbd5; }
+.runner-profile-advanced summary small { color: #71808c; }
+.runner-profile-advanced[open] summary { border-color: var(--relay-line); }
 .runner-profile-main strong,
 .codex-runner-agent-head strong,
 .runner-profile-facts strong,
@@ -466,4 +470,3 @@
 .task-priority.urgent { color: #ff9ca4; background: rgba(255, 125, 135, .1); }
 .plugin-summary small,
 .project-overview-metrics small { color: #91a5b5; }
-

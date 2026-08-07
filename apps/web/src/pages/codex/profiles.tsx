@@ -102,7 +102,7 @@ function CodexRunnerProfileEditor(props: {
   const profile = props.profileView?.profile;
   const [editing, setEditing] = useState(!profile);
   const [name, setName] = useState(profile?.name ?? "");
-  const [intervalSeconds, setIntervalSeconds] = useState(profile?.interval_seconds ?? 30);
+  const [intervalSeconds, setIntervalSeconds] = useState(profile?.interval_seconds ?? 3600);
   const [codexProfile, setCodexProfile] = useState(profile?.codex_profile ?? props.initialCodexProfile);
   const [model, setModel] = useState(profile?.model ?? "");
   const [reasoningEffort, setReasoningEffort] = useState<CodexReasoningEffort | "">(profile?.reasoning_effort ?? "");
@@ -236,14 +236,25 @@ function CodexRunnerProfileEditor(props: {
   const companyVerbosityValue = props.cliSettings?.verbosity ?? (language === "en" ? "Codex default" : "Codex 默认");
   const companyPersonalityValue = props.cliSettings?.personality ?? (language === "en" ? "Codex default" : "Codex 默认");
   const companyServiceTierValue = props.cliSettings?.service_tier ?? (language === "en" ? "standard / Codex config" : "标准 / Codex 配置");
+  const advancedOverrideCount = [
+    intervalSeconds !== 3600, Boolean(reasoningEffort), Boolean(reasoningSummary), Boolean(verbosity),
+    Boolean(personality), Boolean(serviceTier), sandboxMode !== "inherit", approvalPolicy !== "inherit",
+    networkAccess !== "inherit", Boolean(webSearch), featureMultiAgent !== "inherit",
+    featureRemotePlugin !== "inherit", featureHooks !== "inherit", featureGoals !== "inherit",
+    featureShellTool !== "inherit", maxRunSeconds !== 3600,
+  ].filter(Boolean).length;
   return (
     <form className="runner-profile-form" onSubmit={save}>
       <div className="runner-profile-form-head"><div><span className="eyebrow">{profile ? "EDIT PROFILE" : "NEW PROFILE"}</span><h3>{profile ? `编辑 ${profile.name}` : "新建运行配置"}</h3></div><label className="check-row"><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} disabled={profile?.is_default} />新 Agent 默认使用</label></div>
-      <div className="runner-profile-fields">
+      <div className="runner-profile-fields runner-profile-basic-fields">
         <Field label="配置名称"><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：开发模式" required /></Field>
-        <Field label="兜底检查周期（秒）"><input type="number" min={10} max={604800} value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} /><small>Human 消息会即时唤醒；这里最多可设置为 7 天，只作为无消息时的兜底。</small></Field>
-        <Field label="Codex 认证环境"><select value={codexProfile} onChange={(event) => { setCodexProfile(event.target.value); setModel(""); setReasoningEffort(""); }} required><option value="default">宿主机默认登录</option>{codexProfile.startsWith("relay_") && !props.authProfiles.some((item) => item.selector === codexProfile) ? <option value={codexProfile}>{codexProfile}（当前不可用）</option> : null}{props.authProfiles.map((item) => <option key={item.id} value={item.selector} disabled={item.status !== "active"}>{item.name}{item.status === "active" ? "" : `（${codexAuthStatusLabel(item.status)}）`}</option>)}</select><small>每个托管认证配置都有独立登录态、会话与本地配置。</small></Field>
-        <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={modelsLoading}><option value="">{cliSettingsOption(companyModelValue, language)}</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select>{modelsError ? <small className="codex-runtime-error">{modelsError}</small> : <small>{modelsLoading ? "正在从对应 Codex 环境读取模型…" : "模型列表由本机 Trigger 发现。"}</small>}</Field>
+        <Field label="认证环境"><select value={codexProfile} onChange={(event) => { setCodexProfile(event.target.value); setModel(""); setReasoningEffort(""); }} required><option value="default">默认登录</option>{codexProfile.startsWith("relay_") && !props.authProfiles.some((item) => item.selector === codexProfile) ? <option value={codexProfile}>{codexProfile}（当前不可用）</option> : null}{props.authProfiles.map((item) => <option key={item.id} value={item.selector} disabled={item.status !== "active"}>{item.name}{item.status === "active" ? "" : `（${codexAuthStatusLabel(item.status)}）`}</option>)}</select></Field>
+        <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={modelsLoading}><option value="">{cliSettingsOption(companyModelValue, language)}</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select>{modelsError ? <small className="codex-runtime-error">{modelsError}</small> : null}</Field>
+      </div>
+      <details className="runner-profile-advanced">
+        <summary><span>高级设置</span><small>{advancedOverrideCount ? `已自定义 ${advancedOverrideCount} 项` : "使用系统默认，通常无需修改"}</small></summary>
+        <div className="runner-profile-fields">
+        <Field label="兜底检查周期（秒）"><input type="number" min={10} max={604800} value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} /></Field>
         <Field label="思考等级"><select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as CodexReasoningEffort | "")} disabled={modelsLoading}><option value="">{cliSettingsOption(companyReasoningValue, language)}</option>{currentReasoningMissing ? <option value={reasoningEffort}>{reasoningEffort}（当前配置）</option> : null}{reasoningOptions.map((item) => <option key={item.effort} value={item.effort}>{codexReasoningEffortLabel(item.effort, language)} · {item.effort}</option>)}</select></Field>
         <Field label="推理摘要"><select value={reasoningSummary} onChange={(event) => setReasoningSummary(event.target.value as CodexReasoningSummary | "")}><option value="">{cliSettingsOption(props.cliSettings?.reasoning_summary ?? "auto", language)}</option><option value="auto">auto</option><option value="concise">concise</option><option value="detailed">detailed</option><option value="none">none</option></select></Field>
         <Field label="输出详细度"><select value={verbosity} onChange={(event) => setVerbosity(event.target.value as CodexVerbosity | "")}><option value="">{cliSettingsOption(companyVerbosityValue, language)}</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Field>
@@ -259,7 +270,8 @@ function CodexRunnerProfileEditor(props: {
         <Field label="Goals"><CodexBooleanOverrideSelect value={featureGoals} companyValue={props.cliSettings?.feature_goals} language={language} onChange={setFeatureGoals} /></Field>
         <Field label="Shell"><CodexBooleanOverrideSelect value={featureShellTool} companyValue={props.cliSettings?.feature_shell_tool} language={language} onChange={setFeatureShellTool} /></Field>
         <Field label="单次最长运行（秒）"><input type="number" min={60} max={7200} value={maxRunSeconds} onChange={(event) => setMaxRunSeconds(Number(event.target.value))} /></Field>
-      </div>
+        </div>
+      </details>
       <div className="runner-profile-form-actions"><button className="button small" type="button" onClick={() => { setEditing(false); props.onCancel(); }} disabled={busy}>取消</button><button className="button primary small" disabled={busy}>{busy ? "正在保存…" : "保存运行配置"}</button></div>
     </form>
   );
@@ -285,11 +297,11 @@ function CodexBooleanOverrideSelect(props: {
 }
 
 function cliSettingsOption(value: string, language: UiLanguage) {
-  return language === "en" ? `Use “CLI Settings”: ${value}` : `使用「CLI 设置」：${value}`;
+  return language === "en" ? `Default · ${value}` : `默认 · ${value}`;
 }
 
 function cliSettingsValue(value: string, language: UiLanguage) {
-  return language === "en" ? `CLI Settings · ${value}` : `CLI 设置 · ${value}`;
+  return language === "en" ? `Default · ${value}` : `默认 · ${value}`;
 }
 
 function reasoningEffortValue(settings: CodexCompanyCliSettings | null, language: UiLanguage, modelDefault?: string) {
