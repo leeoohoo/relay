@@ -1,5 +1,62 @@
 use super::*;
 
+pub(super) enum BoundedLine {
+    Message(Vec<u8>),
+    Oversized,
+}
+
+pub(super) async fn read_bounded_line<R>(
+    reader: &mut BufReader<R>,
+    max_bytes: usize,
+) -> AppResult<Option<BoundedLine>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut message = Vec::with_capacity(max_bytes.min(64 * 1024));
+    let mut oversized = false;
+    let mut read_any = false;
+
+    loop {
+        let buffer = reader.fill_buf().await.map_err(process_error)?;
+        if buffer.is_empty() {
+            return if read_any {
+                Ok(Some(if oversized {
+                    BoundedLine::Oversized
+                } else {
+                    BoundedLine::Message(message)
+                }))
+            } else {
+                Ok(None)
+            };
+        }
+
+        read_any = true;
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let payload_end = newline.unwrap_or(buffer.len());
+        if !oversized {
+            if message.len().saturating_add(payload_end) <= max_bytes {
+                message.extend_from_slice(&buffer[..payload_end]);
+            } else {
+                oversized = true;
+                message.clear();
+            }
+        }
+        let consumed = newline.map_or(payload_end, |position| position + 1);
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            if !oversized && message.last() == Some(&b'\r') {
+                message.pop();
+            }
+            return Ok(Some(if oversized {
+                BoundedLine::Oversized
+            } else {
+                BoundedLine::Message(message)
+            }));
+        }
+    }
+}
+
 pub(super) async fn read_jsonl_events<R>(
     reader: R,
     progress_handler: Option<Arc<dyn CodexProgressHandler>>,
@@ -7,15 +64,19 @@ pub(super) async fn read_jsonl_events<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
     let mut events = JsonlEvents::default();
-    while let Some(line) = lines.next_line().await.map_err(process_error)? {
-        if line.len() > MAX_JSONL_LINE_BYTES {
-            return Err(AppError::Validation(
-                "Codex emitted an oversized JSONL event".into(),
-            ));
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+    while let Some(line) = read_bounded_line(&mut reader, MAX_CODEX_JSON_MESSAGE_BYTES).await? {
+        let BoundedLine::Message(line) = line else {
+            report_progress(
+                progress_handler.as_ref(),
+                "running",
+                "Codex 产生了较大的工具输出，已跳过输出详情并继续执行",
+                events.thread_id.as_deref(),
+            );
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
         match value.get("type").and_then(Value::as_str) {

@@ -29,7 +29,7 @@ use crate::codex_control::{
 
 const DEFAULT_RUN_TOKEN_ENV: &str = "RELAY_AGENT_RUN_TOKEN";
 const MAX_STDERR_BYTES: usize = 32 * 1024;
-const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
+const MAX_CODEX_JSON_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexModelReasoningEffort {

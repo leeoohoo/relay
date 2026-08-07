@@ -12,7 +12,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
     send_json_rpc(
         writer,
         &json!({
@@ -29,7 +29,7 @@ where
         }),
     )
     .await?;
-    let initialize = wait_for_rpc_response(&mut lines, 0).await?;
+    let initialize = wait_for_rpc_response(&mut reader, 0).await?;
     if let Some(error) = rpc_error_message(&initialize) {
         return Err(AppError::Validation(format!(
             "Codex app-server initialization failed: {error}"
@@ -57,7 +57,7 @@ where
         &json!({ "method": thread_method, "id": 1, "params": thread_params }),
     )
     .await?;
-    let thread_response = wait_for_rpc_response(&mut lines, 1).await?;
+    let thread_response = wait_for_rpc_response(&mut reader, 1).await?;
     if let Some(error) = rpc_error_message(&thread_response) {
         return Ok(ProcessOutcome {
             status: CodexRunStatus::Failed,
@@ -103,7 +103,7 @@ where
     let mut turn_started = false;
     let mut final_message = None;
     let mut error_message = None;
-    while let Some(value) = next_json_rpc(&mut lines).await? {
+    while let Some(value) = next_json_rpc(&mut reader).await? {
         if json_rpc_id_matches(&value, 2) {
             if let Some(error) = rpc_error_message(&value) {
                 return Ok(ProcessOutcome {
@@ -373,13 +373,13 @@ where
 }
 
 pub(super) async fn wait_for_rpc_response<R>(
-    lines: &mut tokio::io::Lines<BufReader<R>>,
+    reader: &mut BufReader<R>,
     expected_id: i64,
 ) -> AppResult<Value>
 where
     R: AsyncRead + Unpin,
 {
-    while let Some(value) = next_json_rpc(lines).await? {
+    while let Some(value) = next_json_rpc(reader).await? {
         if json_rpc_id_matches(&value, expected_id) {
             return Ok(value);
         }
@@ -389,19 +389,15 @@ where
     )))
 }
 
-pub(super) async fn next_json_rpc<R>(
-    lines: &mut tokio::io::Lines<BufReader<R>>,
-) -> AppResult<Option<Value>>
+pub(super) async fn next_json_rpc<R>(reader: &mut BufReader<R>) -> AppResult<Option<Value>>
 where
     R: AsyncRead + Unpin,
 {
-    while let Some(line) = lines.next_line().await.map_err(process_error)? {
-        if line.len() > MAX_JSONL_LINE_BYTES {
-            return Err(AppError::Validation(
-                "Codex emitted an oversized JSON-RPC message".into(),
-            ));
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(&line) {
+    while let Some(line) = read_bounded_line(reader, MAX_CODEX_JSON_MESSAGE_BYTES).await? {
+        let BoundedLine::Message(line) = line else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
             return Ok(Some(value));
         }
     }

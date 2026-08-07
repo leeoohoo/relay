@@ -151,6 +151,58 @@ fn parser_tracks_thread_and_final_message() {
 }
 
 #[test]
+fn parser_accepts_valid_events_larger_than_the_previous_one_megabyte_limit() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let large_output = "x".repeat(2 * 1024 * 1024);
+    let input = format!(
+        "{}\n{}\n{}\n",
+        serde_json::to_string(&json!({
+            "type": "thread.started",
+            "thread_id": "thread-large"
+        }))
+        .expect("thread event"),
+        serde_json::to_string(&json!({
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "generate output",
+                "aggregated_output": large_output
+            }
+        }))
+        .expect("large command event"),
+        serde_json::to_string(&json!({ "type": "turn.completed" })).expect("turn event")
+    );
+    let events = runtime
+        .block_on(read_jsonl_events(input.as_bytes(), None))
+        .expect("large valid event should be accepted");
+
+    assert_eq!(events.thread_id.as_deref(), Some("thread-large"));
+    assert!(events.turn_completed);
+}
+
+#[test]
+fn bounded_line_reader_discards_oversized_messages_and_keeps_stream_alignment() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let input = format!("{}\nnext\n", "x".repeat(128));
+    let mut reader = BufReader::new(input.as_bytes());
+
+    let oversized = runtime
+        .block_on(read_bounded_line(&mut reader, 32))
+        .expect("oversized read")
+        .expect("first line");
+    assert!(matches!(oversized, BoundedLine::Oversized));
+
+    let next = runtime
+        .block_on(read_bounded_line(&mut reader, 32))
+        .expect("next read")
+        .expect("second line");
+    let BoundedLine::Message(next) = next else {
+        panic!("second line should remain readable");
+    };
+    assert_eq!(next, b"next");
+}
+
+#[test]
 fn mcp_progress_summary_includes_the_action() {
     let item = json!({
         "type": "mcp_tool_call",
