@@ -340,6 +340,34 @@ fn trigger_shutdown_marks_owned_running_cycles_as_lease_lost() {
     let run_id = run.id;
     repo.insert_agent_codex_trigger_run(run)
         .expect("running cycle should be inserted");
+    let intent_id = Uuid::new_v4();
+    repo.inner
+        .write()
+        .expect("memory repo lock poisoned")
+        .agent_execution_intents
+        .insert(
+            intent_id,
+            AgentExecutionIntent {
+                id: intent_id,
+                company_id,
+                agent_profile_id: agent_id,
+                project_id: Uuid::new_v4(),
+                worker_session_id: None,
+                source_event_ids: Vec::new(),
+                task_ids: vec![Uuid::new_v4()],
+                action_type: "execute".into(),
+                objective: "resume interrupted project work".into(),
+                acceptance_criteria: Vec::new(),
+                priority: "high".into(),
+                dedupe_key: "resume-interrupted-project-work".into(),
+                status: AGENT_EXECUTION_INTENT_STATUS_RUNNING.into(),
+                result_summary: String::new(),
+                error_message: None,
+                created_at: claimed_at,
+                claimed_at: Some(claimed_at),
+                completed_at: None,
+            },
+        );
 
     let stopped_at = claimed_at + chrono::Duration::seconds(5);
     let abandoned = repo
@@ -362,6 +390,103 @@ fn trigger_shutdown_marks_owned_running_cycles_as_lease_lost() {
     assert_eq!(run.status, AGENT_CODEX_RUN_STATUS_LEASE_LOST);
     assert_eq!(run.finished_at, Some(stopped_at));
     assert_eq!(run.activity_phase, "lease_lost");
+    let intent = guard
+        .agent_execution_intents
+        .get(&intent_id)
+        .expect("execution intent");
+    assert_eq!(intent.status, AGENT_EXECUTION_INTENT_STATUS_PENDING);
+    assert!(intent.claimed_at.is_none());
+}
+
+#[test]
+fn claiming_due_trigger_recovers_orphaned_running_intent() {
+    let repo = MemoryPlatformRepository::default();
+    let agent_id = Uuid::new_v4();
+    let company_id = Uuid::new_v4();
+    let now = now_utc();
+    seed_logged_in_company(&repo, company_id, now);
+    let intent_id = Uuid::new_v4();
+    {
+        let mut guard = repo.inner.write().expect("memory repo lock poisoned");
+        guard.agent_codex_trigger_configs.insert(
+            agent_id,
+            AgentCodexTriggerConfig {
+                id: Uuid::new_v4(),
+                company_id,
+                agent_profile_id: agent_id,
+                status: AGENT_CODEX_TRIGGER_STATUS_ACTIVE.into(),
+                interval_seconds: 3_600,
+                codex_profile: "default".into(),
+                model: None,
+                reasoning_effort: None,
+                reasoning_summary: None,
+                verbosity: None,
+                personality: None,
+                service_tier: None,
+                sandbox_mode: "workspace_write".into(),
+                approval_policy: "never".into(),
+                network_access: None,
+                web_search: None,
+                feature_multi_agent: None,
+                feature_remote_plugin: None,
+                feature_hooks: None,
+                feature_goals: None,
+                feature_shell_tool: None,
+                max_run_seconds: 1_800,
+                next_run_at: now,
+                lease_owner: None,
+                lease_expires_at: None,
+                manual_run_requested_at: None,
+                wake_requested_at: None,
+                wake_reason: None,
+                last_run_at: None,
+                last_success_at: None,
+                last_error: None,
+                consecutive_failure_count: 0,
+                created_by_human_user_id: Uuid::new_v4(),
+                updated_by_human_user_id: None,
+                created_at: now,
+                updated_at: now,
+            },
+        );
+        guard.agent_execution_intents.insert(
+            intent_id,
+            AgentExecutionIntent {
+                id: intent_id,
+                company_id,
+                agent_profile_id: agent_id,
+                project_id: Uuid::new_v4(),
+                worker_session_id: None,
+                source_event_ids: Vec::new(),
+                task_ids: vec![Uuid::new_v4()],
+                action_type: "execute".into(),
+                objective: "recover orphaned work".into(),
+                acceptance_criteria: Vec::new(),
+                priority: "high".into(),
+                dedupe_key: "recover-orphaned-work".into(),
+                status: AGENT_EXECUTION_INTENT_STATUS_RUNNING.into(),
+                result_summary: String::new(),
+                error_message: Some("stale error".into()),
+                created_at: now,
+                claimed_at: Some(now),
+                completed_at: None,
+            },
+        );
+    }
+
+    let claimed = repo
+        .claim_due_agent_codex_trigger_configs("worker-1", now, 1)
+        .expect("trigger should be claimed");
+
+    assert_eq!(claimed.len(), 1);
+    let guard = repo.inner.read().expect("memory repo lock poisoned");
+    let intent = guard
+        .agent_execution_intents
+        .get(&intent_id)
+        .expect("execution intent");
+    assert_eq!(intent.status, AGENT_EXECUTION_INTENT_STATUS_PENDING);
+    assert!(intent.claimed_at.is_none());
+    assert!(intent.error_message.is_none());
 }
 
 #[test]

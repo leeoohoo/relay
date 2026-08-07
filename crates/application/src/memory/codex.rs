@@ -311,6 +311,16 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             .filter(|run| run.status == AGENT_CODEX_RUN_STATUS_RUNNING)
             .map(|run| run.agent_profile_id)
             .collect::<std::collections::HashSet<_>>();
+        for intent in guard.agent_execution_intents.values_mut().filter(|intent| {
+            intent.status == AGENT_EXECUTION_INTENT_STATUS_RUNNING
+                && !running_agent_ids.contains(&intent.agent_profile_id)
+        }) {
+            intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+            intent.worker_session_id = None;
+            intent.claimed_at = None;
+            intent.completed_at = None;
+            intent.error_message = None;
+        }
         let logged_in_human_ids = guard
             .human_sessions
             .values()
@@ -393,6 +403,16 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             run.activity_summary = Some("Trigger 进程中断，本轮已停止".into());
             run.last_activity_at = Some(now);
             abandoned_runs += 1;
+        }
+        for intent in guard.agent_execution_intents.values_mut().filter(|intent| {
+            intent.status == AGENT_EXECUTION_INTENT_STATUS_RUNNING
+                && abandoned_agent_ids.contains(&intent.agent_profile_id)
+        }) {
+            intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+            intent.worker_session_id = None;
+            intent.claimed_at = None;
+            intent.completed_at = None;
+            intent.error_message = None;
         }
         Ok(abandoned_runs)
     }
