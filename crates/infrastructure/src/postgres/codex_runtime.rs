@@ -159,7 +159,23 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                       AND run.status = 'running'
                       AND run.started_at
                           + make_interval(secs => stale_config.max_run_seconds + 60) <= $2
-                    RETURNING run.id
+                    RETURNING run.agent_profile_id
+                ),
+                recovered_intents AS (
+                    UPDATE agent_execution_intents intent
+                    SET status = 'pending',
+                        worker_session_id = NULL,
+                        claimed_at = NULL,
+                        completed_at = NULL,
+                        error_message = NULL
+                    WHERE intent.status = 'running'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM agent_codex_trigger_runs active_run
+                          WHERE active_run.agent_profile_id = intent.agent_profile_id
+                            AND active_run.status = 'running'
+                      )
+                    RETURNING intent.id
                 ),
                 due AS (
                     SELECT config.id
@@ -255,7 +271,20 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                         last_activity_at = $2
                     WHERE run.status = 'running'
                       AND run.trigger_config_id IN (SELECT id FROM abandoned_configs)
-                    RETURNING run.id
+                    RETURNING run.id, run.agent_profile_id
+                ),
+                recovered_intents AS (
+                    UPDATE agent_execution_intents intent
+                    SET status = 'pending',
+                        worker_session_id = NULL,
+                        claimed_at = NULL,
+                        completed_at = NULL,
+                        error_message = NULL
+                    WHERE intent.status = 'running'
+                      AND intent.agent_profile_id IN (
+                          SELECT agent_profile_id FROM abandoned_runs
+                      )
+                    RETURNING intent.id
                 )
                 SELECT COUNT(*)::BIGINT AS abandoned_run_count
                 FROM abandoned_runs

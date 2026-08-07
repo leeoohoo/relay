@@ -223,6 +223,15 @@ input::placeholder, textarea::placeholder { color: #50606e; }
   border-color: var(--relay-line);
   background: rgba(12, 18, 25, .78);
 }
+.codex-work-session-row {
+  color: #dce7ef;
+  border-color: var(--relay-line);
+  background: rgba(12, 18, 25, .78);
+}
+.codex-work-session-row strong { color: #e7eff5; }
+.codex-work-session-row small,
+.codex-work-session-row time { color: #8295a3; }
+.codex-work-session-row p { color: #aab8c3; }
 .agent-row:hover, .agent-row.expanded, .project-repository-row:hover, .task-row.editable:hover, .plugin-card:hover {
   border-color: var(--relay-line-strong);
   background: rgba(16, 25, 34, .94);
@@ -382,4 +391,3 @@ input::placeholder, textarea::placeholder { color: #50606e; }
   .conversation-list { max-height: 280px; }
   .pagination { align-items: flex-start; flex-direction: column; }
 }
-

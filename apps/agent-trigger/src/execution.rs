@@ -566,6 +566,24 @@ fn persist_codex_stage_session(
     })?;
     let existing = platform.get_agent_codex_session(agent_id, scope_key);
     let now = now_utc();
+    if result.replaced_failed_session {
+        if let Some(mut archived) = existing.clone() {
+            archived.status = AGENT_CODEX_SESSION_STATUS_ARCHIVED.into();
+            archived.archived_at = Some(now);
+            archived.last_used_at = now;
+            platform.save_agent_codex_session(archived)?;
+        }
+    }
+    let existing = (!result.replaced_failed_session)
+        .then_some(existing)
+        .flatten();
+    let latest_generation = platform
+        .list_agent_codex_sessions(agent_id, 100)
+        .into_iter()
+        .filter(|session| session.scope_key == scope_key)
+        .map(|session| session.generation)
+        .max()
+        .unwrap_or(0);
     let summary = result
         .final_message
         .as_deref()
@@ -583,7 +601,7 @@ fn persist_codex_stage_session(
         generation: existing
             .as_ref()
             .map(|session| session.generation)
-            .unwrap_or(1),
+            .unwrap_or(latest_generation + 1),
         codex_thread_id: thread_id,
         workspace_key: codex_session_key(workspace),
         status: AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),

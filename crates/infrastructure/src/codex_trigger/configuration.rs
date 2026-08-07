@@ -61,6 +61,12 @@ impl CodexTriggerRunner {
             validate_environment_name(name)?;
         }
         runner.shell_excluded_environment_names = excluded;
+        runner.auto_compact_token_limit =
+            std::env::var("AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(32_000, 250_000))
+                .unwrap_or(DEFAULT_AUTO_COMPACT_TOKEN_LIMIT);
         Ok(runner)
     }
 
@@ -94,6 +100,7 @@ impl CodexTriggerRunner {
                 "OPENAI_API_KEY".into(),
                 run_token_env_name.clone(),
             ],
+            auto_compact_token_limit: DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
             run_token_env_name,
             managed_profile_homes_root: PathBuf::from(".relay-agent-trigger")
                 .join("codex-profiles")
