@@ -54,19 +54,32 @@ export function CodexPluginsView(props: {
     }
   }, [props.realtimeEvent?.sequence_id]);
 
+  const activeOperationFingerprint = operations
+    .filter((operation) => ["queued", "running"].includes(operation.status))
+    .map((operation) => `${operation.id}:${operation.status}:${operation.attempt_count}`)
+    .join("|");
+  useEffect(() => {
+    if (!activeOperationFingerprint) return;
+    const timer = window.setInterval(() => void loadPlugins(true), 1_500);
+    return () => window.clearInterval(timer);
+  }, [activeOperationFingerprint]);
+
   async function requestOperation(operation: CodexPluginOperation["operation"], pluginId: string | null) {
     const catalog = catalogs.find((item) => pluginCatalogKey(item) === catalogKey);
     if (!catalog) return;
     const key = `${operation}:${pluginId ?? "catalog"}`;
     setBusyKey(key);
     try {
-      await api(
+      const response = await api<{ operation: CodexPluginOperation }>(
         `/api/v1/companies/${props.companyId}/codex-plugins/operations`,
         { method: "POST", body: JSON.stringify({ target_runner_id: catalog.runner_id, target_selector: catalog.target_selector, operation, plugin_id: pluginId }) },
         props.token,
       );
+      setOperations((current) => [
+        response.operation,
+        ...current.filter((item) => item.id !== response.operation.id),
+      ]);
       props.onNotice(operation === "install" ? "安装请求已交给宿主机 Trigger" : operation === "remove" ? "卸载请求已交给宿主机 Trigger" : "插件目录刷新请求已提交");
-      await loadPlugins(true);
     } catch (error) {
       props.onError(error);
     } finally {

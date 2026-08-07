@@ -346,16 +346,27 @@ async fn run_trigger_loop(
             next_plugin_discovery = tokio::time::Instant::now() + config.plugin_discovery_interval;
         }
         if plugin_operations.is_empty() {
-            let claimed = platform
-                .claim_codex_plugin_operations(&config.plugin_host_id, &config.lease_owner, 1)
-                .map_err(anyhow::Error::msg)?;
-            for operation in claimed {
-                plugin_operations.push(process_codex_plugin_operation(
-                    platform,
-                    codex_runner,
-                    config,
-                    operation,
-                ));
+            match platform.claim_codex_plugin_operations(
+                &config.plugin_host_id,
+                &config.lease_owner,
+                1,
+            ) {
+                Ok(claimed) => {
+                    for operation in claimed {
+                        plugin_operations.push(process_codex_plugin_operation(
+                            platform,
+                            codex_runner,
+                            config,
+                            operation,
+                        ));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %sanitize_error(&error.to_string()),
+                        "failed to claim Codex plugin operations; will retry"
+                    );
+                }
             }
         }
         let effective_batch_size = match effective_agent_trigger_batch_size(

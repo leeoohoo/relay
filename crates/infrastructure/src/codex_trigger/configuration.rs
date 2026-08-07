@@ -557,9 +557,10 @@ impl CodexTriggerRunner {
                     AppError::Validation("plugin_id is required for this operation".into())
                 })?;
                 validate_plugin_id(plugin_id)?;
+                let cli_operation = plugin_cli_operation(operation)?;
                 self.run_plugin_json(
                     target_selector,
-                    &["plugin", operation, plugin_id, "--json"],
+                    &["plugin", cli_operation, plugin_id, "--json"],
                     120,
                 )
                 .await
@@ -610,5 +611,15 @@ impl CodexTriggerRunner {
                 "local Codex plugin command returned invalid JSON: {error}"
             ))
         })
+    }
+}
+
+pub(super) fn plugin_cli_operation(operation: &str) -> AppResult<&'static str> {
+    match operation {
+        "install" => Ok("add"),
+        "remove" => Ok("remove"),
+        _ => Err(AppError::Validation(
+            "unsupported Codex plugin operation".into(),
+        )),
     }
 }
