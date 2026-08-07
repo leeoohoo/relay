@@ -25,7 +25,7 @@ export function MessagesView(props: {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [showNewDirect, setShowNewDirect] = useState(false);
-  const [showGroupMembers, setShowGroupMembers] = useState(false);
+  const [showMemberDetails, setShowMemberDetails] = useState(false);
   const [targetAgentId, setTargetAgentId] = useState("");
   const [mentionedAgentIds, setMentionedAgentIds] = useState<string[]>([]);
   const [mentionAll, setMentionAll] = useState(false);
@@ -56,13 +56,14 @@ export function MessagesView(props: {
     });
   }, [agentNames, conversationQuery, props.consoleData.conversations]);
   const conversationPagination = usePagination(visibleConversations, 10, conversationQuery);
-  const selectedGroupAgents = (selected?.member_agent_ids ?? []).flatMap((agentId) => {
+  const selectedConversationAgents = (selected?.member_agent_ids ?? []).flatMap((agentId) => {
     const agent = agentDirectory.get(agentId);
     return agent ? [agent] : [];
   });
   const selectedIsGroup = selected?.preview.conversation_type === "group";
+  const selectedIsDirect = selected?.preview.conversation_type === "direct";
   const mentionCandidates = selectedIsGroup && mentionQuery !== null
-    ? selectedGroupAgents.filter((agent) => {
+    ? selectedConversationAgents.filter((agent) => {
       const query = mentionQuery.trim().toLocaleLowerCase();
       return !query
         || agent.agent_profile.display_name.toLocaleLowerCase().includes(query)
@@ -93,7 +94,7 @@ export function MessagesView(props: {
   }, [props.consoleData.conversations]);
 
   useEffect(() => {
-    setShowGroupMembers(false);
+    setShowMemberDetails(false);
     setMentionedAgentIds([]);
     setMentionAll(false);
     setMentionQuery(null);
@@ -288,7 +289,7 @@ export function MessagesView(props: {
 
   return (
     <>
-      <section className={`message-console ${showGroupMembers && selectedIsGroup ? "members-open" : ""}`}>
+      <section className={`message-console ${showMemberDetails && selected ? "members-open" : ""}`}>
         <div className="conversation-list">
           <div className="conversation-list-head">
             <strong>会话</strong>
@@ -308,7 +309,7 @@ export function MessagesView(props: {
           <div className="message-head">
             <div><strong>{conversationDisplayTitle(selected, agentNames) || "选择一个会话"}</strong></div>
             <div className="message-head-actions">
-              {selectedIsGroup ? <button className={`group-members-button ${showGroupMembers ? "active" : ""}`} type="button" aria-expanded={showGroupMembers} onClick={() => setShowGroupMembers((current) => !current)}><Icon name="group" /> 群成员 <span>{selected.member_agent_ids.length}</span></button> : null}
+              {selected && selectedConversationAgents.length ? <button className={`group-members-button ${showMemberDetails ? "active" : ""}`} type="button" aria-expanded={showMemberDetails} onClick={() => setShowMemberDetails((current) => !current)}><Icon name={selectedIsGroup ? "group" : "message"} /> {selectedIsGroup ? "群成员" : "运行详情"} <span>{selectedConversationAgents.length}</span></button> : null}
               {selected ? <span className="pill neutral">{formatConversationContext(selected.context.context_type)}</span> : null}
               {selectedProjectPaused ? <span className="pill paused">项目已暂停</span> : null}
             </div>
@@ -322,7 +323,7 @@ export function MessagesView(props: {
                 <span className="agent-avatar small">{senderName.slice(0, 1)}</span>
                 <div className="message-body">
                   <header className="message-meta"><strong>{senderName}{isHuman ? " · Human" : ""}</strong><time>{formatTime(message.created_at)}</time></header>
-                  {message.content ? <div className="message-bubble">{renderMessageContent(message.content, selectedGroupAgents)}</div> : null}
+                  {message.content ? <div className="message-bubble">{renderMessageContent(message.content, selectedConversationAgents)}</div> : null}
                   <MessageAttachments message={message} token={props.token} onError={props.onError} />
                 </div>
               </article>;
@@ -365,16 +366,17 @@ export function MessagesView(props: {
             </form>
           ) : <div className={`observer-note ${selectedProjectPaused ? "paused" : ""}`}><Icon name={selectedProjectPaused ? "pause" : "eye"} /> {selectedProjectPaused ? "项目已暂停，恢复后可发送消息" : "当前账号仅可查看消息"}</div>}
         </div>
-        {showGroupMembers && selectedIsGroup && selected ? (
+        {showMemberDetails && selected && (selectedIsGroup || selectedIsDirect) ? (
           <GroupMembersDrawer
             companyId={props.consoleData.company.id}
             conversationTitle={conversationDisplayTitle(selected, agentNames)}
             humanName={props.humanUser.display_name}
-            agents={selectedGroupAgents}
+            agents={selectedConversationAgents}
             project={selectedProject ?? null}
+            mode={selectedIsGroup ? "group" : "direct"}
             token={props.token}
             realtimeEvent={props.realtimeEvent}
-            onClose={() => setShowGroupMembers(false)}
+            onClose={() => setShowMemberDetails(false)}
           />
         ) : null}
       </section>

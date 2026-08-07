@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api/client";
 import type { CompanyConsole, CodexTriggerView } from "../types/platform";
 import { MessagesView } from "./MessagesView";
@@ -102,6 +102,10 @@ const consoleData: CompanyConsole = {
     preview: { id: "conversation-1", title: "项目 · WMS", conversation_type: "group", last_message_preview: null, updated_at: "2026-08-07T03:00:00Z" },
     context: { context_type: "project", project_id: "project-1" },
     member_agent_ids: ["agent-1"],
+  }, {
+    preview: { id: "conversation-2", title: "Owner ↔ 前端 Agent", conversation_type: "direct", last_message_preview: null, updated_at: "2026-08-07T03:01:00Z" },
+    context: { context_type: "company_direct", project_id: null },
+    member_agent_ids: ["agent-1"],
   }],
   projects: [{
     project: { id: "project-1", name: "WMS", description: "", project_type: "wms", project_type_source: "human", project_type_confidence: 1, project_type_evidence: [], status: "active", owner_agent_id: "agent-1" },
@@ -139,10 +143,13 @@ beforeEach(() => {
   mockedApi.mockReset();
   mockedApi.mockImplementation(async (path) => {
     if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+    if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
     if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
     throw new Error(`unexpected request: ${path}`);
   });
 });
+
+afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
   it("opens inside the chat layout and exposes the Agent execution process", async () => {
@@ -178,5 +185,31 @@ describe("MessagesView group member runtime drawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "关闭群成员" }));
     await waitFor(() => expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument());
     expect(container.querySelector(".message-console")).not.toHaveClass("members-open");
+  });
+
+  it("shows the same Agent runtime details in a direct conversation", async () => {
+    const { container } = render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Owner ↔ 前端 Agent"));
+    fireEvent.click(screen.getByRole("button", { name: /运行详情/ }));
+
+    expect(screen.getByLabelText("私聊成员与运行情况")).toBeInTheDocument();
+    expect(container.querySelector(".message-console")).toHaveClass("members-open");
+    expect(screen.getByText("对话成员")).toBeInTheDocument();
+    expect(screen.getByText("前端 Agent")).toBeInTheDocument();
+    expect((await screen.findAllByText("运行中")).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭运行详情" }));
+    await waitFor(() => expect(screen.queryByLabelText("私聊成员与运行情况")).not.toBeInTheDocument());
   });
 });

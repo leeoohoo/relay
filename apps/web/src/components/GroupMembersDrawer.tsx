@@ -17,6 +17,7 @@ export function GroupMembersDrawer(props: {
   humanName: string;
   agents: CompanyAgent[];
   project: CompanyProject | null;
+  mode: "group" | "direct";
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
   onClose: () => void;
@@ -68,14 +69,14 @@ export function GroupMembersDrawer(props: {
   }, [agentIdsKey, props.companyId, props.realtimeEvent, props.token]);
 
   return (
-    <aside className="group-members-drawer" aria-label="群成员与运行情况">
+    <aside className="group-members-drawer" aria-label={props.mode === "group" ? "群成员与运行情况" : "私聊成员与运行情况"}>
       <header className="group-members-drawer-head">
         <div>
-          <span className="drawer-eyebrow">GROUP RUNTIME</span>
-          <strong>群成员</strong>
+          <span className="drawer-eyebrow">{props.mode === "group" ? "GROUP RUNTIME" : "DIRECT RUNTIME"}</span>
+          <strong>{props.mode === "group" ? "群成员" : "对话成员"}</strong>
           <small>{props.conversationTitle} · {props.agents.length} 个 Agent</small>
         </div>
-        <button type="button" className="icon-button" aria-label="关闭群成员" onClick={props.onClose}><Icon name="close" /></button>
+        <button type="button" className="icon-button" aria-label={props.mode === "group" ? "关闭群成员" : "关闭运行详情"} onClick={props.onClose}><Icon name="close" /></button>
       </header>
 
       <div className="group-members-drawer-body">
@@ -94,7 +95,7 @@ export function GroupMembersDrawer(props: {
               tasks={assignedTasks(props.project, agent.agent_profile.id)}
             />
           ))}
-          {!props.agents.length ? <div className="conversation-member-empty">这个群目前还没有 Agent 成员。</div> : null}
+          {!props.agents.length ? <div className="conversation-member-empty">当前会话没有可展示的 Agent 成员。</div> : null}
         </div>
         <Pagination {...pagination} onPageChange={pagination.setPage} compact />
       </div>
