@@ -161,6 +161,7 @@ export type CompanyProject = {
     project_type_confidence: number;
     project_type_evidence: string[];
     status: string;
+    owner_agent_id: string;
   };
   git: ProjectGitView | null;
   rule: {

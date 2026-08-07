@@ -171,6 +171,11 @@ pub(super) struct CreateCompanyProjectRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct TransferCompanyProjectOwnerRequest {
+    pub(super) owner_agent_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct ImportCompanyProjectFolderRequest {
     pub(super) name: String,
     pub(super) description: Option<String>,

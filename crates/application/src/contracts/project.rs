@@ -69,6 +69,13 @@ pub struct CompanyProjectMemberAddBundle {
     pub conversation_preview: CompanyConversationMemberPreview,
 }
 
+#[derive(Debug, Clone)]
+pub struct CompanyProjectOwnerTransferBundle {
+    pub project: CompanyProject,
+    pub previous_owner_agent_id: Uuid,
+    pub new_owner_member: CompanyProjectMember,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCompanyProjectInput {
     pub actor_agent_id: Uuid,
@@ -109,6 +116,22 @@ pub struct SetCompanyProjectPauseForHumanInput {
     pub human_user_id: Uuid,
     pub company_id: Uuid,
     pub project_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferCompanyProjectOwnerInput {
+    pub actor_agent_id: Uuid,
+    pub company_id: Uuid,
+    pub project_id: Uuid,
+    pub owner_agent_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferCompanyProjectOwnerForHumanInput {
+    pub human_user_id: Uuid,
+    pub company_id: Uuid,
+    pub project_id: Uuid,
+    pub owner_agent_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

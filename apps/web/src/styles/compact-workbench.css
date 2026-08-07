@@ -70,8 +70,11 @@
 .project-git-detail-heading p { font-size: 10px; line-height: 1.35; }
 .project-detail-facts { gap: 5px; margin-top: 5px; }
 .project-detail-facts span { padding: 3px 7px; font-size: 8px; }
+.project-detail-facts .project-owner-fact { color: #dfffc9; background: rgba(168, 255, 96, .08); }
 .project-state-actions { flex-direction: row; align-items: center; gap: 6px; }
 .project-detail-tabs { margin-top: 8px; }
+.project-owner-form { gap: 12px; }
+.project-owner-transfer-note { border: 1px solid var(--relay-line); border-radius: 8px; padding: 8px 10px; color: #8295a2; background: #080e14; font-size: 9px; }
 
 @media (max-width: 760px) {
   .main-content { padding: 16px 10px 30px; }

@@ -496,6 +496,24 @@ pub(super) async fn update_company_project_rule(
     Ok(Json(serde_json::json!({ "rule": rule })))
 }
 
+pub(super) async fn transfer_company_project_owner(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<TransferCompanyProjectOwnerRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let project = state.platform.transfer_company_project_owner_for_human(
+        TransferCompanyProjectOwnerForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+            owner_agent_id: input.owner_agent_id,
+        },
+    )?;
+    Ok(Json(serde_json::json!({ "project": project })))
+}
+
 pub(super) async fn request_company_project_rule_generation(
     State(state): State<AppState>,
     headers: HeaderMap,

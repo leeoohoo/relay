@@ -39,10 +39,10 @@ async fn main() -> anyhow::Result<()> {
     let harness = HarnessProvisioner::from_config(repository.clone(), &api_config)?;
     let git_credentials = GitCredentialStore::from_env()?;
     let project_git_provisioner = if harness.is_enabled() {
-        Some(Arc::new(HarnessProjectGitProvisioner::new(
-            harness,
-            git_credentials,
-        )) as Arc<dyn ProjectGitProvisioner>)
+        Some(
+            Arc::new(HarnessProjectGitProvisioner::new(harness, git_credentials))
+                as Arc<dyn ProjectGitProvisioner>,
+        )
     } else {
         None
     };

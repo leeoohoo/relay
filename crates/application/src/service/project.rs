@@ -116,6 +116,14 @@ pub trait ProjectPlatformRepository: Send + Sync {
             "company project membership is not supported by this repository".into(),
         ))
     }
+    fn complete_company_project_owner_transfer(
+        &self,
+        _bundle: CompanyProjectOwnerTransferBundle,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "company project owner transfer is not supported by this repository".into(),
+        ))
+    }
     fn complete_company_project_member_remove(
         &self,
         _project_id: Uuid,

@@ -8,6 +8,7 @@ import { projectStatusLabel, projectTypeLabel } from "../app/shared";
 import { ProjectAssetsCard } from "./assets";
 import { CreateProjectDialog } from "./create-project-dialog";
 import { ProjectGitCard } from "./git";
+import { ProjectOwnerDialog } from "./owner-dialog";
 import { ProjectRepositoryBrowser } from "./repository";
 import { ProjectRuleCard } from "./rule";
 import { TasksView } from "./tasks";
@@ -22,6 +23,7 @@ export function ProjectsView(props: {
   const canManage = ["owner", "admin"].includes(props.consoleData.human_membership.role);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
+  const [showOwnerDialog, setShowOwnerDialog] = useState(false);
   const [activeTab, setActiveTab] = useState<"git" | "repository" | "rule" | "assets" | "tasks" | "memories">("git");
   const [projectActionBusy, setProjectActionBusy] = useState(false);
   const selectedProject = props.consoleData.projects.find((project) => project.project.id === selectedProjectId) ?? null;
@@ -58,6 +60,10 @@ export function ProjectsView(props: {
 
   if (selectedProject) {
     const projectPaused = selectedProject.project.status === "paused";
+    const ownerAgent = props.consoleData.agents.find((agent) => agent.agent_profile.id === selectedProject.project.owner_agent_id);
+    const ownerLabel = ownerAgent
+      ? `${ownerAgent.agent_profile.display_name} · ${ownerAgent.profession?.label ?? ownerAgent.membership.job_title}`
+      : "Owner 信息不可用";
     return (
       <div className="content-stack">
         <section className="section-card project-git-detail-card">
@@ -71,12 +77,14 @@ export function ProjectsView(props: {
               <h2>{selectedProject.project.name}</h2>
               <p>{selectedProject.project.description || "暂无项目说明"}</p>
               <div className="project-detail-facts">
+                <span className="project-owner-fact">Owner · {ownerLabel}</span>
                 <span>{projectStatusLabel(selectedProject.project.status)}</span>
                 <span>{projectTypeLabel(selectedProject.project.project_type, props.consoleData.project_types, props.consoleData.governance_policy.effective_settings.skill_language)} · 识别置信度 {selectedProject.project.project_type_confidence}%</span>
                 <span>{selectedProject.git ? `${selectedProject.git.git_host} · ${selectedProject.git.default_branch}` : "等待 Human 配置 Git"}</span>
               </div>
             </div>
             <div className="project-state-actions">
+              {canManage ? <button className="button small" type="button" disabled={projectPaused} onClick={() => setShowOwnerDialog(true)}>更换 Owner</button> : null}
               <span className={`git-config-state ${selectedProject.git ? "configured" : ""}`}>
                 {selectedProject.git ? "已配置 Git" : "未配置 Git"}
               </span>
@@ -153,6 +161,18 @@ export function ProjectsView(props: {
               onNotice={props.onNotice}
             />
           ) : null}
+          {showOwnerDialog ? (
+            <ProjectOwnerDialog
+              companyId={props.consoleData.company.id}
+              project={selectedProject}
+              consoleData={props.consoleData}
+              token={props.token}
+              onClose={() => setShowOwnerDialog(false)}
+              onChanged={props.onChanged}
+              onError={props.onError}
+              onNotice={props.onNotice}
+            />
+          ) : null}
         </section>
       </div>
     );
@@ -194,7 +214,7 @@ export function ProjectsView(props: {
                       <small>{projectTypeLabel(project.project.project_type, props.consoleData.project_types, props.consoleData.governance_policy.effective_settings.skill_language)} · {projectStatusLabel(project.project.status)}</small>
                     </span>
                     <span className="project-repository-facts">
-                      {project.git ? `${project.git.git_host} · 默认分支 ${project.git.default_branch}${project.git.push_enabled ? " · Agent 可推送" : ""}` : "尚未关联仓库和宿主机目录"}
+                      Owner · {props.consoleData.agents.find((agent) => agent.agent_profile.id === project.project.owner_agent_id)?.agent_profile.display_name ?? "未知 Agent"} · {project.git ? `${project.git.git_host} · 默认分支 ${project.git.default_branch}${project.git.push_enabled ? " · Agent 可推送" : ""}` : "尚未关联仓库"}
                     </span>
                   </span>
                   <Icon name="chevron-right" />

@@ -303,6 +303,7 @@ fn company_action_schemas_keep_hot_grant_project_actions_visible() {
         "update",
         "member_add",
         "member_remove",
+        "owner_transfer",
         "rule_update",
         "assets_replace",
     ] {

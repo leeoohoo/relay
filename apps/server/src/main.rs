@@ -53,12 +53,12 @@ use ai_chat_application::{
     RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
     ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
     SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
-    SetCompanyProjectPauseForHumanInput, UpdateAgentMemoryForHumanInput,
-    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
-    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
-    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
-    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
-    UpsertCompanyProjectGitForHumanInput,
+    SetCompanyProjectPauseForHumanInput, TransferCompanyProjectOwnerForHumanInput,
+    UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
+    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
+    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
+    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
+    UpsertCompanyProjectAssetRefreshForHumanInput, UpsertCompanyProjectGitForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -555,6 +555,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/pause",
             post(pause_company_project),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/owner",
+            axum::routing::put(transfer_company_project_owner),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/resume",

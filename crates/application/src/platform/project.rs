@@ -348,6 +348,138 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.company_project_view(project)
     }
 
+    pub fn transfer_company_project_owner(
+        &self,
+        input: TransferCompanyProjectOwnerInput,
+    ) -> AppResult<CompanyProjectView> {
+        self.ensure_agent_can_act(input.actor_agent_id)?;
+        self.ensure_company_agent_permission(
+            input.company_id,
+            input.actor_agent_id,
+            COMPANY_PERMISSION_PROJECT_MANAGE,
+        )?;
+        let project = self.ensure_company_project_access(
+            input.company_id,
+            input.project_id,
+            input.actor_agent_id,
+        )?;
+        self.transfer_company_project_owner_record(
+            project,
+            input.owner_agent_id,
+            Some(input.actor_agent_id),
+            None,
+        )
+    }
+
+    pub fn transfer_company_project_owner_for_human(
+        &self,
+        input: TransferCompanyProjectOwnerForHumanInput,
+    ) -> AppResult<CompanyProjectView> {
+        let project = self.ensure_company_project_for_human_manager(
+            input.human_user_id,
+            input.company_id,
+            input.project_id,
+        )?;
+        self.transfer_company_project_owner_record(
+            project,
+            input.owner_agent_id,
+            None,
+            Some(input.human_user_id),
+        )
+    }
+
+    fn transfer_company_project_owner_record(
+        &self,
+        mut project: CompanyProject,
+        owner_agent_id: Uuid,
+        actor_agent_id: Option<Uuid>,
+        actor_human_user_id: Option<Uuid>,
+    ) -> AppResult<CompanyProjectView> {
+        self.ensure_project_not_paused(&project)?;
+        self.ensure_agent_can_act(owner_agent_id)?;
+        self.ensure_active_company_conversation_member(project.company_id, owner_agent_id)?;
+        if owner_agent_id == project.owner_agent_id {
+            return self.company_project_view(project);
+        }
+
+        let existing_member = self
+            .repo
+            .get_company_project_member(project.id, owner_agent_id);
+        let is_active_member = existing_member
+            .as_ref()
+            .is_some_and(|member| member.left_at.is_none());
+        if !is_active_member {
+            let governance = self.effective_company_governance_policy_settings(project.company_id);
+            let active_member_count = self
+                .repo
+                .list_company_project_members(project.id)
+                .into_iter()
+                .filter(|member| member.left_at.is_none())
+                .count();
+            if active_member_count >= governance.max_project_members as usize {
+                return Err(AppError::Validation(format!(
+                    "project supports at most {} active members",
+                    governance.max_project_members
+                )));
+            }
+        }
+
+        let previous_owner_agent_id = project.owner_agent_id;
+        let now = now_utc();
+        let new_owner_member = CompanyProjectMember {
+            id: existing_member
+                .as_ref()
+                .map(|member| member.id)
+                .unwrap_or_else(Uuid::new_v4),
+            project_id: project.id,
+            agent_profile_id: owner_agent_id,
+            role: PROJECT_MEMBER_ROLE_OWNER.into(),
+            joined_at: existing_member
+                .as_ref()
+                .filter(|member| member.left_at.is_none())
+                .map(|member| member.joined_at)
+                .unwrap_or(now),
+            left_at: None,
+            added_by_agent_id: existing_member
+                .as_ref()
+                .map(|member| member.added_by_agent_id)
+                .or(actor_agent_id)
+                .unwrap_or(previous_owner_agent_id),
+        };
+        project.owner_agent_id = owner_agent_id;
+        project.updated_by_agent_id = actor_agent_id;
+        project.updated_at = now;
+        self.repo
+            .complete_company_project_owner_transfer(CompanyProjectOwnerTransferBundle {
+                project: project.clone(),
+                previous_owner_agent_id,
+                new_owner_member,
+            })?;
+
+        let transfer_payload = json!({
+            "company_id": project.company_id,
+            "project_id": project.id,
+            "project_name": project.name,
+            "previous_owner_agent_id": previous_owner_agent_id,
+            "owner_agent_id": owner_agent_id,
+            "transferred_by_agent_id": actor_agent_id,
+            "transferred_by_human_user_id": actor_human_user_id,
+        });
+        let _ = self.enqueue_agent_event(
+            previous_owner_agent_id,
+            "company.project.owner_transferred",
+            transfer_payload.clone(),
+            50,
+        );
+        let _ = self.enqueue_agent_event(
+            owner_agent_id,
+            "company.project.owner_assigned",
+            transfer_payload,
+            55,
+        );
+        self.company_project_view(project)
+    }
+
     pub fn pause_company_project_for_human(
         &self,
         input: SetCompanyProjectPauseForHumanInput,

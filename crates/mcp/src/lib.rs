@@ -10,9 +10,9 @@ use ai_chat_application::{
     OwnershipProofVerifier, PlatformApp, PlatformRepository, RememberAgentMemoryInput,
     RemoveCompanyProjectMemberInput, ReplaceCompanyProjectAssetsInput,
     ReplyCompanyInboxMessageInput, SearchAgentMemoriesInput, SendCompanyMessageWithMentionsInput,
-    SetAgentMemoryStateInput, UpdateAgentMemoryInput, UpdateCompanyAgentWorkProfileInput,
-    UpdateCompanyProjectInput, UpdateCompanyProjectRuleInput, UpdateCompanyProjectTaskInput,
-    UpsertCompanyProjectGitInput,
+    SetAgentMemoryStateInput, TransferCompanyProjectOwnerInput, UpdateAgentMemoryInput,
+    UpdateCompanyAgentWorkProfileInput, UpdateCompanyProjectInput, UpdateCompanyProjectRuleInput,
+    UpdateCompanyProjectTaskInput, UpsertCompanyProjectGitInput,
 };
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
@@ -349,6 +349,11 @@ enum CompanyProjectOperation {
         company_id: Uuid,
         project_id: Uuid,
         target_agent_id: Uuid,
+    },
+    OwnerTransfer {
+        company_id: Uuid,
+        project_id: Uuid,
+        owner_agent_id: Uuid,
     },
     StatusUpdate {
         company_id: Uuid,

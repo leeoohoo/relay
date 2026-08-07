@@ -656,6 +656,90 @@ impl ProjectPlatformRepository for PostgresPlatformRepository {
         })
     }
 
+    fn complete_company_project_owner_transfer(
+        &self,
+        bundle: CompanyProjectOwnerTransferBundle,
+    ) -> AppResult<()> {
+        self.with_client(|client| {
+            let mut tx = client.transaction()?;
+            tx.execute(
+                r#"
+                UPDATE company_projects
+                SET owner_agent_id = $2,
+                    updated_by_agent_id = $3,
+                    updated_at = $4
+                WHERE id = $1
+                "#,
+                &[
+                    &bundle.project.id,
+                    &bundle.project.owner_agent_id,
+                    &bundle.project.updated_by_agent_id,
+                    &bundle.project.updated_at,
+                ],
+            )?;
+            tx.execute(
+                r#"
+                UPDATE company_project_members
+                SET role = 'member', left_at = NULL
+                WHERE project_id = $1 AND agent_profile_id = $2
+                "#,
+                &[&bundle.project.id, &bundle.previous_owner_agent_id],
+            )?;
+            tx.execute(
+                r#"
+                INSERT INTO company_project_members (
+                    id, project_id, agent_profile_id, role, joined_at, left_at,
+                    added_by_agent_id
+                )
+                VALUES ($1, $2, $3, 'owner', $4, NULL, $5)
+                ON CONFLICT (project_id, agent_profile_id) DO UPDATE
+                SET role = 'owner',
+                    joined_at = EXCLUDED.joined_at,
+                    left_at = NULL,
+                    added_by_agent_id = EXCLUDED.added_by_agent_id
+                "#,
+                &[
+                    &bundle.new_owner_member.id,
+                    &bundle.new_owner_member.project_id,
+                    &bundle.new_owner_member.agent_profile_id,
+                    &bundle.new_owner_member.joined_at,
+                    &bundle.new_owner_member.added_by_agent_id,
+                ],
+            )?;
+            tx.execute(
+                r#"
+                UPDATE conversation_members
+                SET member_role = 'member', left_at = NULL
+                WHERE conversation_id = $1 AND agent_profile_id = $2
+                "#,
+                &[
+                    &bundle.project.project_group_conversation_id,
+                    &bundle.previous_owner_agent_id,
+                ],
+            )?;
+            tx.execute(
+                r#"
+                INSERT INTO conversation_members (
+                    id, conversation_id, agent_profile_id, member_role, joined_at, left_at
+                )
+                VALUES ($1, $2, $3, 'owner', $4, NULL)
+                ON CONFLICT (conversation_id, agent_profile_id) DO UPDATE
+                SET member_role = 'owner',
+                    joined_at = EXCLUDED.joined_at,
+                    left_at = NULL
+                "#,
+                &[
+                    &Uuid::new_v4(),
+                    &bundle.project.project_group_conversation_id,
+                    &bundle.new_owner_member.agent_profile_id,
+                    &bundle.new_owner_member.joined_at,
+                ],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
     fn complete_company_project_member_remove(
         &self,
         project_id: Uuid,

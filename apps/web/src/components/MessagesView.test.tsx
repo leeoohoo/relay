@@ -104,7 +104,7 @@ const consoleData: CompanyConsole = {
     member_agent_ids: ["agent-1"],
   }],
   projects: [{
-    project: { id: "project-1", name: "WMS", description: "", project_type: "wms", project_type_source: "human", project_type_confidence: 1, project_type_evidence: [], status: "active" },
+    project: { id: "project-1", name: "WMS", description: "", project_type: "wms", project_type_source: "human", project_type_confidence: 1, project_type_evidence: [], status: "active", owner_agent_id: "agent-1" },
     git: null,
     rule: null,
     assets: [],

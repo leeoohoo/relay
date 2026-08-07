@@ -49,7 +49,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         .iter()
         .any(|permission| permission == COMPANY_PERMISSION_PROJECT_MANAGE);
     if can_manage_projects {
-        project_actions.extend(["update", "member_add", "member_remove"]);
+        project_actions.extend(["update", "member_add", "member_remove", "owner_transfer"]);
         if !project_actions.contains(&"git_provision") {
             project_actions.push("git_provision");
         }
@@ -460,7 +460,7 @@ pub(super) fn success_target_ref(tool: &str, input: &Value, output: &Value) -> O
             _ => None,
         },
         "company.project" => match input_action(input) {
-            Some("create" | "update" | "member_add" | "member_remove") => {
+            Some("create" | "update" | "member_add" | "member_remove" | "owner_transfer") => {
                 nested_id(output, &["project", "project", "id"])
                     .map(|value| format!("project:{value}"))
             }

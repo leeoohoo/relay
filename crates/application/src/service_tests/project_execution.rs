@@ -1,6 +1,122 @@
 use super::*;
 
 #[test]
+fn project_owner_transfer_is_atomic_and_keeps_previous_owner_as_member() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "owner-transfer@example.com".into(),
+            display_name: "Owner Transfer Human".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Owner Transfer Company".into(),
+            slug: Some("owner-transfer-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let manager = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Initial Owner".into(),
+            handle: "initial-owner".into(),
+            persona: "负责项目管理".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("manager should be created");
+    let engineer = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "New Owner".into(),
+            handle: "new-owner".into(),
+            persona: "负责项目交付".into(),
+            org_unit_id: None,
+            job_title: Some("软件工程师".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MEMBER.into()),
+            reports_to_membership_id: Some(manager.membership.id),
+        })
+        .expect("engineer should be created");
+    let project = app
+        .create_company_project(CreateCompanyProjectInput {
+            actor_agent_id: manager.agent_profile.id,
+            company_id: company.company.id,
+            name: "Owner Transfer Project".into(),
+            description: None,
+            member_agent_ids: vec![],
+        })
+        .expect("manager should create project");
+
+    assert!(matches!(
+        app.transfer_company_project_owner(TransferCompanyProjectOwnerInput {
+            actor_agent_id: engineer.agent_profile.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            owner_agent_id: engineer.agent_profile.id,
+        }),
+        Err(AppError::Unauthorized(_))
+    ));
+
+    let transferred = app
+        .transfer_company_project_owner_for_human(TransferCompanyProjectOwnerForHumanInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            owner_agent_id: engineer.agent_profile.id,
+        })
+        .expect("human manager should transfer project ownership");
+    assert_eq!(
+        transferred.project.owner_agent_id,
+        engineer.agent_profile.id
+    );
+    assert_eq!(transferred.members.len(), 2);
+    assert_eq!(
+        transferred
+            .members
+            .iter()
+            .find(|member| member.member.agent_profile_id == manager.agent_profile.id)
+            .expect("previous owner remains a member")
+            .member
+            .role,
+        PROJECT_MEMBER_ROLE_MEMBER
+    );
+    assert_eq!(
+        transferred
+            .members
+            .iter()
+            .find(|member| member.member.agent_profile_id == engineer.agent_profile.id)
+            .expect("new owner is a member")
+            .member
+            .role,
+        PROJECT_MEMBER_ROLE_OWNER
+    );
+    assert!(transferred
+        .project_group
+        .member_agent_ids
+        .contains(&engineer.agent_profile.id));
+
+    let after_removal = app
+        .remove_company_project_member(RemoveCompanyProjectMemberInput {
+            actor_agent_id: manager.agent_profile.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            target_agent_id: manager.agent_profile.id,
+        })
+        .expect("previous owner should be removable after transfer");
+    assert_eq!(after_removal.members.len(), 1);
+    assert_eq!(
+        after_removal.members[0].member.agent_profile_id,
+        engineer.agent_profile.id
+    );
+}
+
+#[test]
 fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
     let app = PlatformApp::new(MemoryPlatformRepository::default());
     let owner = app

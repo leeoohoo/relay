@@ -42,9 +42,10 @@ use crate::service::{
     CodexRuntimePlatformRepository, CompanyAgentActivationBundle, CompanyAgentCreationBundle,
     CompanyAgentMembershipUpdateBundle, CompanyConversationCreationBundle, CompanyCreationBundle,
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
-    CompleteAgentCodexTriggerLeaseInput, GovernancePlatformRepository,
-    HumanCompanyDirectConversationCreationBundle, MemoryPlatformRepositoryPort,
-    ProjectPlatformRepository, RegistrationCompletionBundle, TaskPlatformRepository,
+    CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
+    GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
+    MemoryPlatformRepositoryPort, ProjectPlatformRepository, RegistrationCompletionBundle,
+    TaskPlatformRepository,
 };
 
 #[derive(Default, Serialize, Deserialize)]

@@ -136,6 +136,21 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         )?;
                         Ok(json!({ "project": project }))
                     }
+                    CompanyProjectOperation::OwnerTransfer {
+                        company_id,
+                        project_id,
+                        owner_agent_id,
+                    } => {
+                        let project = self.platform.transfer_company_project_owner(
+                            TransferCompanyProjectOwnerInput {
+                                actor_agent_id: agent_id,
+                                company_id,
+                                project_id,
+                                owner_agent_id,
+                            },
+                        )?;
+                        Ok(json!({ "project": project }))
+                    }
                     CompanyProjectOperation::StatusUpdate {
                         company_id,
                         project_id,

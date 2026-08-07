@@ -1,4 +1,6 @@
 use super::*;
+use ai_chat_domain::company::PROJECT_MEMBER_ROLE_MEMBER;
+use ai_chat_domain::social::ConversationType;
 
 impl ProjectPlatformRepository for MemoryPlatformRepository {
     fn complete_company_project_creation(
@@ -317,6 +319,46 @@ impl ProjectPlatformRepository for MemoryPlatformRepository {
         if let Some(project) = guard.company_projects.get_mut(&project_id) {
             project.updated_at = joined_at;
         }
+        Ok(())
+    }
+
+    fn complete_company_project_owner_transfer(
+        &self,
+        bundle: CompanyProjectOwnerTransferBundle,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if !guard.company_projects.contains_key(&bundle.project.id) {
+            return Err(ai_chat_shared::AppError::NotFound(
+                "company project not found".into(),
+            ));
+        }
+        if let Some(previous_owner) = guard
+            .company_project_members
+            .get_mut(&(bundle.project.id, bundle.previous_owner_agent_id))
+        {
+            previous_owner.role = PROJECT_MEMBER_ROLE_MEMBER.into();
+            previous_owner.left_at = None;
+        }
+        let new_owner_id = bundle.new_owner_member.agent_profile_id;
+        guard
+            .company_project_members
+            .insert((bundle.project.id, new_owner_id), bundle.new_owner_member);
+        let previews = guard.conversations.entry(new_owner_id).or_default();
+        if !previews
+            .iter()
+            .any(|preview| preview.id == bundle.project.project_group_conversation_id)
+        {
+            previews.push(ConversationPreview {
+                id: bundle.project.project_group_conversation_id,
+                title: format!("项目 · {}", bundle.project.name),
+                conversation_type: ConversationType::Group,
+                last_message_preview: None,
+                updated_at: bundle.project.updated_at,
+            });
+        }
+        guard
+            .company_projects
+            .insert(bundle.project.id, bundle.project);
         Ok(())
     }
 
