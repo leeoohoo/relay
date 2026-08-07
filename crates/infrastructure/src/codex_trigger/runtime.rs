@@ -6,6 +6,12 @@ impl CodexTriggerRunner {
         if let Some(thread_id) = request.existing_thread_id.as_deref() {
             let resumed = self.run_once(&request, Some(thread_id)).await?;
             if should_replace_session(&resumed) {
+                report_progress(
+                    request.progress_handler.as_ref(),
+                    "session_recovery",
+                    "Codex 原会话无法稳定完成，正在创建下一代会话继续处理",
+                    Some(thread_id),
+                );
                 let created = self.run_once(&request, None).await?;
                 return Ok(to_public_result(created, false, true));
             }
@@ -46,7 +52,7 @@ impl CodexTriggerRunner {
         if let Some(model) = request.model.as_deref() {
             command.arg("--model").arg(model);
         }
-        apply_managed_cli_settings(&mut command, request);
+        apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         command
             .arg("--sandbox")
             .arg(sandbox_mode)
@@ -226,7 +232,7 @@ impl CodexTriggerRunner {
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args);
         self.apply_profile_arguments(&mut command, &request.codex_profile)?;
-        apply_managed_cli_settings(&mut command, request);
+        apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         command
             .arg("--config")
             .arg(format!(

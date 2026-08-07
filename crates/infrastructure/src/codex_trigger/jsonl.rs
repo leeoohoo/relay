@@ -215,6 +215,13 @@ pub(super) fn summarize_codex_item(item: &Value, completed: bool) -> Option<(Str
         "agent_message" | "agentMessage" => format!("{completion}整理回复和执行结果"),
         "web_search" | "webSearch" => format!("{completion}搜索资料"),
         "todo_list" | "todoList" => format!("{completion}更新执行计划"),
+        "context_compaction" | "contextCompaction" => {
+            if completed {
+                "Codex 已压缩会话上下文并保留关键结论".into()
+            } else {
+                "Codex 正在压缩较长的会话上下文".into()
+            }
+        }
         _ => return None,
     };
     let phase = match item_type {
@@ -225,6 +232,7 @@ pub(super) fn summarize_codex_item(item: &Value, completed: bool) -> Option<(Str
         "agent_message" | "agentMessage" => "reporting",
         "web_search" | "webSearch" => "searching",
         "todo_list" | "todoList" => "planning",
+        "context_compaction" | "contextCompaction" => "compacting",
         _ => "running",
     };
     Some((phase.into(), summary))
@@ -300,7 +308,7 @@ pub(super) fn event_error_message(value: &Value) -> Option<String> {
 }
 
 pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
-    if outcome.status != CodexRunStatus::Failed || outcome.turn_started {
+    if outcome.status != CodexRunStatus::Failed {
         return false;
     }
     let message = outcome
@@ -308,6 +316,14 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    if message.contains("stream disconnected before completion")
+        || message.contains("stream closed before response.completed")
+    {
+        return true;
+    }
+    if outcome.turn_started {
+        return false;
+    }
     ["resume", "session", "thread", "rollout", "conversation"]
         .iter()
         .any(|marker| message.contains(marker))
@@ -326,7 +342,7 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
 pub(super) fn to_public_result(
     outcome: ProcessOutcome,
     resumed_existing_session: bool,
-    replaced_unresumable_session: bool,
+    replaced_failed_session: bool,
 ) -> CodexRunResult {
     CodexRunResult {
         status: outcome.status,
@@ -335,6 +351,6 @@ pub(super) fn to_public_result(
         final_message: outcome.final_message,
         error_message: outcome.error_message,
         resumed_existing_session,
-        replaced_unresumable_session,
+        replaced_failed_session,
     }
 }

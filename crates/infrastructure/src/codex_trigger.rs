@@ -28,6 +28,7 @@ use crate::codex_control::{
 };
 
 const DEFAULT_RUN_TOKEN_ENV: &str = "RELAY_AGENT_RUN_TOKEN";
+const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: u64 = 200_000;
 const MAX_STDERR_BYTES: usize = 32 * 1024;
 const MAX_CODEX_JSON_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -83,6 +84,7 @@ pub struct CodexTriggerRunner {
     run_token_env_name: String,
     inherited_environment: HashMap<String, String>,
     shell_excluded_environment_names: Vec<String>,
+    auto_compact_token_limit: u64,
     managed_profile_homes_root: PathBuf,
     managed_cli_home: PathBuf,
 }
@@ -182,7 +184,7 @@ pub struct CodexRunResult {
     pub final_message: Option<String>,
     pub error_message: Option<String>,
     pub resumed_existing_session: bool,
-    pub replaced_unresumable_session: bool,
+    pub replaced_failed_session: bool,
 }
 
 #[derive(Debug)]

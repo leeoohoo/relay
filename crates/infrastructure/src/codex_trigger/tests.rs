@@ -84,7 +84,7 @@ fn managed_cli_settings_are_injected_as_cli_overrides() {
         cancellation_handler: None,
     };
     let mut command = Command::new("codex");
-    apply_managed_cli_settings(&mut command, &request);
+    apply_managed_cli_settings(&mut command, &request, 200_000);
     let args = command
         .as_std()
         .get_args()
@@ -95,9 +95,24 @@ fn managed_cli_settings_are_injected_as_cli_overrides() {
     assert!(args.contains(&"model_verbosity=\"medium\"".into()));
     assert!(args.contains(&"service_tier=\"fast\"".into()));
     assert!(args.contains(&"web_search=\"live\"".into()));
+    assert!(args.contains(&"model_auto_compact_token_limit=200000".into()));
+    assert!(args.contains(&"model_auto_compact_token_limit_scope=\"total\"".into()));
     assert!(args.contains(&"sandbox_workspace_write.network_access=false".into()));
     assert!(args.contains(&"features.remote_plugin=false".into()));
     assert!(args.contains(&"features.shell_tool=true".into()));
+}
+
+#[test]
+fn context_compaction_is_reported_as_session_maintenance() {
+    let started = summarize_codex_item(&json!({ "type": "contextCompaction" }), false)
+        .expect("started compaction summary");
+    let completed = summarize_codex_item(&json!({ "type": "contextCompaction" }), true)
+        .expect("completed compaction summary");
+
+    assert_eq!(started.0, "compacting");
+    assert!(started.1.contains("正在压缩"));
+    assert_eq!(completed.0, "compacting");
+    assert!(completed.1.contains("已压缩"));
 }
 
 #[derive(Default)]
@@ -287,7 +302,7 @@ fn mcp_discovery_view_removes_secrets_and_argument_contents() {
 }
 
 #[test]
-fn only_pre_turn_resume_errors_replace_a_session() {
+fn unresumable_or_terminal_stream_errors_replace_a_session() {
     assert!(should_replace_session(&ProcessOutcome {
         status: CodexRunStatus::Failed,
         thread_id: None,
@@ -302,6 +317,16 @@ fn only_pre_turn_resume_errors_replace_a_session() {
         exit_code: Some(1),
         final_message: None,
         error_message: Some("turn failed after command execution".into()),
+        turn_started: true,
+    }));
+    assert!(should_replace_session(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: Some(1),
+        final_message: None,
+        error_message: Some(
+            "stream disconnected before completion: stream closed before response.completed".into(),
+        ),
         turn_started: true,
     }));
 }
@@ -715,8 +740,63 @@ fn fake_codex_replaces_only_an_unresumable_thread() {
         .expect("fake Codex run");
     assert_eq!(result.status, CodexRunStatus::Succeeded);
     assert_eq!(result.thread_id.as_deref(), Some("new-thread"));
-    assert!(result.replaced_unresumable_session);
+    assert!(result.replaced_failed_session);
     assert!(!result.resumed_existing_session);
+    std::fs::remove_dir_all(workspace).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn fake_codex_replaces_a_thread_after_terminal_stream_disconnect() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-fake-codex-stream-recovery-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let script = r#"for arg in "$@"; do if [ "$arg" = "resume" ]; then printf '%s\n' '{"type":"thread.started","thread_id":"large-thread"}' '{"type":"turn.started"}' '{"type":"error","message":"stream disconnected before completion: stream closed before response.completed"}'; exit 1; fi; done; printf '%s\n' '{"type":"thread.started","thread_id":"replacement-thread"}' '{"type":"turn.started"}' '{"type":"item.completed","item":{"type":"agent_message","text":"recovered"}}' '{"type":"turn.completed"}'"#;
+    let runner = CodexTriggerRunner::new(
+        PathBuf::from("/bin/sh"),
+        vec!["-c".into(), script.into(), "--".into()],
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime
+        .block_on(runner.run(CodexRunRequest {
+            cwd: workspace.clone(),
+            codex_profile: "default".into(),
+            model: Some("gpt-5.5".into()),
+            reasoning_effort: Some("medium".into()),
+            reasoning_summary: Some("auto".into()),
+            verbosity: Some("medium".into()),
+            personality: Some("pragmatic".into()),
+            service_tier: None,
+            sandbox_mode: "workspace_write".into(),
+            approval_policy: "never".into(),
+            network_access: true,
+            web_search: "cached".into(),
+            feature_multi_agent: true,
+            feature_remote_plugin: true,
+            feature_hooks: true,
+            feature_goals: true,
+            feature_shell_tool: true,
+            max_run_seconds: 10,
+            prompt: "continue project work".into(),
+            existing_thread_id: Some("large-thread".into()),
+            run_token: "art_test".into(),
+            environment: HashMap::new(),
+            approval_handler: None,
+            progress_handler: None,
+            cancellation_handler: None,
+        }))
+        .expect("stream recovery run");
+
+    assert_eq!(result.status, CodexRunStatus::Succeeded);
+    assert_eq!(result.thread_id.as_deref(), Some("replacement-thread"));
+    assert_eq!(result.final_message.as_deref(), Some("recovered"));
+    assert!(result.replaced_failed_session);
     std::fs::remove_dir_all(workspace).expect("cleanup");
 }
 

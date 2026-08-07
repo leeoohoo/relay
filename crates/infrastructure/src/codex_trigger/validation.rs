@@ -466,7 +466,11 @@ pub(super) fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
 }
 
-pub(super) fn apply_managed_cli_settings(command: &mut Command, request: &CodexRunRequest) {
+pub(super) fn apply_managed_cli_settings(
+    command: &mut Command,
+    request: &CodexRunRequest,
+    auto_compact_token_limit: u64,
+) {
     let mut set_string = |key: &str, value: Option<&str>| {
         if let Some(value) = value {
             command
@@ -487,6 +491,12 @@ pub(super) fn apply_managed_cli_settings(command: &mut Command, request: &CodexR
     set_string("service_tier", request.service_tier.as_deref());
     set_string("web_search", Some(&request.web_search));
     command
+        .arg("--config")
+        .arg(format!(
+            "model_auto_compact_token_limit={auto_compact_token_limit}"
+        ))
+        .arg("--config")
+        .arg("model_auto_compact_token_limit_scope=\"total\"")
         .arg("--config")
         .arg(format!(
             "sandbox_workspace_write.network_access={}",
