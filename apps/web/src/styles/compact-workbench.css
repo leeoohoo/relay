@@ -58,6 +58,14 @@
 .project-overview-metrics strong { font-size: 15px; }
 .project-repository-row { border-radius: 10px; }
 .project-repository-main { grid-template-columns: 36px minmax(0,1fr) 16px; gap: 10px; padding: 10px 12px; }
+.project-repository-main:hover,
+.project-repository-main:active,
+.project-repository-main:focus { color: inherit; background: rgba(255, 255, 255, .025); outline: 0; }
+.project-repository-row:focus-within { border-color: rgba(77, 226, 255, .32); background: rgba(16, 25, 34, .96); box-shadow: 0 0 0 2px rgba(77, 226, 255, .07); }
+.project-repository-main:focus-visible { box-shadow: inset 3px 0 0 var(--relay-cyan); }
+.project-repository-row.paused .project-repository-main:hover,
+.project-repository-row.paused .project-repository-main:active,
+.project-repository-row.paused .project-repository-main:focus { background: rgba(255, 197, 109, .035); }
 .project-repository-icon { width: 34px; height: 34px; border-radius: 8px; }
 .project-repository-copy { gap: 3px; }
 .project-repository-shortcuts { padding: 8px 10px; }
