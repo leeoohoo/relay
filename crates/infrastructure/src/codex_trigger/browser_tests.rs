@@ -112,8 +112,10 @@ IFS= read -r initialize
 printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
 IFS= read -r initialized
 IFS= read -r thread
+case "$thread" in *'"approvalPolicy":"on-request"'*) ;; *) exit 17 ;; esac
 printf '%s\n' '{"id":1,"result":{"thread":{"id":"thread-browser"},"model":"fake","modelProvider":"fake","cwd":"/tmp","approvalPolicy":"never","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"readOnlyAccess":{"type":"fullAccess"},"networkAccess":true,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false}}}'
 IFS= read -r turn
+case "$turn" in *'"approvalPolicy":"on-request"'*) ;; *) exit 18 ;; esac
 printf '%s\n' '{"id":2,"result":{"turn":{"id":"turn-browser","items":[],"status":"inProgress"}}}'
 printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-browser","turnId":"turn-browser","item":{"id":"browser-item","type":"mcpToolCall","server":"chrome-devtools","tool":"navigate_page","arguments":{"url":"https://example.com/dashboard"},"status":"inProgress"}}}'
 printf '%s\n' '{"id":99,"method":"item/tool/requestUserInput","params":{"threadId":"thread-browser","turnId":"turn-browser","itemId":"browser-item","questions":[{"id":"approval","header":"Website access","question":"Allow navigation?","options":[{"label":"Accept","description":"Continue"},{"label":"Decline","description":"Stop"}]}]}}'

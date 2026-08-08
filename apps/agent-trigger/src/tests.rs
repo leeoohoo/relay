@@ -521,3 +521,23 @@ fn managed_batch_size_overrides_the_environment_default() {
     );
     fs::remove_dir_all(root).expect("cleanup");
 }
+
+#[test]
+fn browser_approval_remains_human_reviewed_when_general_approvals_are_disabled() {
+    assert_eq!(
+        automatic_codex_approval_decision(AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS, false),
+        None
+    );
+    assert_eq!(
+        automatic_codex_approval_decision(AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, false),
+        Some(CodexApprovalDecision::Decline)
+    );
+    assert_eq!(
+        automatic_codex_approval_decision("codex.command_execution", false),
+        Some(CodexApprovalDecision::Accept)
+    );
+    assert_eq!(
+        automatic_codex_approval_decision("codex.command_execution", true),
+        None
+    );
+}

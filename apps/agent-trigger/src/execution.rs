@@ -608,6 +608,7 @@ async fn run_codex_stage(
                         agent_id: trigger.agent_profile_id,
                         expires_at: now_utc()
                             + Duration::seconds(i64::from(trigger.max_run_seconds)),
+                        general_approval_required: settings.approval_policy == "on-request",
                     }) as Arc<dyn CodexApprovalHandler>
                 }),
             progress_handler: Some(Arc::new(PlatformCodexProgressHandler {

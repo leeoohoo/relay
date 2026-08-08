@@ -26,6 +26,7 @@ use ai_chat_domain::{
         AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
         AgentExecutionIntent, AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation,
         CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_POLICY_NEVER,
+        AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
         AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
         AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
         AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
@@ -138,6 +139,7 @@ struct PlatformCodexApprovalHandler {
     run_id: Uuid,
     agent_id: Uuid,
     expires_at: chrono::DateTime<chrono::Utc>,
+    general_approval_required: bool,
 }
 
 #[derive(Clone)]
@@ -194,6 +196,11 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
         &self,
         request: CodexApprovalRequest,
     ) -> AppResult<CodexApprovalDecision> {
+        if let Some(decision) =
+            automatic_codex_approval_decision(&request.tool_name, self.general_approval_required)
+        {
+            return Ok(decision);
+        }
         record_run_activity(
             &self.platform,
             self.run_id,
@@ -249,6 +256,20 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
             }
         }
     }
+}
+
+fn automatic_codex_approval_decision(
+    tool_name: &str,
+    general_approval_required: bool,
+) -> Option<CodexApprovalDecision> {
+    if general_approval_required || tool_name == AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS {
+        return None;
+    }
+    Some(if tool_name == AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS {
+        CodexApprovalDecision::Decline
+    } else {
+        CodexApprovalDecision::Accept
+    })
 }
 
 fn main() -> anyhow::Result<()> {

@@ -37,10 +37,14 @@ where
     }
     send_json_rpc(writer, &json!({ "method": "initialized", "params": {} })).await?;
 
+    // Interactive MCP prompts must reach Relay even when ordinary Codex
+    // commands are configured as `never` approval. Otherwise Codex rejects a
+    // prompt-protected browser tool before emitting requestUserInput.
+    let app_server_approval_policy = "on-request";
     let mut thread_params = json!({
         "cwd": request.cwd.to_string_lossy(),
         "sandbox": sandbox_mode,
-        "approvalPolicy": request.approval_policy,
+        "approvalPolicy": app_server_approval_policy,
         "approvalsReviewer": "user"
     });
     if let Some(model) = request.model.as_deref() {
@@ -85,7 +89,7 @@ where
         "threadId": thread_id,
         "input": [{ "type": "text", "text": request.prompt }],
         "cwd": request.cwd.to_string_lossy(),
-        "approvalPolicy": request.approval_policy,
+        "approvalPolicy": app_server_approval_policy,
         "approvalsReviewer": "user"
     });
     if let Some(model) = request.model.as_deref() {
