@@ -8,7 +8,50 @@ Relay does **not** implement another model-calling stack. Its optional local tri
 
 ## Quick Start
 
-Relay supports Linux x64/ARM64, Intel/Apple Silicon macOS, and Windows 10/11 through WSL2. A complete installation needs Docker, Node.js 22, Git, and Rust; Rust is only used to build the host Agent Trigger.
+The recommended GitHub Release packages currently target Apple Silicon macOS and Windows 10/11 through WSL2. They already contain the web console and host Agent Trigger, so normal users only need Docker; Node.js, pnpm, Rust, and Cargo are not required.
+
+### Apple Silicon macOS Release
+
+Install and start Docker Desktop, then run:
+
+```bash
+rm -rf "$HOME/Downloads/relay-install"
+mkdir -p "$HOME/Downloads/relay-install"
+cd "$HOME/Downloads/relay-install"
+curl -fL https://github.com/leeoohoo/relay/releases/latest/download/relay-macos-apple-silicon.tar.gz -o relay.tar.gz
+tar -xzf relay.tar.gz
+cd relay-v*-macos-apple-silicon
+./install.sh
+```
+
+The current archive can be published without an Apple certificate. The installer removes the quarantine attribute from this user-selected directory; signed and notarized releases are used automatically after the repository owner configures the optional Apple secrets.
+
+### Windows 10 / 11 Release through WSL2
+
+First enable WSL2 and install Docker Desktop from an Administrator PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+winget install -e --id Docker.DockerDesktop
+```
+
+After restarting Windows, enable Docker Desktop's WSL2 engine and Ubuntu integration. Then open PowerShell and run:
+
+```powershell
+$dir = Join-Path $env:TEMP "relay-install"
+Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item $dir -ItemType Directory | Out-Null
+Invoke-WebRequest https://github.com/leeoohoo/relay/releases/latest/download/relay-windows-wsl2-x86_64.zip -OutFile "$dir\relay.zip"
+Expand-Archive "$dir\relay.zip" -DestinationPath $dir -Force
+$relay = Get-ChildItem $dir -Directory | Where-Object Name -Like "relay-v*-windows-wsl2-x86_64" | Select-Object -First 1
+powershell -ExecutionPolicy Bypass -File "$($relay.FullName)\install.ps1"
+```
+
+The installer copies Relay to `~/.relay-app` inside WSL2 and starts the complete product.
+
+### Build from source
+
+Linux and Intel Mac do not receive a prebuilt Release asset. Source builds remain available and require Docker, Node.js 22, Git, and Rust; Rust is only used to build the host Agent Trigger.
 
 ### Linux (Ubuntu / Debian, x64 or ARM64)
 
@@ -50,7 +93,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-### macOS (Intel or Apple Silicon)
+### macOS source build (Intel or Apple Silicon)
 
 Install [Homebrew](https://brew.sh/), then run:
 
@@ -73,7 +116,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-### Windows 10 / 11 (WSL2)
+### Windows source build (WSL2)
 
 The production launcher currently uses Bash, so Windows runs Relay through WSL2; do not run `start.sh` directly from native PowerShell. First run this in an Administrator PowerShell:
 

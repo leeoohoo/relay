@@ -1,0 +1,148 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-apple-silicon
+            rust_target: aarch64-apple-darwin
+            trigger_binary: target/aarch64-apple-darwin/release/ai-chat-agent-trigger
+          - os: ubuntu-latest
+            platform: windows-wsl2-x86_64
+            rust_target: x86_64-unknown-linux-gnu
+            trigger_binary: target/x86_64-unknown-linux-gnu/release/ai-chat-agent-trigger
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install web dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packaged web console
+        run: pnpm --dir apps/web build
+
+      - name: Build host Agent Trigger
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: cargo build --locked --release -p ai-chat-agent-trigger --target ${{ matrix.rust_target }}
+
+      - name: Verify Trigger architecture
+        run: |
+          description="$(file "${{ matrix.trigger_binary }}")"
+          echo "$description"
+          case "${{ matrix.platform }}" in
+            macos-apple-silicon)
+              grep -q "Mach-O 64-bit executable arm64" <<<"$description"
+              ;;
+            windows-wsl2-x86_64)
+              grep -Eq "ELF 64-bit.*x86-64" <<<"$description"
+              ;;
+          esac
+
+      - name: Sign Apple Silicon Trigger when certificate secrets exist
+        if: matrix.platform == 'macos-apple-silicon'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [[ -z "$APPLE_CERTIFICATE_BASE64" || -z "$APPLE_CERTIFICATE_PASSWORD" || -z "$APPLE_SIGNING_IDENTITY" ]]; then
+            echo "Apple signing secrets are not configured; publishing an unsigned macOS archive."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/relay-signing.keychain-db"
+          certificate="$RUNNER_TEMP/relay-signing.p12"
+          keychain_password="relay-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s' "$APPLE_CERTIFICATE_BASE64" | openssl base64 -d -A > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "${{ matrix.trigger_binary }}"
+          codesign --verify --strict --verbose=2 "${{ matrix.trigger_binary }}"
+
+      - name: Notarize Apple Silicon Trigger when Apple account secrets exist
+        if: matrix.platform == 'macos-apple-silicon'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" || -z "$APPLE_APP_PASSWORD" || -z "$APPLE_SIGNING_IDENTITY" ]]; then
+            echo "Apple notarization secrets are not configured; skipping notarization."
+            exit 0
+          fi
+          notarization_zip="$RUNNER_TEMP/relay-trigger-notarization.zip"
+          ditto -c -k --keepParent "${{ matrix.trigger_binary }}" "$notarization_zip"
+          xcrun notarytool submit "$notarization_zip" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+
+      - name: Create Release archive
+        run: ./scripts/package_release.sh "${GITHUB_REF_NAME}" "${{ matrix.platform }}" "${{ matrix.trigger_binary }}" release-dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-${{ matrix.platform }}
+          path: release-dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-dist
+          merge-multiple: true
+
+      - name: Create checksums
+        run: (cd release-dist && sha256sum relay-* > SHA256SUMS)
+
+      - name: Publish assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-dist/* \
+              --verify-tag \
+              --title "Relay $GITHUB_REF_NAME" \
+              --notes-file packaging/RELEASE.md
+          fi

@@ -28,6 +28,8 @@ done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-$HOME/.docker/daemon.json}"
+RELEASE_MARKER="$ROOT_DIR/RELAY_RELEASE"
+PACKAGED_WEB_INDEX="$ROOT_DIR/apps/web/dist/index.html"
 
 # shellcheck source=scripts/lib/relay_directories.sh
 source "$ROOT_DIR/scripts/lib/relay_directories.sh"
@@ -53,11 +55,6 @@ REQUIRED_DOCKER_IMAGES=(
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Missing required command: docker" >&2
-  exit 1
-fi
-
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "Missing required command: pnpm" >&2
   exit 1
 fi
 
@@ -119,6 +116,22 @@ prepare_shared_directories() {
 }
 
 build_web_assets() {
+  if [[ -f "$RELEASE_MARKER" && -f "$PACKAGED_WEB_INDEX" ]]; then
+    echo "Using web assets included in the Relay release package."
+    return 0
+  fi
+
+  if ! command -v pnpm >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+Missing required command: pnpm.
+
+Source checkouts need Node.js 22 and pnpm to build the web console.
+Normal users can instead download the packaged Relay release, which already includes
+the web assets and host Trigger binary.
+EOF
+    exit 1
+  fi
+
   (cd "$ROOT_DIR" && pnpm --dir apps/web build)
 }
 

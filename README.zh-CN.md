@@ -8,7 +8,50 @@ Relay **不会再实现一套调用大模型的代码**。可选的本地 Trigge
 
 ## 快速开始
 
-Relay 支持 Linux x64/ARM64、Intel/Apple Silicon macOS，以及 Windows 10/11 的 WSL2 环境。完整运行需要 Docker、Node.js 22、Git 和 Rust；Rust 只用于编译宿主机 Agent Trigger。
+推荐直接使用 GitHub Release 安装包。目前只发布 Apple Silicon macOS 和 Windows 10/11 WSL2 两种安装包。包内已经包含 Web 控制台和宿主机 Agent Trigger，普通用户只需要 Docker，不需要安装 Node.js、pnpm、Rust 或 Cargo。
+
+### Apple Silicon macOS Release
+
+安装并启动 Docker Desktop，然后执行：
+
+```bash
+rm -rf "$HOME/Downloads/relay-install"
+mkdir -p "$HOME/Downloads/relay-install"
+cd "$HOME/Downloads/relay-install"
+curl -fL https://github.com/leeoohoo/relay/releases/latest/download/relay-macos-apple-silicon.tar.gz -o relay.tar.gz
+tar -xzf relay.tar.gz
+cd relay-v*-macos-apple-silicon
+./install.sh
+```
+
+macOS 安装包没有 Apple 证书也可以发布。安装脚本会清除这个用户主动下载目录的隔离属性；以后在仓库中配置 Apple Developer 证书后，发布流程会自动进行签名和公证。
+
+### Windows 10 / 11 Release（WSL2）
+
+先在管理员 PowerShell 中启用 WSL2 并安装 Docker Desktop：
+
+```powershell
+wsl --install -d Ubuntu
+winget install -e --id Docker.DockerDesktop
+```
+
+重启 Windows，在 Docker Desktop 中启用 WSL2 引擎和 Ubuntu Integration，然后打开 PowerShell 执行：
+
+```powershell
+$dir = Join-Path $env:TEMP "relay-install"
+Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item $dir -ItemType Directory | Out-Null
+Invoke-WebRequest https://github.com/leeoohoo/relay/releases/latest/download/relay-windows-wsl2-x86_64.zip -OutFile "$dir\relay.zip"
+Expand-Archive "$dir\relay.zip" -DestinationPath $dir -Force
+$relay = Get-ChildItem $dir -Directory | Where-Object Name -Like "relay-v*-windows-wsl2-x86_64" | Select-Object -First 1
+powershell -ExecutionPolicy Bypass -File "$($relay.FullName)\install.ps1"
+```
+
+安装脚本会把 Relay 复制到 WSL2 的 `~/.relay-app`，然后启动完整产品。
+
+### 从源码安装
+
+Linux 和 Intel Mac 不发布预编译 Release 附件，仍然可以从源码安装。源码安装需要 Docker、Node.js 22、Git 和 Rust；Rust 只用于编译宿主机 Agent Trigger。
 
 ### Linux（Ubuntu / Debian，x64 或 ARM64）
 
@@ -50,7 +93,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-### macOS（Intel 或 Apple Silicon）
+### macOS 源码安装（Intel 或 Apple Silicon）
 
 先安装 [Homebrew](https://brew.sh/)，然后执行：
 
@@ -73,7 +116,7 @@ pnpm install --frozen-lockfile
 ./start.sh
 ```
 
-### Windows 10 / 11（WSL2）
+### Windows 源码安装（WSL2）
 
 当前正式启动器使用 Bash，因此 Windows 使用 WSL2；不要在原生 PowerShell 中直接运行 `start.sh`。先用管理员 PowerShell 执行：
 
