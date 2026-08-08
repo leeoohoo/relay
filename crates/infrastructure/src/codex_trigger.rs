@@ -32,6 +32,32 @@ const SESSION_KIND_ENV: &str = "RELAY_AGENT_SESSION_KIND";
 const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: u64 = 200_000;
 const MAX_STDERR_BYTES: usize = 32 * 1024;
 const MAX_CODEX_JSON_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const RELAY_UNSUPPORTED_CODEX_PLUGIN_IDS: [&str; 3] = [
+    "browser@openai-bundled",
+    "chrome@openai-bundled",
+    "computer-use@openai-bundled",
+];
+
+pub fn is_relay_supported_codex_plugin_id(plugin_id: &str) -> bool {
+    !RELAY_UNSUPPORTED_CODEX_PLUGIN_IDS.contains(&plugin_id)
+}
+
+pub fn filter_relay_supported_codex_plugin_items(items: &Value) -> Value {
+    Value::Array(
+        items
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|plugin| {
+                plugin
+                    .get("pluginId")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_relay_supported_codex_plugin_id)
+            })
+            .cloned()
+            .collect(),
+    )
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CodexModelReasoningEffort {
@@ -97,6 +123,7 @@ pub struct ManagedCodexMcpServer {
     pub command: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub disabled_plugin_ids: Vec<String>,
     pub required: bool,
     pub startup_timeout_sec: Option<u64>,
     pub tool_timeout_sec: Option<u64>,
@@ -238,6 +265,7 @@ mod app_server;
 mod browser;
 mod configuration;
 mod jsonl;
+mod managed_run_profile;
 mod model_catalog;
 mod runtime;
 mod validation;
@@ -251,5 +279,7 @@ pub use model_catalog::collect_codex_models;
 
 #[cfg(test)]
 mod browser_tests;
+#[cfg(test)]
+mod plugin_tests;
 #[cfg(test)]
 mod tests;

@@ -136,6 +136,10 @@ impl BrowserMcpConfig {
             command: self.command.clone(),
             args,
             env: BTreeMap::new(),
+            disabled_plugin_ids: vec![
+                "browser@openai-bundled".into(),
+                "chrome@openai-bundled".into(),
+            ],
             required: false,
             startup_timeout_sec: Some(90),
             tool_timeout_sec: Some(180),

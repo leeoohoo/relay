@@ -2,19 +2,6 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
-fn plugin_operations_map_to_cross_platform_codex_cli_subcommands() {
-    assert_eq!(
-        super::configuration::plugin_cli_operation("install").expect("install"),
-        "add"
-    );
-    assert_eq!(
-        super::configuration::plugin_cli_operation("remove").expect("remove"),
-        "remove"
-    );
-    assert!(super::configuration::plugin_cli_operation("refresh").is_err());
-}
-
-#[test]
 fn model_catalog_excludes_hidden_models_and_nested_ids() {
     let catalog = json!({
         "models": [
@@ -608,75 +595,6 @@ fn ordinary_codex_profile_still_uses_profile_argument() {
 
 #[cfg(unix)]
 #[test]
-fn plugin_discovery_uses_the_selected_managed_codex_home() {
-    let profile_id = Uuid::new_v4();
-    let selector = format!("relay_{profile_id}");
-    let state_root = std::env::temp_dir().join(format!(
-        "relay-plugin-profile-test-{}",
-        Uuid::new_v4().simple()
-    ));
-    let expected_home = state_root
-        .join("codex-profiles")
-        .join("homes")
-        .join(profile_id.to_string());
-    let script = format!(
-        r#"test "$CODEX_HOME" = '{}' || exit 8; case "$*" in *"marketplace"*) printf '%s\n' '{{"marketplaces":[{{"name":"openai-bundled"}}]}}' ;; *) printf '%s\n' '{{"installed":[],"available":[{{"pluginId":"browser@openai-bundled"}}]}}' ;; esac"#,
-        expected_home.display()
-    );
-    let mut runner = CodexTriggerRunner::new(
-        PathBuf::from("/bin/sh"),
-        vec!["-c".into(), script, "--".into()],
-        "http://127.0.0.1:8080/mcp".into(),
-        "relay_company".into(),
-        DEFAULT_RUN_TOKEN_ENV.into(),
-    )
-    .expect("runner");
-    runner.managed_profile_homes_root = state_root.join("codex-profiles").join("homes");
-
-    let discovery = tokio::runtime::Runtime::new()
-        .expect("runtime")
-        .block_on(runner.discover_plugins(&selector))
-        .expect("plugin discovery");
-
-    assert_eq!(discovery.available.as_array().map(Vec::len), Some(1));
-    assert_eq!(discovery.marketplaces.as_array().map(Vec::len), Some(1));
-}
-
-#[cfg(unix)]
-#[test]
-fn plugin_operations_use_codex_cli_add_and_remove_subcommands() {
-    let script = r#"case "$*" in "plugin add browser@openai-bundled --json") printf '%s\n' '{"installed":true}' ;; "plugin remove browser@openai-bundled --json") printf '%s\n' '{"removed":true}' ;; *) printf '%s\n' "unexpected arguments: $*" >&2; exit 9 ;; esac"#;
-    let runner = CodexTriggerRunner::new(
-        PathBuf::from("/bin/sh"),
-        vec!["-c".into(), script.into(), "--".into()],
-        "http://127.0.0.1:8080/mcp".into(),
-        "relay_company".into(),
-        DEFAULT_RUN_TOKEN_ENV.into(),
-    )
-    .expect("runner");
-    let runtime = tokio::runtime::Runtime::new().expect("runtime");
-
-    let installed = runtime
-        .block_on(runner.apply_plugin_operation(
-            "default",
-            "install",
-            Some("browser@openai-bundled"),
-        ))
-        .expect("plugin install");
-    let removed = runtime
-        .block_on(runner.apply_plugin_operation(
-            "default",
-            "remove",
-            Some("browser@openai-bundled"),
-        ))
-        .expect("plugin remove");
-
-    assert_eq!(installed, json!({ "installed": true }));
-    assert_eq!(removed, json!({ "removed": true }));
-}
-
-#[cfg(unix)]
-#[test]
 fn running_codex_process_is_cancelled_when_the_project_pauses() {
     let workspace = std::env::temp_dir().join(format!(
         "relay-fake-codex-cancel-{}",
@@ -810,7 +728,7 @@ fn fake_codex_replaces_only_an_unresumable_thread() {
     let result = runtime
         .block_on(runner.run(CodexRunRequest {
             cwd: workspace.clone(),
-            codex_profile: "relay-test".into(),
+            codex_profile: "default".into(),
             model: Some("gpt-5.6-sol".into()),
             reasoning_effort: Some("high".into()),
             reasoning_summary: Some("auto".into()),

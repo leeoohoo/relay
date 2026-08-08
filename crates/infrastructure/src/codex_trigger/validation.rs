@@ -387,6 +387,14 @@ pub(super) fn validate_request(request: &CodexRunRequest) -> AppResult<()> {
             validate_environment_name(key)?;
             validate_safe_value(value, "managed MCP environment value", 4_096)?;
         }
+        if server.disabled_plugin_ids.len() > 16 {
+            return Err(AppError::Validation(
+                "managed MCP server disables too many plugins".into(),
+            ));
+        }
+        for plugin_id in &server.disabled_plugin_ids {
+            validate_plugin_id(plugin_id)?;
+        }
         validate_mcp_approval_mode(&server.default_tools_approval_mode)?;
         for (tool, mode) in &server.tool_approval_modes {
             validate_config_key(tool, "managed MCP tool name")?;

@@ -76,6 +76,12 @@ fn plugin_fingerprint_is_stable_and_tracks_enabled_versions() {
             {"pluginId": "browser@openai-bundled", "version": "3", "enabled": true}
         ]))
     );
+    assert_eq!(
+        codex_plugin_fingerprint(&serde_json::json!([
+            {"pluginId": "browser@openai-bundled", "version": "2", "enabled": true}
+        ])),
+        codex_plugin_fingerprint(&serde_json::json!([]))
+    );
 }
 
 #[test]
@@ -186,10 +192,14 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(chinese.contains("忽略 `inbox_notice`"));
     assert!(chinese.contains("不调用 `agent.inbox.wait`"));
     assert!(chinese.contains("统一留给控制会话"));
+    assert!(chinese.contains("必须使用 Relay 托管的 `chrome-devtools` MCP"));
+    assert!(chinese.contains("不得改用 Codex 桌面 Browser/Chrome"));
 
     let english = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "en");
     assert!(english.contains("Ignore `inbox_notice`"));
     assert!(english.contains("control session"));
+    assert!(english.contains("Relay-managed `chrome-devtools` MCP"));
+    assert!(english.contains("Do not use Codex desktop Browser/Chrome"));
 }
 
 #[test]

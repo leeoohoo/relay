@@ -543,11 +543,11 @@ impl CodexTriggerRunner {
         Ok(CodexPluginCatalogDiscovery {
             installed: plugins
                 .get("installed")
-                .cloned()
+                .map(filter_relay_supported_codex_plugin_items)
                 .unwrap_or_else(|| json!([])),
             available: plugins
                 .get("available")
-                .cloned()
+                .map(filter_relay_supported_codex_plugin_items)
                 .unwrap_or_else(|| json!([])),
             marketplaces: marketplaces
                 .get("marketplaces")
@@ -570,6 +570,12 @@ impl CodexTriggerRunner {
                     AppError::Validation("plugin_id is required for this operation".into())
                 })?;
                 validate_plugin_id(plugin_id)?;
+                if operation == "install" && !is_relay_supported_codex_plugin_id(plugin_id) {
+                    return Err(AppError::Validation(
+                        "this plugin requires a Codex desktop host and is not available to Relay's Codex CLI runners"
+                            .into(),
+                    ));
+                }
                 let cli_operation = plugin_cli_operation(operation)?;
                 self.run_plugin_json(
                     target_selector,

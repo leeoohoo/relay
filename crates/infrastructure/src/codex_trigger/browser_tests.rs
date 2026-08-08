@@ -92,7 +92,16 @@ fn browser_navigation_approval_continues_the_same_app_server_turn() {
         Uuid::new_v4().simple()
     ));
     std::fs::create_dir_all(&workspace).expect("workspace");
+    let codex_home = workspace.join("codex-home");
+    std::fs::create_dir_all(&codex_home).expect("codex home");
     let script = r#"case "$*" in *'mcp_servers.chrome-devtools.tools.navigate_page.approval_mode="prompt"'*) ;; *) exit 7 ;; esac
+case "$*" in *'--profile relay_managed_cli_'*) ;; *) exit 8 ;; esac
+set -- "$CODEX_HOME"/relay_managed_cli_*.config.toml
+test "$#" -eq 1 && test -f "$1" || exit 10
+grep -F '[plugins."browser@openai-bundled"]' "$1" >/dev/null || exit 11
+grep -F '[plugins."chrome@openai-bundled"]' "$1" >/dev/null || exit 12
+grep -F '[plugins."computer-use@openai-bundled"]' "$1" >/dev/null || exit 13
+test "$(grep -c '^enabled = false$' "$1")" -eq 3 || exit 14
 IFS= read -r initialize
 printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
 IFS= read -r initialized
@@ -109,7 +118,7 @@ printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-browser",
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-browser","turn":{"id":"turn-browser","items":[{"id":"message-1","type":"agentMessage","text":"browser completed"}],"status":"completed"}}}'"#;
     let script_path = workspace.join("fake-browser-app-server.sh");
     std::fs::write(&script_path, script).expect("fake browser app-server");
-    let runner = CodexTriggerRunner::new(
+    let mut runner = CodexTriggerRunner::new(
         PathBuf::from("/bin/sh"),
         vec![script_path.to_string_lossy().into_owned()],
         "http://127.0.0.1:8080/mcp".into(),
@@ -117,12 +126,20 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-browser",
         DEFAULT_RUN_TOKEN_ENV.into(),
     )
     .expect("runner");
+    runner.inherited_environment.insert(
+        "CODEX_HOME".into(),
+        codex_home.to_string_lossy().into_owned(),
+    );
     let handler = Arc::new(CapturingApprovalHandler::default());
     let server = ManagedCodexMcpServer {
         name: MANAGED_BROWSER_MCP_NAME.into(),
         command: "docker".into(),
         args: vec!["run".into(), "browser".into()],
         env: BTreeMap::new(),
+        disabled_plugin_ids: vec![
+            "browser@openai-bundled".into(),
+            "chrome@openai-bundled".into(),
+        ],
         required: false,
         startup_timeout_sec: Some(90),
         tool_timeout_sec: Some(180),

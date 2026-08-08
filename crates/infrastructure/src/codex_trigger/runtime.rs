@@ -48,7 +48,8 @@ impl CodexTriggerRunner {
             .arg("exec")
             .arg("--skip-git-repo-check")
             .arg("--json");
-        self.apply_profile_arguments(&mut command, &request.codex_profile)?;
+        self.apply_run_profile_arguments(&mut command, request)
+            .await?;
         if let Some(model) = request.model.as_deref() {
             command.arg("--model").arg(model);
         }
@@ -232,7 +233,8 @@ impl CodexTriggerRunner {
         })?;
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args);
-        self.apply_profile_arguments(&mut command, &request.codex_profile)?;
+        self.apply_run_profile_arguments(&mut command, request)
+            .await?;
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
         command
