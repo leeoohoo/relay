@@ -376,6 +376,7 @@ pub(super) struct UpdateAgentMemoryRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct ReviewApprovalRequest {
     pub(super) review_note: Option<String>,
+    pub(super) approval_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

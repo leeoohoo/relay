@@ -606,6 +606,7 @@ async fn run_codex_stage(
                         company_id: trigger.company_id,
                         run_id: run.id,
                         agent_id: trigger.agent_profile_id,
+                        project_id,
                         expires_at: now_utc()
                             + Duration::seconds(i64::from(trigger.max_run_seconds)),
                         general_approval_required: settings.approval_policy == "on-request",

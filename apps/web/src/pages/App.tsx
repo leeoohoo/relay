@@ -199,11 +199,12 @@ export function App() {
     setApprovals(response.approvals);
   }
 
-  async function reviewApproval(approvalId: string, decision: "approve" | "reject", reviewNote: string) {
+  async function reviewApproval(approvalId: string, decision: "approve" | "always_allow" | "reject", reviewNote: string) {
     if (!session || !selectedCompanyId) return;
+    const endpointDecision = decision === "always_allow" ? "approve" : decision;
     await api(
-      `/api/v1/companies/${selectedCompanyId}/approvals/${approvalId}/${decision}`,
-      { method: "POST", body: JSON.stringify({ review_note: reviewNote || null }) },
+      `/api/v1/companies/${selectedCompanyId}/approvals/${approvalId}/${endpointDecision}`,
+      { method: "POST", body: JSON.stringify({ review_note: reviewNote || null, approval_mode: decision === "always_allow" ? "always" : "once" }) },
       session.token,
     );
     setDismissedApprovalIds((current) => {
@@ -212,7 +213,7 @@ export function App() {
       return next;
     });
     await refreshApprovals();
-    setNotice(decision === "approve" ? "审批已通过，等待中的 Codex 会继续执行" : "审批已拒绝，Codex 会收到拒绝结果并继续处理");
+    setNotice(decision === "always_allow" ? "已始终允许当前 Agent 在此项目访问该网站" : decision === "approve" ? "审批已通过，等待中的 Codex 会继续执行" : "审批已拒绝，Codex 会收到拒绝结果并继续处理");
   }
 
   const pendingApprovals = approvals.filter((approval) => approval.status === "pending");

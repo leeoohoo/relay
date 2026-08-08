@@ -5,6 +5,51 @@ use ai_chat_domain::agent_identity::AgentStatus;
 use super::*;
 
 #[test]
+fn website_always_allow_key_is_scoped_to_project_and_origin() {
+    let agent_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let mut arguments = serde_json::json!({
+        "url": "https://example.com:8443/dashboard?tab=one",
+        "tool": "new_page"
+    });
+
+    let (scope, target) = website_approval_grant_key(
+        &mut arguments,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("website grant key");
+
+    assert_eq!(scope, format!("project:{project_id}"));
+    assert_eq!(target, "https://example.com:8443");
+    assert_eq!(
+        arguments
+            .get(AGENT_CODEX_APPROVAL_SCOPE_KEY)
+            .and_then(serde_json::Value::as_str),
+        Some(scope.as_str())
+    );
+    assert_eq!(
+        arguments
+            .get(AGENT_CODEX_APPROVAL_TARGET_KEY)
+            .and_then(serde_json::Value::as_str),
+        Some(target.as_str())
+    );
+}
+
+#[test]
+fn website_always_allow_key_rejects_non_web_targets() {
+    let mut arguments = serde_json::json!({ "url": "file:///tmp/report.html" });
+    assert!(website_approval_grant_key(
+        &mut arguments,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        Uuid::new_v4(),
+        Some(Uuid::new_v4()),
+    )
+    .is_none());
+}
+
+#[test]
 fn managed_codex_installer_supports_macos_linux_and_windows() {
     for host_os in ["macos", "linux"] {
         let command = codex_installer_command(host_os).expect("POSIX installer");

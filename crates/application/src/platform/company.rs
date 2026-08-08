@@ -344,12 +344,68 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<AgentToolApprovalRequest> {
         self.ensure_human_can_manage_company_runtimes(input.human_user_id, input.company_id)?;
         let review_note = normalize_approval_review_note(input.review_note)?;
+        let approval_mode = input
+            .approval_mode
+            .as_deref()
+            .unwrap_or(AGENT_TOOL_APPROVAL_MODE_ONCE);
+        if !matches!(
+            approval_mode,
+            AGENT_TOOL_APPROVAL_MODE_ONCE | AGENT_TOOL_APPROVAL_MODE_ALWAYS
+        ) {
+            return Err(AppError::Validation("unsupported approval mode".into()));
+        }
         let reviewable = self.ensure_agent_tool_approval_is_reviewable(
             input.company_id,
             input.approval_request_id,
         )?;
         if reviewable.approval_source == AGENT_TOOL_APPROVAL_SOURCE_CODEX {
-            return self
+            if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS
+                && reviewable.tool_name != AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS
+            {
+                return Err(AppError::Validation(
+                    "always allow is only supported for website access".into(),
+                ));
+            }
+            let persistent_grant = if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS {
+                let approval_scope = reviewable
+                    .arguments
+                    .get(AGENT_CODEX_APPROVAL_SCOPE_KEY)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::Validation("website approval is missing its project scope".into())
+                    })?;
+                let approval_target = reviewable
+                    .arguments
+                    .get(AGENT_CODEX_APPROVAL_TARGET_KEY)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::Validation(
+                            "website approval is missing its website target".into(),
+                        )
+                    })?;
+                let requested_url = reviewable
+                    .arguments
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::Validation("website approval is missing its URL".into())
+                    })?;
+                let parsed_url = url::Url::parse(requested_url)
+                    .map_err(|_| AppError::Validation("website approval URL is invalid".into()))?;
+                if !matches!(parsed_url.scheme(), "http" | "https")
+                    || parsed_url.origin().ascii_serialization() != approval_target
+                {
+                    return Err(AppError::Validation(
+                        "website approval target does not match its URL".into(),
+                    ));
+                }
+                Some((approval_scope.to_string(), approval_target.to_string()))
+            } else {
+                None
+            };
+            let mut request = self
                 .repo
                 .claim_agent_tool_approval_request(
                     input.approval_request_id,
@@ -363,7 +419,23 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         "approval request is no longer pending or was claimed by another reviewer"
                             .into(),
                     )
+                })?;
+            if let Some((approval_scope, approval_target)) = persistent_grant {
+                request.execution_result = json!({
+                    "approval_mode": AGENT_TOOL_APPROVAL_MODE_ALWAYS,
+                    "approval_scope": approval_scope,
+                    "approval_target": approval_target,
                 });
+                request.updated_at = now_utc();
+                self.repo
+                    .update_agent_tool_approval_request(request.clone())?;
+            }
+            return Ok(request);
+        }
+        if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS {
+            return Err(AppError::Validation(
+                "always allow is only supported for Codex website access".into(),
+            ));
         }
         let mut request = self
             .repo
@@ -419,6 +491,25 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         .into(),
                 )
             })
+    }
+
+    pub fn has_codex_always_allow_approval(
+        &self,
+        company_id: Uuid,
+        agent_id: Uuid,
+        tool_name: &str,
+        approval_scope: &str,
+        approval_target: &str,
+    ) -> AppResult<bool> {
+        self.repo
+            .find_codex_always_allow_approval(
+                company_id,
+                agent_id,
+                tool_name,
+                approval_scope,
+                approval_target,
+            )
+            .map(|approval| approval.is_some())
     }
 
     pub(super) fn refresh_and_list_agent_tool_approvals(

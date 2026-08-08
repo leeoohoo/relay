@@ -147,6 +147,8 @@ pub const AGENT_TOOL_APPROVAL_STATUS_EXECUTED: &str = "executed";
 pub const AGENT_TOOL_APPROVAL_STATUS_REJECTED: &str = "rejected";
 pub const AGENT_TOOL_APPROVAL_STATUS_EXPIRED: &str = "expired";
 pub const AGENT_TOOL_APPROVAL_STATUS_FAILED: &str = "failed";
+pub const AGENT_TOOL_APPROVAL_MODE_ONCE: &str = "once";
+pub const AGENT_TOOL_APPROVAL_MODE_ALWAYS: &str = "always";
 pub const COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE: &str = "active";
 pub const COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED: &str = "archived";
 
@@ -166,6 +168,8 @@ pub const AGENT_CODEX_APPROVAL_TOOL_COMMAND: &str = "codex.command_execution";
 pub const AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE: &str = "codex.file_change";
 pub const AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS: &str = "codex.permissions";
 pub const AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS: &str = "codex.website_access";
+pub const AGENT_CODEX_APPROVAL_SCOPE_KEY: &str = "relay_approval_scope";
+pub const AGENT_CODEX_APPROVAL_TARGET_KEY: &str = "relay_approval_target";
 pub const AGENT_CODEX_TRIGGER_TYPE_SCHEDULED: &str = "scheduled";
 pub const AGENT_CODEX_TRIGGER_TYPE_MANUAL: &str = "manual";
 pub const AGENT_CODEX_TRIGGER_TYPE_MESSAGE: &str = "message";

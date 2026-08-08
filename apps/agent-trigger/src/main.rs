@@ -26,6 +26,7 @@ use ai_chat_domain::{
         AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
         AgentExecutionIntent, AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation,
         CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_POLICY_NEVER,
+        AGENT_CODEX_APPROVAL_SCOPE_KEY, AGENT_CODEX_APPROVAL_TARGET_KEY,
         AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
         AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
         AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
@@ -138,6 +139,7 @@ struct PlatformCodexApprovalHandler {
     company_id: Uuid,
     run_id: Uuid,
     agent_id: Uuid,
+    project_id: Option<Uuid>,
     expires_at: chrono::DateTime<chrono::Utc>,
     general_approval_required: bool,
 }
@@ -194,12 +196,35 @@ impl CodexProgressHandler for PlatformCodexProgressHandler {
 impl CodexApprovalHandler for PlatformCodexApprovalHandler {
     async fn request_approval(
         &self,
-        request: CodexApprovalRequest,
+        mut request: CodexApprovalRequest,
     ) -> AppResult<CodexApprovalDecision> {
         if let Some(decision) =
             automatic_codex_approval_decision(&request.tool_name, self.general_approval_required)
         {
             return Ok(decision);
+        }
+        if let Some((approval_scope, approval_target)) = website_approval_grant_key(
+            &mut request.arguments,
+            &request.tool_name,
+            self.agent_id,
+            self.project_id,
+        ) {
+            if self.platform.has_codex_always_allow_approval(
+                self.company_id,
+                self.agent_id,
+                &request.tool_name,
+                &approval_scope,
+                &approval_target,
+            )? {
+                record_run_activity(
+                    &self.platform,
+                    self.run_id,
+                    "running",
+                    &format!("已按始终允许规则访问 {approval_target}"),
+                    None,
+                );
+                return Ok(CodexApprovalDecision::Accept);
+            }
         }
         record_run_activity(
             &self.platform,
@@ -256,6 +281,36 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
             }
         }
     }
+}
+
+fn website_approval_grant_key(
+    arguments: &mut serde_json::Value,
+    tool_name: &str,
+    agent_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Option<(String, String)> {
+    if tool_name != AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS {
+        return None;
+    }
+    let url = arguments.get("url").and_then(serde_json::Value::as_str)?;
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let approval_target = parsed.origin().ascii_serialization();
+    let approval_scope = project_id
+        .map(|project_id| format!("project:{project_id}"))
+        .unwrap_or_else(|| format!("agent:{agent_id}:control"));
+    let object = arguments.as_object_mut()?;
+    object.insert(
+        AGENT_CODEX_APPROVAL_SCOPE_KEY.into(),
+        serde_json::Value::String(approval_scope.clone()),
+    );
+    object.insert(
+        AGENT_CODEX_APPROVAL_TARGET_KEY.into(),
+        serde_json::Value::String(approval_target.clone()),
+    );
+    Some((approval_scope, approval_target))
 }
 
 fn automatic_codex_approval_decision(

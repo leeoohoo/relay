@@ -175,7 +175,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .approval-card-body p { margin: 0; color: #536159; font-size: 11px; line-height: 1.55; }
 .approval-card-body pre { max-height: 220px; overflow: auto; margin: 0; border: 1px solid #dfe7e1; border-radius: 10px; padding: 11px 12px; color: #d7f8bd; background: #10261d; font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 9px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .approval-meta { display: flex; flex-wrap: wrap; gap: 6px 13px; color: #86918a; font-size: 9px; }
-.approval-actions { display: grid; grid-template-columns: minmax(180px,1fr) auto auto; align-items: center; gap: 8px; padding: 12px 15px; border-top: 1px solid #e6ebe7; background: #fff; }
+.approval-actions { display: grid; grid-template-columns: minmax(180px,1fr) auto auto auto; align-items: center; gap: 8px; padding: 12px 15px; border-top: 1px solid #e6ebe7; background: #fff; }
 .approval-actions input { min-width: 0; }
 .button.danger-outline { color: #a14740; border-color: #e5c2bf; background: #fff7f6; }
 .approval-dialog-content { display: grid; gap: 12px; }

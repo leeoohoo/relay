@@ -176,4 +176,45 @@ impl GovernancePlatformRepository for MemoryPlatformRepository {
             })
             .count()
     }
+
+    fn find_codex_always_allow_approval(
+        &self,
+        company_id: Uuid,
+        agent_id: Uuid,
+        tool_name: &str,
+        approval_scope: &str,
+        approval_target: &str,
+    ) -> AppResult<Option<AgentToolApprovalRequest>> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        Ok(guard
+            .agent_tool_approval_requests
+            .values()
+            .filter(|request| {
+                request.company_id == company_id
+                    && request.requested_by_agent_id == agent_id
+                    && request.tool_name == tool_name
+                    && request.approval_source == AGENT_TOOL_APPROVAL_SOURCE_CODEX
+                    && matches!(
+                        request.status.as_str(),
+                        AGENT_TOOL_APPROVAL_STATUS_APPROVED | AGENT_TOOL_APPROVAL_STATUS_EXECUTED
+                    )
+                    && request
+                        .execution_result
+                        .get("approval_mode")
+                        .and_then(Value::as_str)
+                        == Some(AGENT_TOOL_APPROVAL_MODE_ALWAYS)
+                    && request
+                        .execution_result
+                        .get("approval_scope")
+                        .and_then(Value::as_str)
+                        == Some(approval_scope)
+                    && request
+                        .execution_result
+                        .get("approval_target")
+                        .and_then(Value::as_str)
+                        == Some(approval_target)
+            })
+            .max_by_key(|request| request.reviewed_at)
+            .cloned())
+    }
 }

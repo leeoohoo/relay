@@ -100,3 +100,7 @@
   .project-git-detail-heading { grid-template-columns: 32px minmax(0,1fr); }
   .project-git-detail-heading > .project-state-actions { flex-wrap: wrap; }
 }
+@media (max-width: 760px) {
+  .approval-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .approval-actions input { grid-column: 1 / -1; }
+}

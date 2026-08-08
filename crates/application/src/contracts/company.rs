@@ -319,6 +319,7 @@ pub struct ReviewAgentToolApprovalInput {
     pub company_id: Uuid,
     pub approval_request_id: Uuid,
     pub review_note: Option<String>,
+    pub approval_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
