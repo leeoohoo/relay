@@ -28,6 +28,7 @@ use crate::codex_control::{
 };
 
 const DEFAULT_RUN_TOKEN_ENV: &str = "RELAY_AGENT_RUN_TOKEN";
+const SESSION_KIND_ENV: &str = "RELAY_AGENT_SESSION_KIND";
 const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: u64 = 200_000;
 const MAX_STDERR_BYTES: usize = 32 * 1024;
 const MAX_CODEX_JSON_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -112,6 +113,7 @@ pub struct CodexRunRequest {
     pub prompt: String,
     pub existing_thread_id: Option<String>,
     pub run_token: String,
+    pub session_kind: String,
     pub environment: HashMap<String, String>,
     pub approval_handler: Option<Arc<dyn CodexApprovalHandler>>,
     pub progress_handler: Option<Arc<dyn CodexProgressHandler>>,

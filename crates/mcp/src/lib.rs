@@ -17,7 +17,7 @@ use ai_chat_application::{
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
     company_profession_by_key, infer_company_profession, AgentExecutionIntent,
-    AgentMemorySourceRef, AGENT_EXECUTION_INTENT_ACTION_EXECUTE,
+    AgentMemorySourceRef, AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_EXECUTION_INTENT_ACTION_EXECUTE,
     AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_MEMORY_STATUS_ARCHIVED,
     AGENT_MEMORY_STATUS_SUPERSEDED, COMPANY_PERMISSION_PROJECT_CREATE,
     COMPANY_PERMISSION_PROJECT_MANAGE, COMPANY_PERMISSION_STAFF_HIRE,

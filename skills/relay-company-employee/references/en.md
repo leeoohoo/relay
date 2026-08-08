@@ -9,11 +9,13 @@ This is the mandatory company collaboration Skill. Use it together with exactly 
 
 ## Start Every Work Cycle
 
+First identify the session kind. The control session owns Inbox, chat, coordination, and dispatch. A project worker session owns only its current structured Intent: even when a Relay tool returns `inbox_notice`, it must not call `agent.inbox.wait`/`ack` or switch into message handling. The control session will handle those events. The Inbox-triage steps below apply only to control sessions.
+
 1. Call `agent.bootstrap` and verify Agent identity, company, permissions, profession, unread/pending-message notice, and connection context. Stop immediately if identity is wrong.
 2. Call `company.task my` to separate executable assigned work from tasks waiting on prerequisites. Do not start a waiting task.
 3. For a routed project call `company.project get` and read its status, members, fixed project-type Rules, additional Human Rule, tasks, assets, Git state, and current decisions.
 4. Identify the mandatory project phase, preceding gate, required artifacts, and acceptance evidence. Apply gates by delivery shape: every page, screen, HUD, admin surface, dashboard, visual-report layout, device UI, or other visual/interactive output requires editable design source and reviewable SVG/PDF exports before implementation, regardless of project-type name. A `ready` task only proves stored task dependencies are complete; it does not authorize skipping requirements, design, architecture, foundations, verification, or deployment gates. If starting would skip a gate, leave the task unstarted and ask the PM or Engineering Manager to repair the plan and dependencies.
-5. Call `agent.inbox.wait` with a bounded wait to read real messages and wake events. A pending-message notice returned by any Relay tool means you must inspect the inbox before concluding the cycle.
+5. In a control session, call `agent.inbox.wait` with a bounded wait to read real messages and wake events. A pending-message notice returned by any Relay tool interrupts only the control session, never an active project worker Intent.
 6. Select one concrete responsibility, record necessary status, and work only inside the assigned workspace and permission boundary.
 
 ## Silence and Communication Policy

@@ -66,17 +66,20 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
         tool: impl Into<String>,
         agent_id: Uuid,
         output: Value,
+        include_inbox_notice: bool,
     ) -> CallToolResult {
         let mut payload = json!({
             "tool": tool.into(),
             "agent_id": agent_id,
             "output": output,
         });
-        if let Some(notice) = self.pending_message_notice(agent_id) {
-            payload
-                .as_object_mut()
-                .expect("MCP success payload should be an object")
-                .insert("inbox_notice".into(), notice);
+        if include_inbox_notice {
+            if let Some(notice) = self.pending_message_notice(agent_id) {
+                payload
+                    .as_object_mut()
+                    .expect("MCP success payload should be an object")
+                    .insert("inbox_notice".into(), notice);
+            }
         }
         CallToolResult::structured(payload)
     }
@@ -85,16 +88,21 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
         &self,
         error: AppError,
         agent_id: Option<Uuid>,
+        include_inbox_notice: bool,
     ) -> CallToolResult {
         let mut payload = json!({
             "code": error.code(),
             "message": error.to_string(),
         });
-        if let Some(notice) = agent_id.and_then(|agent_id| self.pending_message_notice(agent_id)) {
-            payload
-                .as_object_mut()
-                .expect("MCP error payload should be an object")
-                .insert("inbox_notice".into(), notice);
+        if include_inbox_notice {
+            if let Some(notice) =
+                agent_id.and_then(|agent_id| self.pending_message_notice(agent_id))
+            {
+                payload
+                    .as_object_mut()
+                    .expect("MCP error payload should be an object")
+                    .insert("inbox_notice".into(), notice);
+            }
         }
         CallToolResult::structured_error(payload)
     }
@@ -111,7 +119,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
         };
         let input: AgentInboxWaitInput = match parse_input(input) {
             Ok(input) => input,
-            Err(error) => return self.structured_error_with_notice(error, Some(agent.id)),
+            Err(error) => {
+                return self.structured_error_with_notice(error, Some(agent.id), true);
+            }
         };
         let timeout_seconds = input.timeout_seconds.unwrap_or(20).min(25);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
@@ -124,7 +134,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
                 limit,
             ) {
                 Ok(events) => filter_inbox_events(events, input.event_types.as_deref()),
-                Err(error) => return self.structured_error_with_notice(error, Some(agent.id)),
+                Err(error) => {
+                    return self.structured_error_with_notice(error, Some(agent.id), true);
+                }
             };
             let timed_out = events.is_empty() && tokio::time::Instant::now() >= deadline;
             if !events.is_empty() || timed_out {
@@ -136,6 +148,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
                         "timed_out": timed_out,
                         "timeout_seconds": timeout_seconds
                     }),
+                    true,
                 );
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -155,7 +168,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                     ),
             )
             .with_instructions(
-                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. Start with agent.bootstrap. Each Agent owns an isolated memory set. Long-term memories are injected into that Agent's generated Skill on every wake-up; short-term memories are retrieved on demand with agent.memory search. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets, and search by topic before remembering. Every Relay tool response may include inbox_notice when new messages are pending; treat attention_required=true as an interrupt, call agent.inbox.wait, handle the messages, then call agent.inbox.ack. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
+                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. Start with agent.bootstrap. Each Agent owns an isolated memory set. Long-term memories are injected into that Agent's generated Skill on every wake-up; short-term memories are retrieved on demand with agent.memory search. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets, and search by topic before remembering. Relay tool responses may include inbox_notice when new messages are pending. In a control session, attention_required=true is an interrupt: call agent.inbox.wait, handle the messages, then call agent.inbox.ack. In a project worker session, ignore inbox_notice and keep executing the current Intent; Inbox and chat remain owned by the control session. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
             )
     }
 
@@ -166,11 +179,17 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
     ) -> Result<ListToolsResult, ErrorData> {
         let agent_key = agent_key_from_context(&context);
         let agent_run_token = agent_run_token_from_context(&context);
+        let project_worker_session = is_project_worker_session(&context);
         let agent = self
             .gateway
             .authenticate_agent(agent_key.as_deref(), agent_run_token.as_deref())
             .map_err(mcp_request_error)?;
         let mut tools = standard_mcp_tools();
+        if project_worker_session {
+            tools.retain(|tool| {
+                !matches!(tool.name.as_ref(), "agent.inbox.wait" | "agent.inbox.ack")
+            });
+        }
         if let Ok(membership) = self
             .gateway
             .platform
@@ -213,6 +232,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
 
         let agent_key = agent_key_from_context(&context);
         let agent_run_token = agent_run_token_from_context(&context);
+        let project_worker_session = is_project_worker_session(&context);
         let mut input = Value::Object(request.arguments.unwrap_or_default());
         if is_mutating_tool(request.name.as_ref(), &input) && input.get("idempotency_key").is_none()
         {
@@ -221,6 +241,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                     object.insert("idempotency_key".into(), Value::String(key));
                 }
             }
+        }
+
+        if project_worker_session
+            && matches!(
+                request.name.as_ref(),
+                "agent.inbox.wait" | "agent.inbox.ack"
+            )
+        {
+            return Ok(structured_tool_error(AppError::Conflict(
+                "Inbox tools belong to the Agent control session and are unavailable in a project worker session"
+                    .into(),
+            )));
         }
 
         if request.name.as_ref() == "agent.inbox.wait" {
@@ -239,6 +271,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                 invocation.tool,
                 invocation.agent_id,
                 invocation.output,
+                !project_worker_session,
             )),
             Err(error) => {
                 let agent_id = self
@@ -246,7 +279,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                     .authenticate_agent(agent_key.as_deref(), agent_run_token.as_deref())
                     .ok()
                     .map(|agent| agent.id);
-                Ok(self.structured_error_with_notice(error, agent_id))
+                Ok(self.structured_error_with_notice(error, agent_id, !project_worker_session))
             }
         }
     }
@@ -300,6 +333,15 @@ fn agent_run_token_from_context(context: &RequestContext<RoleServer>) -> Option<
     agent_run_token_from_headers(&parts.headers)
 }
 
+fn is_project_worker_session(context: &RequestContext<RoleServer>) -> bool {
+    let Some(parts) = context.extensions.get::<Parts>() else {
+        return false;
+    };
+    agent_run_token_from_headers(&parts.headers).is_some()
+        && relay_session_kind_from_headers(&parts.headers)
+            .is_some_and(|value| value == AGENT_CODEX_SESSION_KIND_PROJECT)
+}
+
 fn idempotency_key_from_context(context: &RequestContext<RoleServer>) -> Option<String> {
     let parts = context.extensions.get::<Parts>()?;
     parts
@@ -335,6 +377,15 @@ pub fn agent_key_from_headers(headers: &HeaderMap) -> Option<String> {
 pub fn agent_run_token_from_headers(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-agent-run-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn relay_session_kind_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-relay-session-kind")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())

@@ -69,9 +69,10 @@ impl CodexTriggerRunner {
             ))
             .arg("--config")
             .arg(format!(
-                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {} }}",
+                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {}, \"x-relay-session-kind\" = {} }}",
                 self.mcp_server_name,
-                toml_string(&self.run_token_env_name)
+                toml_string(&self.run_token_env_name),
+                toml_string(SESSION_KIND_ENV)
             ))
             .arg("--config")
             .arg(format!(
@@ -89,6 +90,7 @@ impl CodexTriggerRunner {
             .env_clear()
             .envs(&self.inherited_environment)
             .env(&self.run_token_env_name, &request.run_token)
+            .env(SESSION_KIND_ENV, &request.session_kind)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -247,9 +249,10 @@ impl CodexTriggerRunner {
             ))
             .arg("--config")
             .arg(format!(
-                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {} }}",
+                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {}, \"x-relay-session-kind\" = {} }}",
                 self.mcp_server_name,
-                toml_string(&self.run_token_env_name)
+                toml_string(&self.run_token_env_name),
+                toml_string(SESSION_KIND_ENV)
             ))
             .arg("--config")
             .arg(format!(
@@ -265,6 +268,7 @@ impl CodexTriggerRunner {
             .env_clear()
             .envs(&self.inherited_environment)
             .env(&self.run_token_env_name, &request.run_token)
+            .env(SESSION_KIND_ENV, &request.session_kind)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

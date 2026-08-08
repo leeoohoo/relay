@@ -162,6 +162,18 @@ fn control_session_loads_profession_skill_without_project_skill() {
 }
 
 #[test]
+fn project_worker_session_keeps_inbox_work_in_the_control_session() {
+    let chinese = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "zh-CN");
+    assert!(chinese.contains("忽略 `inbox_notice`"));
+    assert!(chinese.contains("不调用 `agent.inbox.wait`"));
+    assert!(chinese.contains("统一留给控制会话"));
+
+    let english = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "en");
+    assert!(english.contains("Ignore `inbox_notice`"));
+    assert!(english.contains("control session"));
+}
+
+#[test]
 fn english_relay_skills_are_materialized_without_chinese_operating_rules() {
     let workspace = std::env::temp_dir().join(format!("relay-skill-en-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&workspace).expect("test workspace should be created");

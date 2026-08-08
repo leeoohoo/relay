@@ -78,6 +78,7 @@ fn managed_cli_settings_are_injected_as_cli_overrides() {
         prompt: "test".into(),
         existing_thread_id: None,
         run_token: "token".into(),
+        session_kind: "control".into(),
         environment: HashMap::new(),
         approval_handler: None,
         progress_handler: None,
@@ -100,6 +101,58 @@ fn managed_cli_settings_are_injected_as_cli_overrides() {
     assert!(args.contains(&"sandbox_workspace_write.network_access=false".into()));
     assert!(args.contains(&"features.remote_plugin=false".into()));
     assert!(args.contains(&"features.shell_tool=true".into()));
+}
+
+#[cfg(unix)]
+#[test]
+fn project_session_kind_is_forwarded_to_relay_mcp() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-session-kind-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let script = r#"test "$RELAY_AGENT_SESSION_KIND" = project || exit 8; case "$*" in *x-relay-session-kind*) ;; *) exit 9 ;; esac; printf '%s\n' '{"type":"thread.started","thread_id":"thread-session-kind"}' '{"type":"turn.started"}' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}' '{"type":"turn.completed"}'"#;
+    let runner = CodexTriggerRunner::new(
+        PathBuf::from("/bin/sh"),
+        vec!["-c".into(), script.into(), "--".into()],
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    let result = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(runner.run(CodexRunRequest {
+            cwd: workspace.clone(),
+            codex_profile: "default".into(),
+            model: None,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: None,
+            personality: None,
+            service_tier: None,
+            sandbox_mode: "workspace_write".into(),
+            approval_policy: "never".into(),
+            network_access: false,
+            web_search: "disabled".into(),
+            feature_multi_agent: false,
+            feature_remote_plugin: false,
+            feature_hooks: false,
+            feature_goals: false,
+            feature_shell_tool: false,
+            max_run_seconds: 10,
+            prompt: "work".into(),
+            existing_thread_id: None,
+            run_token: "art_test".into(),
+            session_kind: "project".into(),
+            environment: HashMap::new(),
+            approval_handler: None,
+            progress_handler: None,
+            cancellation_handler: None,
+        }))
+        .expect("fake Codex run");
+    assert_eq!(result.status, CodexRunStatus::Succeeded);
+    std::fs::remove_dir_all(workspace).expect("cleanup");
 }
 
 #[test]
@@ -660,6 +713,7 @@ fn running_codex_process_is_cancelled_when_the_project_pauses() {
             prompt: "work on project".into(),
             existing_thread_id: None,
             run_token: "art_test".into(),
+            session_kind: "project".into(),
             environment: HashMap::new(),
             approval_handler: None,
             progress_handler: None,
@@ -715,6 +769,7 @@ fn transient_reconnect_error_is_cleared_after_the_turn_completes() {
             prompt: "check Relay inbox".into(),
             existing_thread_id: None,
             run_token: "art_test".into(),
+            session_kind: "control".into(),
             environment: HashMap::new(),
             approval_handler: None,
             progress_handler: None,
@@ -771,6 +826,7 @@ fn fake_codex_replaces_only_an_unresumable_thread() {
             prompt: "check Relay inbox".into(),
             existing_thread_id: Some("missing-thread".into()),
             run_token: "art_test".into(),
+            session_kind: "control".into(),
             environment: HashMap::new(),
             approval_handler: None,
             progress_handler: None,
@@ -825,6 +881,7 @@ fn fake_codex_replaces_a_thread_after_terminal_stream_disconnect() {
             prompt: "continue project work".into(),
             existing_thread_id: Some("large-thread".into()),
             run_token: "art_test".into(),
+            session_kind: "project".into(),
             environment: HashMap::new(),
             approval_handler: None,
             progress_handler: None,
@@ -896,6 +953,7 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-approval"
             prompt: "push the branch".into(),
             existing_thread_id: None,
             run_token: "art_test".into(),
+            session_kind: "project".into(),
             environment: HashMap::new(),
             approval_handler: Some(handler.clone()),
             progress_handler: None,

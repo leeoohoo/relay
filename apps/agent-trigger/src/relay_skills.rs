@@ -105,6 +105,7 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
          来源 Event IDs：{event_ids}\n\
          验收标准：\n{criteria}\n\
          先调用 agent.bootstrap，再用 company.project get 和 company.task get/list 核实实时状态。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
+         项目工作会话不承担 Inbox 分诊：忽略 Relay 工具响应中的 inbox_notice，不调用 agent.inbox.wait/ack，不因群聊、私聊或新事件中断当前 Intent。通信事件统一留给本 Agent 的控制会话；只有本 Intent 明确要求的最终项目同步可以在交付收口时发送一次。\n\
          完成必要的设计、实现、测试、文档和 Git 提交推送；不要直接写受保护默认分支。更新关联任务与项目状态。\n\
          长期记忆只保存稳定知识：跨项目通用内容使用 agent scope，当前项目特有内容使用 project scope 并带 project_id；阶段性线索使用 short_term。禁止保存聊天原文、任务正文、日志和凭证。\n\
          最终回复必须简洁列出：已完成、验证、未完成/阻塞、下一步、分支和 Commit。",
@@ -256,7 +257,7 @@ pub(super) fn prepare_relay_skills(
     })
 }
 
-fn session_skill_template(bundle_kind: &str, skill_language: &str) -> String {
+pub(super) fn session_skill_template(bundle_kind: &str, skill_language: &str) -> String {
     let english = skill_language == COMPANY_SKILL_LANGUAGE_EN;
     if bundle_kind == RELAY_SKILL_BUNDLE_CONTROL {
         if english {
@@ -265,9 +266,9 @@ fn session_skill_template(bundle_kind: &str, skill_language: &str) -> String {
         return "---\nname: relay-control-session\ndescription: Relay 控制会话的强制工作流，用于 Inbox 分诊、通信、任务协调、工作会话选择和结构化项目派工。每次控制会话唤醒都必须使用。\n---\n\n# Relay 控制会话\n\n- 决策前检查 Inbox、分配任务、项目提示和工作会话目录。\n- 判断职责归属、任务拆解、质量要求和是否需要项目执行时，必须同时遵循职业 Skill。\n- 通信和协调在本会话完成；不得在控制工作区修改项目文件或执行项目交付。\n- 只有确实需要项目工作时，才调用 `agent.work_session` 的 `dispatch`，提供项目 ID、精简目标、验收标准、关联任务 ID 和来源事件 ID。\n- 会话由项目绑定解析，禁止自行编造或传递 Codex Thread ID。\n- 不需要项目执行时，直接回复或 Ack 后结束，不得创建占位派工。\n- Agent 与控制长期记忆可以指导路由；项目记忆只属于被选中的工作会话。\n".into();
     }
     if english {
-        return "---\nname: relay-project-worker\ndescription: Mandatory Relay project-worker workflow for executing one structured intent in the project-bound workspace, validating the result, committing delivery, and updating Relay state. Use on every project worker turn.\n---\n\n# Relay Project Worker\n\n- Execute only the supplied project-bound intent and verify the live project, tasks, and Rule through Relay MCP.\n- Follow the profession Skill and project Skill throughout implementation.\n- Use only the current project workspace; never inspect another project workspace.\n- Complete the required design, implementation, validation, documentation, and Git delivery steps.\n- Update tasks and project status with verified results. Save project-scoped memory only for durable project knowledge.\n- Finish with a concise checkpoint: completed work, pending work, blockers, next steps, branch, and commit.\n".into();
+        return "---\nname: relay-project-worker\ndescription: Mandatory Relay project-worker workflow for executing one structured intent in the project-bound workspace, validating the result, committing delivery, and updating Relay state. Use on every project worker turn.\n---\n\n# Relay Project Worker\n\n- Execute only the supplied project-bound intent and verify the live project, tasks, and Rule through Relay MCP.\n- Follow the profession Skill and project Skill throughout implementation.\n- This worker session never triages Inbox events. Ignore `inbox_notice`, do not call `agent.inbox.wait` or `agent.inbox.ack`, and leave chat/event handling to the Agent's control session. Only send one final project update when the current Intent explicitly requires it.\n- Use only the current project workspace; never inspect another project workspace.\n- Complete the required design, implementation, validation, documentation, and Git delivery steps.\n- Update tasks and project status with verified results. Save project-scoped memory only for durable project knowledge.\n- Finish with a concise checkpoint: completed work, pending work, blockers, next steps, branch, and commit.\n".into();
     }
-    "---\nname: relay-project-worker\ndescription: Relay 项目工作会话的强制执行流程，用于在项目绑定工作区完成一个结构化 Intent、验证结果、提交交付并回写 Relay 状态。每次项目工作会话都必须使用。\n---\n\n# Relay 项目工作会话\n\n- 只执行本轮传入且已绑定当前项目的 Intent，并通过 Relay MCP 核实项目、任务和 Rule 的实时状态。\n- 实施全过程必须遵循职业 Skill 和当前项目 Skill。\n- 只能使用当前项目工作区，禁止检查其他项目工作区。\n- 完成必要的设计、实现、验证、文档和 Git 交付步骤。\n- 使用已验证结果更新任务和项目状态；只有稳定的项目知识才能保存为 project scope 记忆。\n- 结束时提供精简检查点：已完成、未完成、阻塞、下一步、分支和 Commit。\n".into()
+    "---\nname: relay-project-worker\ndescription: Relay 项目工作会话的强制执行流程，用于在项目绑定工作区完成一个结构化 Intent、验证结果、提交交付并回写 Relay 状态。每次项目工作会话都必须使用。\n---\n\n# Relay 项目工作会话\n\n- 只执行本轮传入且已绑定当前项目的 Intent，并通过 Relay MCP 核实项目、任务和 Rule 的实时状态。\n- 实施全过程必须遵循职业 Skill 和当前项目 Skill。\n- 工作会话不分诊 Inbox：忽略 `inbox_notice`，不调用 `agent.inbox.wait` 或 `agent.inbox.ack`，群聊、私聊和事件统一留给控制会话；只有当前 Intent 明确要求时，才在交付收口时发送一次最终项目同步。\n- 只能使用当前项目工作区，禁止检查其他项目工作区。\n- 完成必要的设计、实现、验证、文档和 Git 交付步骤。\n- 使用已验证结果更新任务和项目状态；只有稳定的项目知识才能保存为 project scope 记忆。\n- 结束时提供精简检查点：已完成、未完成、阻塞、下一步、分支和 Commit。\n".into()
 }
 
 pub(super) fn build_project_skill_template(

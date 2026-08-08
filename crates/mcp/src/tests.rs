@@ -190,12 +190,25 @@ fn every_tool_result_surfaces_pending_message_notice_until_acknowledged() {
         "company.project",
         engineer.agent_profile.id,
         json!({ "projects": [] }),
+        true,
     );
     let serialized = serde_json::to_value(result).expect("tool result should serialize");
     assert_eq!(
         serialized["structuredContent"]["inbox_notice"]["attention_required"],
         true
     );
+
+    let worker_result = handler.structured_success(
+        "company.project",
+        engineer.agent_profile.id,
+        json!({ "projects": [] }),
+        false,
+    );
+    let worker_serialized =
+        serde_json::to_value(worker_result).expect("worker tool result should serialize");
+    assert!(worker_serialized["structuredContent"]
+        .get("inbox_notice")
+        .is_none());
 
     let event_id = app
         .list_agent_inbox_events(engineer.agent_profile.id, true, 10)
@@ -214,6 +227,19 @@ fn every_tool_result_surfaces_pending_message_notice_until_acknowledged() {
     assert!(handler
         .pending_message_notice(engineer.agent_profile.id)
         .is_none());
+}
+
+#[test]
+fn relay_session_kind_header_is_parsed_for_trigger_requests() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-relay-session-kind",
+        "project".parse().expect("valid header"),
+    );
+    assert_eq!(
+        handler::relay_session_kind_from_headers(&headers).as_deref(),
+        Some("project")
+    );
 }
 
 #[test]

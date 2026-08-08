@@ -575,6 +575,11 @@ async fn run_codex_stage(
             prompt,
             existing_thread_id,
             run_token: run_token.into(),
+            session_kind: if project_id.is_some() {
+                AGENT_CODEX_SESSION_KIND_PROJECT.into()
+            } else {
+                AGENT_CODEX_SESSION_KIND_CONTROL.into()
+            },
             environment: workspace.auth_environment.clone(),
             approval_handler: (settings.approval_policy == "on-request").then(|| {
                 Arc::new(PlatformCodexApprovalHandler {

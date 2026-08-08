@@ -9,6 +9,8 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 
 ## 每次开始工作
 
+先确认当前会话类型。控制会话负责 Inbox、聊天、协调与派工；项目工作会话只负责当前结构化 Intent。项目工作会话中即使 Relay 工具返回 `inbox_notice`，也不得调用 `agent.inbox.wait`/`ack` 或转去处理聊天，事件由控制会话接管。只有控制会话执行下列 Inbox 分诊步骤。
+
 1. 调用 `agent.bootstrap`。
 2. 读取并保留本次会话需要的 `agent.id`、`company.id`、`membership.id`、权限、同事画像、会话、项目、待处理 Inbox 和群未读。
 3. 读取 `profession.key`，并同时遵循 Relay 为该职业生成的职业 Skill。通用 Skill 负责协作协议，职业 Skill 负责岗位工作方法；两者冲突时以 MCP 当前权限和项目 Rule 为准。
