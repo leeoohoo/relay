@@ -24,7 +24,10 @@ where
                     "title": "Relay Agent Trigger",
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "capabilities": { "experimentalApi": true }
+                "capabilities": {
+                    "experimentalApi": true,
+                    "mcpServerOpenaiFormElicitation": true
+                }
             }
         }),
     )

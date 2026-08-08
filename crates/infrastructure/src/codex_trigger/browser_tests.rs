@@ -109,6 +109,7 @@ case "$*" in *'plugins."computer-use@openai-bundled".enabled=false'*) ;; *) exit
 case "$*" in *'plugins."visualize@openai-bundled".enabled=false'*) ;; *) exit 14 ;; esac
 case "$*" in *'plugins."documents@openai-primary-runtime".enabled=false'*) ;; *) exit 15 ;; esac
 IFS= read -r initialize
+case "$initialize" in *'"mcpServerOpenaiFormElicitation":true'*) ;; *) exit 16 ;; esac
 printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
 IFS= read -r initialized
 IFS= read -r thread
