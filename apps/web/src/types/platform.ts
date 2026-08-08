@@ -457,6 +457,7 @@ export type CodexMcpServer = {
   tool_timeout_sec: number | null;
   disabled_reason: string | null;
   configured_by_user: boolean;
+  managed_by_relay: boolean;
 };
 
 export type CodexMcpEnvironmentSnapshot = {

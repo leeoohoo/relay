@@ -43,6 +43,9 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+# shellcheck source=scripts/lib/chrome_devtools_mcp.sh
+source "$ROOT_DIR/scripts/lib/chrome_devtools_mcp.sh"
+
 compose() {
   docker compose -f "$ROOT_DIR/docker-compose.yml" --profile harness-self-hosted "$@"
 }
@@ -516,6 +519,7 @@ start_api_watcher() {
 start_trigger() {
   set_step "starting local Codex Agent Trigger"
   stop_pid trigger
+  relay_ensure_chrome_devtools_image "$ROOT_DIR"
   (
     cd "$ROOT_DIR"
     cargo build -p ai-chat-agent-trigger >>"$TRIGGER_LOG" 2>&1
@@ -529,6 +533,12 @@ start_trigger() {
     AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS="$AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS" \
     AGENT_TRIGGER_GIT_CREDENTIALS_ROOT="${AGENT_TRIGGER_GIT_CREDENTIALS_ROOT:-.relay-agent-trigger/git-credentials}" \
     AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT="${AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-200000}" \
+    AGENT_TRIGGER_STATE_ROOT="${AGENT_TRIGGER_STATE_ROOT:-$ROOT_DIR/.relay-agent-trigger}" \
+    RELAY_CHROME_DEVTOOLS_MCP_ENABLED="${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}" \
+    RELAY_CHROME_DEVTOOLS_MCP_IMAGE="${RELAY_CHROME_DEVTOOLS_MCP_IMAGE:-relay/chrome-devtools-mcp:1.6.0}" \
+    RELAY_CHROME_PROFILE_ROOT="${RELAY_CHROME_PROFILE_ROOT:-$ROOT_DIR/.relay-agent-trigger/browser-profiles}" \
+    RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}" \
+    RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}" \
     AGENT_TRIGGER_RUN_ONCE=false \
     HARNESS_MODE="$HARNESS_MODE" \
     HARNESS_BASE_URL="${HARNESS_BASE_URL:-}" \

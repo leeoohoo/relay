@@ -40,6 +40,7 @@ impl CodexTriggerRunner {
             .expect("managed profile home has a parent")
             .to_path_buf();
         runner.managed_cli_home = control_store.managed_cli_home();
+        runner.browser_mcp = BrowserMcpConfig::from_env()?;
         let allowlist = std::env::var("AGENT_TRIGGER_CODEX_ENV_ALLOWLIST")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -108,6 +109,7 @@ impl CodexTriggerRunner {
             managed_cli_home: PathBuf::from(".relay-agent-trigger")
                 .join("codex-cli")
                 .join("home"),
+            browser_mcp: BrowserMcpConfig::disabled(),
         })
     }
 
@@ -358,6 +360,10 @@ impl CodexTriggerRunner {
             .into_iter()
             .filter_map(|entry| safe_mcp_server_view(entry, &configured_names))
             .collect::<Vec<_>>();
+        if let Some(managed_browser) = self.managed_browser_mcp_view().await {
+            servers.retain(|server| server.name != MANAGED_BROWSER_MCP_NAME);
+            servers.push(managed_browser);
+        }
         servers.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(servers)
     }

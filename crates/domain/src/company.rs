@@ -165,6 +165,7 @@ pub const AGENT_TOOL_APPROVAL_SOURCE_CODEX: &str = "codex";
 pub const AGENT_CODEX_APPROVAL_TOOL_COMMAND: &str = "codex.command_execution";
 pub const AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE: &str = "codex.file_change";
 pub const AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS: &str = "codex.permissions";
+pub const AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS: &str = "codex.website_access";
 pub const AGENT_CODEX_TRIGGER_TYPE_SCHEDULED: &str = "scheduled";
 pub const AGENT_CODEX_TRIGGER_TYPE_MANUAL: &str = "manual";
 pub const AGENT_CODEX_TRIGGER_TYPE_MESSAGE: &str = "message";

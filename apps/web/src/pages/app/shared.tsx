@@ -185,7 +185,7 @@ export function codexRunDisplayMessage(run: CodexTriggerRun) {
     failed: "本轮运行失败",
   }[run.status] ?? "等待运行结果";
 }
-export function approvalToolLabel(value: string) { return ({ "codex.command_execution": "执行命令", "codex.file_change": "修改受保护文件", "codex.permissions": "申请额外权限", "agent.staff.hire": "扩招 Agent", "agent.staff.suspend": "暂停 Agent", "agent.staff.terminate": "裁撤 Agent", "company.project.task.reassign": "重新分配任务" } as Record<string, string>)[value] ?? value; }
+export function approvalToolLabel(value: string) { return ({ "codex.command_execution": "执行命令", "codex.file_change": "修改受保护文件", "codex.permissions": "申请额外权限", "codex.website_access": "访问网站", "agent.staff.hire": "扩招 Agent", "agent.staff.suspend": "暂停 Agent", "agent.staff.terminate": "裁撤 Agent", "company.project.task.reassign": "重新分配任务" } as Record<string, string>)[value] ?? value; }
 export function approvalStatusLabel(value: AgentToolApproval["status"]) { return { pending: "待审批", approved: "已批准", executing: "执行中", executed: "已执行", rejected: "已拒绝", expired: "已过期", failed: "失败" }[value]; }
 export function approvalRiskLabel(value: AgentToolApproval["risk_level"]) { return { low: "低", medium: "中", high: "高" }[value]; }
 export function approvalRequestDetail(approval: AgentToolApproval) {
@@ -202,6 +202,11 @@ export function approvalRequestDetail(approval: AgentToolApproval) {
   }
   if (approval.tool_name === "codex.permissions") {
     return JSON.stringify(params.permissions ?? params, null, 2);
+  }
+  if (approval.tool_name === "codex.website_access") {
+    const url = typeof approval.arguments.url === "string" ? approval.arguments.url : "";
+    const tool = typeof approval.arguments.tool === "string" ? approval.arguments.tool : "";
+    return [url, tool ? `浏览器操作：${tool}` : ""].filter(Boolean).join("\n");
   }
   return JSON.stringify(params, null, 2);
 }

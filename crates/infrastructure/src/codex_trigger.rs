@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use ai_chat_domain::company::{
     AGENT_CODEX_APPROVAL_TOOL_COMMAND, AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE,
-    AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS,
+    AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
 };
 use ai_chat_shared::{AppError, AppResult};
 
@@ -88,6 +88,30 @@ pub struct CodexTriggerRunner {
     auto_compact_token_limit: u64,
     managed_profile_homes_root: PathBuf,
     managed_cli_home: PathBuf,
+    browser_mcp: BrowserMcpConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedCodexMcpServer {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub required: bool,
+    pub startup_timeout_sec: Option<u64>,
+    pub tool_timeout_sec: Option<u64>,
+    pub default_tools_approval_mode: String,
+    pub tool_approval_modes: BTreeMap<String, String>,
+}
+
+impl ManagedCodexMcpServer {
+    pub fn requires_human_approval(&self) -> bool {
+        self.default_tools_approval_mode == "prompt"
+            || self
+                .tool_approval_modes
+                .values()
+                .any(|mode| mode == "prompt")
+    }
 }
 
 #[derive(Clone)]
@@ -115,6 +139,7 @@ pub struct CodexRunRequest {
     pub run_token: String,
     pub session_kind: String,
     pub environment: HashMap<String, String>,
+    pub managed_mcp_servers: Vec<ManagedCodexMcpServer>,
     pub approval_handler: Option<Arc<dyn CodexApprovalHandler>>,
     pub progress_handler: Option<Arc<dyn CodexProgressHandler>>,
     pub cancellation_handler: Option<Arc<dyn CodexCancellationHandler>>,
@@ -210,6 +235,7 @@ struct JsonlEvents {
 }
 
 mod app_server;
+mod browser;
 mod configuration;
 mod jsonl;
 mod model_catalog;
@@ -217,10 +243,13 @@ mod runtime;
 mod validation;
 
 use app_server::*;
+use browser::*;
 use jsonl::*;
 use validation::*;
 
 pub use model_catalog::collect_codex_models;
 
+#[cfg(test)]
+mod browser_tests;
 #[cfg(test)]
 mod tests;

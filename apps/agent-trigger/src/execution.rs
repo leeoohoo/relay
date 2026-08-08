@@ -552,6 +552,22 @@ async fn run_codex_stage(
             codex_session_key_matches(&session.workspace_key, &session_key)
                 .then_some(session.codex_thread_id)
         });
+    let managed_mcp_servers = project_id
+        .map(|project_id| {
+            codex_runner.managed_browser_mcp_server(
+                trigger.company_id,
+                trigger.agent_profile_id,
+                project_id,
+                &workspace.path,
+            )
+        })
+        .transpose()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let managed_mcp_requires_approval = managed_mcp_servers
+        .iter()
+        .any(|server| server.requires_human_approval());
     let mut result = codex_runner
         .run(CodexRunRequest {
             cwd: workspace.path.clone(),
@@ -581,15 +597,19 @@ async fn run_codex_stage(
                 AGENT_CODEX_SESSION_KIND_CONTROL.into()
             },
             environment: workspace.auth_environment.clone(),
-            approval_handler: (settings.approval_policy == "on-request").then(|| {
-                Arc::new(PlatformCodexApprovalHandler {
-                    platform: platform.clone(),
-                    company_id: trigger.company_id,
-                    run_id: run.id,
-                    agent_id: trigger.agent_profile_id,
-                    expires_at: now_utc() + Duration::seconds(i64::from(trigger.max_run_seconds)),
-                }) as Arc<dyn CodexApprovalHandler>
-            }),
+            managed_mcp_servers,
+            approval_handler: (settings.approval_policy == "on-request"
+                || managed_mcp_requires_approval)
+                .then(|| {
+                    Arc::new(PlatformCodexApprovalHandler {
+                        platform: platform.clone(),
+                        company_id: trigger.company_id,
+                        run_id: run.id,
+                        agent_id: trigger.agent_profile_id,
+                        expires_at: now_utc()
+                            + Duration::seconds(i64::from(trigger.max_run_seconds)),
+                    }) as Arc<dyn CodexApprovalHandler>
+                }),
             progress_handler: Some(Arc::new(PlatformCodexProgressHandler {
                 platform: platform.clone(),
                 run_id: run.id,

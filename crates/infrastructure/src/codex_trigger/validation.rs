@@ -47,6 +47,7 @@ pub(super) fn safe_mcp_server_view(
     };
     Some(CodexMcpServerView {
         configured_by_user: configured_names.contains(&name),
+        managed_by_relay: false,
         name,
         transport: transport_type,
         enabled: entry
@@ -371,7 +372,38 @@ pub(super) fn validate_request(request: &CodexRunRequest) -> AppResult<()> {
             )));
         }
     }
+    for server in &request.managed_mcp_servers {
+        validate_config_key(&server.name, "managed MCP server name")?;
+        validate_safe_value(&server.command, "managed MCP command", 1_024)?;
+        if server.args.len() > 128 {
+            return Err(AppError::Validation(
+                "managed MCP server has too many arguments".into(),
+            ));
+        }
+        for argument in &server.args {
+            validate_safe_value(argument, "managed MCP argument", 4_096)?;
+        }
+        for (key, value) in &server.env {
+            validate_environment_name(key)?;
+            validate_safe_value(value, "managed MCP environment value", 4_096)?;
+        }
+        validate_mcp_approval_mode(&server.default_tools_approval_mode)?;
+        for (tool, mode) in &server.tool_approval_modes {
+            validate_config_key(tool, "managed MCP tool name")?;
+            validate_mcp_approval_mode(mode)?;
+        }
+    }
     Ok(())
+}
+
+fn validate_mcp_approval_mode(value: &str) -> AppResult<()> {
+    if matches!(value, "auto" | "prompt" | "writes" | "approve") {
+        Ok(())
+    } else {
+        Err(AppError::Validation(
+            "managed MCP approval mode is invalid".into(),
+        ))
+    }
 }
 
 pub(super) fn codex_sandbox_mode(value: &str) -> AppResult<&'static str> {
@@ -530,6 +562,51 @@ pub(super) fn toml_string_array(values: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{values}]")
+}
+
+pub(super) fn apply_managed_mcp_settings(command: &mut Command, servers: &[ManagedCodexMcpServer]) {
+    for server in servers {
+        let prefix = format!("mcp_servers.{}", server.name);
+        command
+            .arg("--config")
+            .arg(format!("{prefix}.command={}", toml_string(&server.command)))
+            .arg("--config")
+            .arg(format!("{prefix}.args={}", toml_string_array(&server.args)))
+            .arg("--config")
+            .arg(format!("{prefix}.required={}", server.required))
+            .arg("--config")
+            .arg(format!(
+                "{prefix}.default_tools_approval_mode={}",
+                toml_string(&server.default_tools_approval_mode)
+            ));
+        if let Some(seconds) = server.startup_timeout_sec {
+            command
+                .arg("--config")
+                .arg(format!("{prefix}.startup_timeout_sec={seconds}"));
+        }
+        if let Some(seconds) = server.tool_timeout_sec {
+            command
+                .arg("--config")
+                .arg(format!("{prefix}.tool_timeout_sec={seconds}"));
+        }
+        if !server.env.is_empty() {
+            let env = server
+                .env
+                .iter()
+                .map(|(key, value)| format!("{key} = {}", toml_string(value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            command
+                .arg("--config")
+                .arg(format!("{prefix}.env={{ {env} }}"));
+        }
+        for (tool, mode) in &server.tool_approval_modes {
+            command.arg("--config").arg(format!(
+                "{prefix}.tools.{tool}.approval_mode={}",
+                toml_string(mode)
+            ));
+        }
+    }
 }
 
 pub(super) fn split_csv(value: &str) -> Vec<String> {

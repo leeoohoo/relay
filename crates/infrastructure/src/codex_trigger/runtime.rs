@@ -26,7 +26,7 @@ impl CodexTriggerRunner {
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
     ) -> AppResult<ProcessOutcome> {
-        if request.approval_policy == "on-request" {
+        if request.approval_handler.is_some() {
             self.run_app_server_once(request, resume_thread_id).await
         } else {
             self.run_exec_once(request, resume_thread_id).await
@@ -53,6 +53,7 @@ impl CodexTriggerRunner {
             command.arg("--model").arg(model);
         }
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
+        apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
         command
             .arg("--sandbox")
             .arg(sandbox_mode)
@@ -227,14 +228,13 @@ impl CodexTriggerRunner {
     ) -> AppResult<ProcessOutcome> {
         let sandbox_mode = codex_sandbox_mode(&request.sandbox_mode)?;
         let approval_handler = request.approval_handler.as_ref().ok_or_else(|| {
-            AppError::Validation(
-                "Codex on-request approval policy requires an approval handler".into(),
-            )
+            AppError::Validation("Codex app-server execution requires an approval handler".into())
         })?;
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args);
         self.apply_profile_arguments(&mut command, &request.codex_profile)?;
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
+        apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
         command
             .arg("--config")
             .arg(format!(

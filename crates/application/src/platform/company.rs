@@ -454,6 +454,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             AGENT_CODEX_APPROVAL_TOOL_COMMAND
                 | AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE
                 | AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS
+                | AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS
         ) {
             return Err(AppError::Validation(
                 "unsupported Codex approval request type".into(),

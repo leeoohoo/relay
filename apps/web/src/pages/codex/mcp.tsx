@@ -146,7 +146,7 @@ export function CodexMcpView(props: {
           <span><small>目标环境</small><strong>{targetSelector === "default" ? "宿主机默认" : profile?.name ?? targetSelector}</strong></span>
           <span><small>已发现</small><strong>{servers.length}</strong></span>
           <span><small>用户配置</small><strong>{servers.filter((server) => server.configured_by_user).length}</strong></span>
-          <span><small>插件提供</small><strong>{servers.filter((server) => !server.configured_by_user).length}</strong></span>
+          <span><small>Relay 托管</small><strong>{servers.filter((server) => server.managed_by_relay).length}</strong></span>
           <span><small>当前状态</small><strong>{codexMcpOperationLabel(snapshot?.operation_status ?? "idle")}</strong></span>
         </div>
 
@@ -167,7 +167,7 @@ export function CodexMcpView(props: {
 
         {loading ? <LoadingState /> : !snapshot ? <div className="empty-inline compact-empty"><Icon name="network" /><h3>等待 MCP 发现</h3><p>Trigger 启动后会自动读取现有 Codex MCP 配置。</p></div> : servers.length ? (
           <div className="mcp-server-grid">
-            {serverPagination.pageItems.map((server) => <article className={`mcp-server-card ${server.enabled ? "enabled" : "disabled"}`} key={server.name}><div className="mcp-server-card-head"><span className="mcp-server-icon"><Icon name="network" /></span><div><strong>{server.name}</strong><small>{server.transport === "streamable_http" ? "Streamable HTTP" : server.transport === "stdio" ? "本地 stdio" : server.transport}</small></div><span className={server.enabled ? "plugin-enabled" : "plugin-disabled"}>{server.enabled ? "已启用" : "已停用"}</span></div><div className="mcp-server-endpoint">{server.address ? <code>{server.address}</code> : <code>{server.command ?? "隐藏命令"}{server.argument_count ? ` · ${server.argument_count} 个参数` : ""}</code>}</div><div className="mcp-server-meta"><span>{server.configured_by_user ? "用户配置" : "插件提供"}</span><span>{codexMcpAuthLabel(server.auth_status)}</span>{server.bearer_token_env_var ? <span>Token: {server.bearer_token_env_var}</span> : null}</div>{server.disabled_reason ? <p>{server.disabled_reason}</p> : null}<div className="mcp-server-actions">{server.configured_by_user ? <button className="button small danger" onClick={() => void removeServer(server)} disabled={Boolean(busy) || operationBusy}>{busy === `remove:${server.name}` ? "提交中…" : "删除"}</button> : <small>随插件安装，不能在此删除</small>}</div></article>)}
+            {serverPagination.pageItems.map((server) => <article className={`mcp-server-card ${server.enabled ? "enabled" : "disabled"}`} key={server.name}><div className="mcp-server-card-head"><span className="mcp-server-icon"><Icon name="network" /></span><div><strong>{server.name}</strong><small>{server.managed_by_relay ? "Chrome DevTools MCP · 项目隔离" : server.transport === "streamable_http" ? "Streamable HTTP" : server.transport === "stdio" ? "本地 stdio" : server.transport}</small></div><span className={server.enabled ? "plugin-enabled" : "plugin-disabled"}>{server.enabled ? "已启用" : "已停用"}</span></div><div className="mcp-server-endpoint">{server.address ? <code>{server.address}</code> : <code>{server.command ?? "隐藏命令"}{server.argument_count ? ` · ${server.argument_count} 个参数` : ""}</code>}</div><div className="mcp-server-meta"><span>{server.managed_by_relay ? "Relay 托管" : server.configured_by_user ? "用户配置" : "插件提供"}</span><span>{server.managed_by_relay ? "网站访问需审批" : codexMcpAuthLabel(server.auth_status)}</span>{server.bearer_token_env_var ? <span>Token: {server.bearer_token_env_var}</span> : null}</div>{server.disabled_reason ? <p>{server.disabled_reason}</p> : null}<div className="mcp-server-actions">{server.configured_by_user && !server.managed_by_relay ? <button className="button small danger" onClick={() => void removeServer(server)} disabled={Boolean(busy) || operationBusy}>{busy === `remove:${server.name}` ? "提交中…" : "删除"}</button> : <small>{server.managed_by_relay ? "自动注入所有项目 Agent" : "随插件安装，不能在此删除"}</small>}</div></article>)}
             <Pagination {...serverPagination} onPageChange={serverPagination.setPage} />
           </div>
         ) : <div className="empty-inline compact-empty"><Icon name="network" /><h3>当前环境还没有 MCP</h3><p>点击“添加 MCP”，配置 HTTP 服务或本地 stdio 服务。</p></div>}
@@ -190,5 +190,4 @@ function codexMcpAuthLabel(status: string | null) {
   if (status === "unsupported") return "无需 OAuth";
   return status || "认证状态未知";
 }
-
 

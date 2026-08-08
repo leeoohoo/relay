@@ -8,7 +8,7 @@ Relay **不会再实现一套调用大模型的代码**。可选的本地 Trigge
 
 ## 快速开始
 
-推荐直接使用 GitHub Release 安装包。目前只发布 Apple Silicon macOS 和 Windows 10/11 WSL2 两种安装包。包内已经包含 Web 控制台和宿主机 Agent Trigger，普通用户只需要 Docker，不需要安装 Node.js、pnpm、Rust 或 Cargo。
+推荐直接使用 GitHub Release 安装包。目前只发布 Apple Silicon macOS 和 Windows 10/11 WSL2 两种安装包。包内已经包含 Web 控制台和宿主机 Agent Trigger，普通用户只需要 Docker，不需要安装 Node.js、pnpm、Rust、Cargo、Chrome，也不需要另外安装 Chrome DevTools MCP。
 
 ### Apple Silicon macOS Release
 
@@ -360,6 +360,14 @@ Relay 托管安装使用：
 ```
 
 Relay 默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Docker 容器。若要连接远程 Harness，请在 `.env.local` 设置 `HARNESS_MODE=official` 与 `HARNESS_BASE_URL`；只有显式设置 `HARNESS_MODE=disabled` 才会关闭 Harness。
+
+### Relay 托管浏览器
+
+Relay 默认在项目工作会话中启用 Chrome DevTools MCP。首次启动时，启动器会把固定版本 `chrome-devtools-mcp@1.6.0` 和 Chromium 构建为本地 Docker 镜像 `relay/chrome-devtools-mcp:1.6.0`，后续启动直接复用。使用 Release 安装包的用户不需要在宿主机安装 Node.js、Chrome、Chromium 或 MCP 包。
+
+只有 Agent 启动项目工作会话时，Relay 才会把浏览器能力动态注入 Codex CLI；控制会话不会启动浏览器。浏览器 Profile 持久化保存在 Trigger 状态目录中，并按照公司、Agent、项目三级隔离，因此多个 Agent 并行运行时不会共享 Cookie、Local Storage 或登录状态。
+
+打开网址、新建浏览器页面和上传文件会在 Relay 审批中心生成 `codex.website_access` 请求。当前项目工作区会以只读方式挂载进浏览器容器，因此获批后的上传操作可以读取项目文件，但浏览器运行时不能修改项目代码。页面获批后，Agent 可以继续使用页面检查和交互工具。若要关闭 Relay 托管浏览器，可在启动前设置 `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false`。
 
 更新到最新版本：
 
