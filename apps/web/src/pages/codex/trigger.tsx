@@ -6,6 +6,21 @@ import { useUiLanguage } from "../../i18n/uiLanguage";
 import type { CodexRunnerProfileView, CodexSession, CodexTriggerView } from "../../types/platform";
 import { codexActivityPhaseLabel, codexOperationalStatusLabel, codexReasoningEffortLabel, codexRunDisplayMessage, codexSessionTurnLabel, codexTriggerStatusLabel, codexTriggerTypeLabel, formatElapsed, formatInterval, formatRunSeconds, formatTime, StatusBadge } from "../app/shared";
 
+export function currentTriggerSessions(sessions: CodexSession[]) {
+  return sessions.filter((session) => session.status === "active" && !session.archived_at);
+}
+
+export function triggerRunUsesSession(
+  session: CodexSession,
+  recentRuns: CodexTriggerView["recent_runs"],
+) {
+  return recentRuns.some((run) => (
+    run.status === "running"
+    && Boolean(run.codex_thread_id)
+    && run.codex_thread_id === session.codex_thread_id
+  ));
+}
+
 export function CodexTriggerPanel(props: {
   companyId: string;
   agentId: string;
@@ -25,6 +40,7 @@ export function CodexTriggerPanel(props: {
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const currentSessions = currentTriggerSessions(sessions);
   const selectedProfile = props.profiles.find((item) => item.profile.id === selectedProfileId)?.profile;
   const runningRun = trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const operationalStatus = trigger
@@ -136,21 +152,21 @@ export function CodexTriggerPanel(props: {
       </div>
       {trigger ? (
         <div className="codex-session-strip">
-          <span><small>控制会话</small><strong>{sessions.some((session) => session.session_kind === "control" && session.status === "active") ? "已建立" : "首次有效唤醒时创建"}</strong></span>
-          <span><small>项目工作会话</small><strong>{sessions.filter((session) => session.session_kind === "project" && session.status === "active").length} 个</strong></span>
+          <span><small>控制会话</small><strong>{currentSessions.some((session) => session.session_kind === "control") ? "已建立" : "首次有效唤醒时创建"}</strong></span>
+          <span><small>项目工作会话</small><strong>{currentSessions.filter((session) => session.session_kind === "project").length} 个</strong></span>
           <span><small>当前状态</small><strong>{runningRun ? `已运行 ${formatElapsed(runningRun.started_at)}` : trigger.config.lease_owner ? "已领取，等待本地 Codex 启动" : trigger.config.manual_run_requested_at ? "手动唤醒已排队" : trigger.config.wake_requested_at ? "消息唤醒已排队" : codexTriggerStatusLabel(trigger.config.status)}</strong></span>
           <span><small>下次兜底检查</small><strong>{formatTime(trigger.config.next_run_at)}</strong></span>
           <span><small>最近成功</small><strong>{trigger.config.last_success_at ? formatTime(trigger.config.last_success_at) : "尚未成功运行"}</strong></span>
         </div>
       ) : null}
-      {sessions.length ? (
+      {currentSessions.length ? (
         <div className="codex-work-session-list">
           <div className="codex-run-list-heading"><strong>工作会话目录</strong><small>控制会话负责判断；项目会话负责执行</small></div>
-          {sessions.slice(0, 12).map((session) => {
+          {currentSessions.slice(0, 12).map((session) => {
             const projectName = session.project_id
               ? props.projects.find((project) => project.id === session.project_id)?.name ?? `项目 ${session.project_id.slice(0, 8)}`
               : "Relay 控制会话";
-            const sessionRunning = trigger?.recent_runs.some((run) => run.status === "running" && run.project_id === session.project_id) ?? false;
+            const sessionRunning = trigger ? triggerRunUsesSession(session, trigger.recent_runs) : false;
             return (
               <div className="codex-work-session-row" key={session.id}>
                 <StatusBadge value={sessionRunning ? "running" : session.status} />
