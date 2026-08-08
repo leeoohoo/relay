@@ -65,7 +65,7 @@ jobs:
           cache: pnpm
 
       - name: Install PostgreSQL client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client ripgrep
 
       - name: Install web dependencies
         run: pnpm install --frozen-lockfile
