@@ -3,6 +3,12 @@ use super::*;
 pub(super) const MANAGED_BROWSER_MCP_NAME: &str = "chrome-devtools";
 const DEFAULT_BROWSER_MCP_IMAGE: &str = "relay/chrome-devtools-mcp:1.6.0";
 const BROWSER_PROFILE_CONTAINER_PATH: &str = "/relay-browser-profile";
+pub(super) const CHROMIUM_RUNTIME_FILES: [&str; 4] = [
+    "SingletonLock",
+    "SingletonSocket",
+    "SingletonCookie",
+    "DevToolsActivePort",
+];
 
 #[derive(Debug, Clone)]
 pub(super) struct BrowserMcpConfig {
@@ -220,12 +226,30 @@ fn create_browser_profile(path: &Path) -> AppResult<()> {
     std::fs::create_dir_all(path).map_err(|error| {
         AppError::Internal(format!("cannot create managed browser profile: {error}"))
     })?;
+    remove_stale_chromium_runtime_files(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
             |error| AppError::Internal(format!("cannot protect managed browser profile: {error}")),
         )?;
+    }
+    Ok(())
+}
+
+fn remove_stale_chromium_runtime_files(profile: &Path) -> AppResult<()> {
+    for name in CHROMIUM_RUNTIME_FILES {
+        let path = profile.join(name);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(AppError::Internal(format!(
+                    "cannot remove stale Chromium runtime file {}: {error}",
+                    path.display()
+                )));
+            }
+        }
     }
     Ok(())
 }

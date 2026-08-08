@@ -91,6 +91,51 @@ fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
     std::fs::remove_dir_all(root).expect("cleanup browser profiles");
 }
 
+#[test]
+fn managed_browser_profile_removes_stale_chromium_runtime_files() {
+    let root = std::env::temp_dir().join(format!(
+        "relay-browser-stale-profile-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    let company = Uuid::new_v4();
+    let agent = Uuid::new_v4();
+    let project = Uuid::new_v4();
+    let profile = root
+        .join(company.to_string())
+        .join(agent.to_string())
+        .join(project.to_string());
+    std::fs::create_dir_all(&profile).expect("profile");
+    for name in CHROMIUM_RUNTIME_FILES {
+        std::fs::write(profile.join(name), "stale").expect("stale Chromium runtime file");
+    }
+    std::fs::write(profile.join("Local State"), "persistent").expect("persistent profile file");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let mut runner = CodexTriggerRunner::new(
+        PathBuf::from("codex"),
+        Vec::new(),
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    runner.browser_mcp = BrowserMcpConfig::for_test(root.clone());
+
+    runner
+        .managed_browser_mcp_server(company, agent, project, &workspace)
+        .expect("browser MCP")
+        .expect("enabled browser MCP");
+
+    for name in CHROMIUM_RUNTIME_FILES {
+        assert!(!profile.join(name).exists(), "{name} should be removed");
+    }
+    assert_eq!(
+        std::fs::read_to_string(profile.join("Local State")).expect("persistent profile file"),
+        "persistent"
+    );
+    std::fs::remove_dir_all(root).expect("cleanup browser profiles");
+}
+
 #[cfg(unix)]
 #[test]
 fn browser_navigation_approval_continues_the_same_app_server_turn() {
