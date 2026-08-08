@@ -110,17 +110,25 @@ export function CreateProjectDialog(props: {
     <Dialog title="新建项目" description="选择本地文件夹或外部 Git 来源。项目会统一导入独立的 Harness 仓库。" onClose={props.onClose} extraWide>
       <form className="stack-form create-project-form" onSubmit={submit}>
         <div className="project-source-switch" role="tablist" aria-label="项目来源">
-          <button className={sourceKind === "local_folder" ? "active" : ""} type="button" onClick={() => setSourceKind("local_folder")}><Icon name="folder" /><span><strong>导入本地文件夹</strong><small>复制到组织托管空间，不修改原目录</small></span></button>
-          <button className={sourceKind === "git" ? "active" : ""} type="button" onClick={() => setSourceKind("git")}><Icon name="git" /><span><strong>从 Git 导入</strong><small>来源只用于导入，项目地址由 Harness 生成</small></span></button>
+          <button className={sourceKind === "local_folder" ? "active" : ""} type="button" role="tab" aria-selected={sourceKind === "local_folder"} onClick={() => setSourceKind("local_folder")}>
+            <span className="project-source-icon"><Icon name="folder" /></span>
+            <span className="project-source-copy"><small>本地目录</small><strong>导入文件夹</strong><span>复制到托管空间，原目录保持不变</span></span>
+            <span className="project-source-state">{sourceKind === "local_folder" ? <><Icon name="check" /> 已选择</> : "选择"}</span>
+          </button>
+          <button className={sourceKind === "git" ? "active" : ""} type="button" role="tab" aria-selected={sourceKind === "git"} onClick={() => setSourceKind("git")}>
+            <span className="project-source-icon"><Icon name="git" /></span>
+            <span className="project-source-copy"><small>远程仓库</small><strong>从 Git 导入</strong><span>读取来源代码，创建独立 Harness 仓库</span></span>
+            <span className="project-source-state">{sourceKind === "git" ? <><Icon name="check" /> 已选择</> : "选择"}</span>
+          </button>
         </div>
         {sourceKind === "local_folder" ? (
           <>
-            <div className={`project-folder-picker ${selectedFolderName ? "selected" : ""}`}>
-              <Icon name="folder" />
+            <button className={`project-folder-picker ${selectedFolderName ? "selected" : ""}`} type="button" onClick={() => folderInputRef.current?.click()}>
+              <span className="project-folder-icon"><Icon name={selectedFolderName ? "check" : "folder"} /></span>
               <div><strong>{selectedFolderName || "选择要导入的项目文件夹"}</strong><small>{selectedFolderName ? `已选择 ${selectedFolderFiles.length} 个文件；创建时会流式复制到组织托管空间。` : "Relay 会忽略 .git、.relay、node_modules 和 target，并复制到组织默认空间。"}</small></div>
-              <button className="button" type="button" onClick={() => folderInputRef.current?.click()}>选择文件夹</button>
-              <input ref={(element) => { folderInputRef.current = element; element?.setAttribute("webkitdirectory", ""); }} className="hidden-file-input" type="file" multiple onChange={(event) => { selectFolder(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-            </div>
+              <span className="project-folder-action">{selectedFolderName ? "重新选择" : "打开文件夹"}<Icon name="chevron-right" /></span>
+            </button>
+            <input ref={(element) => { folderInputRef.current = element; element?.setAttribute("webkitdirectory", ""); }} className="hidden-file-input" type="file" multiple onChange={(event) => { selectFolder(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
           </>
         ) : (
           <div className="form-grid">
@@ -142,7 +150,15 @@ export function CreateProjectDialog(props: {
         </div>
         <div className="project-member-selector">
           <strong>项目成员</strong><small>负责人会自动加入；其他成员可在这里一并加入项目群。</small>
-          <div className="permission-grid">{activeAgents.map((agent) => <label className="check-row" key={agent.agent_profile.id}><input type="checkbox" checked={agent.agent_profile.id === ownerAgentId || memberAgentIds.includes(agent.agent_profile.id)} disabled={agent.agent_profile.id === ownerAgentId} onChange={(event) => toggleMember(agent.agent_profile.id, event.target.checked)} /><span>{agent.agent_profile.display_name} · {agent.profession?.label ?? agent.membership.job_title}</span></label>)}</div>
+          <div className="permission-grid">{activeAgents.map((agent) => {
+            const isOwner = agent.agent_profile.id === ownerAgentId;
+            return <label className={`project-member-option ${isOwner ? "owner" : ""}`} key={agent.agent_profile.id}>
+              <input type="checkbox" checked={isOwner || memberAgentIds.includes(agent.agent_profile.id)} disabled={isOwner} onChange={(event) => toggleMember(agent.agent_profile.id, event.target.checked)} />
+              <span className="agent-avatar small">{agent.agent_profile.display_name.slice(0, 1)}</span>
+              <span className="project-member-identity"><strong>{agent.agent_profile.display_name}</strong><small>@{agent.agent_profile.handle} · {agent.profession?.label ?? agent.membership.job_title}</small></span>
+              {isOwner ? <span className="project-owner-chip">负责人</span> : null}
+            </label>;
+          })}</div>
         </div>
         {!activeAgents.length ? <div className="inline-error">请先创建并激活至少一个 Agent，项目需要一个 Agent 负责人。</div> : null}
         <div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy || !ownerAgentId || !name.trim() || (sourceKind === "git" ? !gitRemoteUrl.trim() : !selectedFolderName)}>{busy ? "正在创建托管项目…" : "创建项目"}</button></div>

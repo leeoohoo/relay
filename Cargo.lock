@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-agent-trigger"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "ai-chat-application",
  "ai-chat-domain",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-application"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "ai-chat-domain",
  "ai-chat-shared",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-domain"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "chrono",
  "serde",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-infrastructure"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "ai-chat-application",
  "ai-chat-domain",
@@ -90,7 +90,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-mcp"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "ai-chat-application",
  "ai-chat-domain",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-mcp-server"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "ai-chat-application",
  "ai-chat-domain",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-server"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "ai-chat-application",
  "ai-chat-domain",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "ai-chat-shared"
-version = "0.1.0"
+version = "1.0.2"
 dependencies = [
  "chrono",
  "serde",
