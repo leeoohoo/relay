@@ -265,18 +265,41 @@ impl CompanyPlatformRepository for MemoryPlatformRepository {
                 "agent already belongs to a company".into(),
             ));
         }
+        if guard
+            .agent_keys_by_hash
+            .contains_key(&bundle.key_record.key_hash)
+        {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "agent key already exists".into(),
+            ));
+        }
 
         let company_id = bundle.membership.company_id;
+        let agent_id = bundle.agent_profile.id;
         let self_notes_conversation_id = bundle.self_notes_conversation.id;
         guard.owner_bindings.push(bundle.owner_binding);
         guard
             .company_agent_memberships
             .insert(bundle.membership.agent_profile_id, bundle.membership);
         guard
+            .agent_keys_by_hash
+            .insert(bundle.key_record.key_hash.clone(), bundle.key_record.id);
+        guard
+            .agent_keys
+            .insert(bundle.key_record.id, bundle.key_record);
+        guard.agent_key_issue_logs.push(bundle.key_issue_log);
+        guard
             .conversations
-            .entry(bundle.agent_profile.id)
+            .entry(agent_id)
             .or_default()
             .push(bundle.self_notes_conversation);
+        if let Some(default_group) = guard.company_default_groups.get(&company_id).cloned() {
+            guard
+                .conversations
+                .entry(agent_id)
+                .or_default()
+                .push(default_group);
+        }
         guard.conversation_contexts.insert(
             self_notes_conversation_id,
             ConversationContext {

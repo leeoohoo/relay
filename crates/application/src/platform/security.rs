@@ -235,7 +235,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         recipient_agent_ids: &[Uuid],
         mentioned_agent_ids: &[Uuid],
         mention_all: bool,
-        wake_immediately: bool,
+        wake_recipient_agent_ids: &[Uuid],
     ) -> AppResult<()> {
         for recipient_agent_id in recipient_agent_ids.iter().copied() {
             self.enqueue_agent_event(
@@ -255,7 +255,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }),
                 10,
             )?;
-            if wake_immediately {
+            if wake_recipient_agent_ids.contains(&recipient_agent_id) {
                 self.repo.request_agent_codex_trigger_wake(
                     recipient_agent_id,
                     message.created_at,

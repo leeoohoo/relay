@@ -93,6 +93,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .project_id
                     .is_none_or(|project_id| session.project_id == Some(project_id))
             })
+            .map(sanitize_codex_session_for_human)
             .collect();
         Ok(sessions)
     }
@@ -509,4 +510,47 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.repo
             .latest_company_realtime_sequence_result(company_id)
     }
+}
+
+fn sanitize_codex_session_for_human(mut session: AgentCodexSession) -> AgentCodexSession {
+    session.summary_short = redact_host_home_path(&session.summary_short);
+    redact_json_host_paths(&mut session.checkpoint_json);
+    session
+}
+
+fn redact_json_host_paths(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = redact_host_home_path(text),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json_host_paths(item);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                redact_json_host_paths(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_host_home_path(value: &str) -> String {
+    redact_unix_home_segment(&redact_unix_home_segment(value, "/Users/"), "/home/")
+}
+
+fn redact_unix_home_segment(value: &str, prefix: &str) -> String {
+    let mut output = value.to_string();
+    let mut search_from = 0;
+    while let Some(relative_start) = output[search_from..].find(prefix) {
+        let start = search_from + relative_start;
+        let username_start = start + prefix.len();
+        let Some(relative_end) = output[username_start..].find('/') else {
+            break;
+        };
+        let end = username_start + relative_end;
+        output.replace_range(start..end, "~");
+        search_from = start + 1;
+    }
+    output
 }

@@ -222,7 +222,7 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
             })
             .expect("test should configure the Agent Codex trigger");
     }
-    let owner_broadcast = app
+    let _owner_broadcast = app
         .send_company_message(SendCompanyMessageInput {
             actor_agent_id: manager.agent_profile.id,
             company_id: company.company.id,
@@ -234,12 +234,9 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         .repo
         .get_agent_codex_trigger_config_by_agent(engineer.agent_profile.id)
         .expect("project member trigger should exist");
-    assert_eq!(
-        engineer_trigger.wake_requested_at,
-        Some(owner_broadcast.created_at)
-    );
-    assert_eq!(engineer_trigger.wake_reason.as_deref(), Some("message"));
-    assert!(engineer_trigger.next_run_at <= owner_broadcast.created_at);
+    assert!(engineer_trigger.wake_requested_at.is_none());
+    assert!(engineer_trigger.wake_reason.is_none());
+    assert_eq!(engineer_trigger.next_run_at, future_check);
     assert!(app
         .repo
         .get_agent_codex_trigger_config_by_agent(manager.agent_profile.id)

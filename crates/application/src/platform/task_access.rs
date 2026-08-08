@@ -242,6 +242,81 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }
     }
 
+    pub(super) fn notify_project_tasks_ready_after_changes(
+        &self,
+        project: &CompanyProject,
+        changed_task_ids: &[Uuid],
+        ready_at: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        if changed_task_ids.is_empty() || project.status == PROJECT_STATUS_PAUSED {
+            return Ok(0);
+        }
+        let changed_task_ids = changed_task_ids.iter().copied().collect::<HashSet<_>>();
+        let tasks = self.repo.list_company_project_tasks_result(project.id)?;
+        let tasks_by_id = tasks
+            .iter()
+            .map(|task| (task.id, task))
+            .collect::<HashMap<_, _>>();
+        let dependencies = self.repo.list_company_project_task_dependencies(project.id);
+        let mut notified = 0;
+        for task in tasks
+            .iter()
+            .filter(|task| task.status == PROJECT_TASK_STATUS_TODO)
+        {
+            let task_dependencies = dependencies
+                .iter()
+                .filter(|dependency| dependency.task_id == task.id)
+                .collect::<Vec<_>>();
+            if task_dependencies.is_empty()
+                || !task_dependencies
+                    .iter()
+                    .any(|dependency| changed_task_ids.contains(&dependency.depends_on_task_id))
+                || task_dependencies.iter().any(|dependency| {
+                    tasks_by_id
+                        .get(&dependency.depends_on_task_id)
+                        .is_none_or(|dependency_task| {
+                            !matches!(
+                                dependency_task.status.as_str(),
+                                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                            )
+                        })
+                })
+            {
+                continue;
+            }
+            let Some(assignee_agent_id) = task.assignee_agent_id else {
+                continue;
+            };
+            if self
+                .repo
+                .get_company_project_member(project.id, assignee_agent_id)
+                .is_none_or(|member| member.left_at.is_some())
+            {
+                continue;
+            }
+            self.enqueue_agent_event(
+                assignee_agent_id,
+                "company.project.task_ready",
+                json!({
+                    "company_id": project.company_id,
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "unlocked_by_task_ids": changed_task_ids,
+                }),
+                50,
+            )?;
+            self.repo.request_agent_codex_trigger_wake(
+                assignee_agent_id,
+                ready_at,
+                "task_ready",
+            )?;
+            notified += 1;
+        }
+        Ok(notified)
+    }
+
     pub(super) fn company_project_view(
         &self,
         project: CompanyProject,
@@ -373,12 +448,19 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let membership = self
             .repo
             .get_company_agent_membership(agent_id)
-            .filter(|membership| {
-                membership.company_id == company_id && membership.employment_status == "active"
-            })
-            .ok_or_else(|| {
-                AppError::Unauthorized("conversation member is not active in the company".into())
-            })?;
+            .filter(|membership| membership.company_id == company_id)
+            .ok_or_else(|| AppError::Unauthorized("agent does not belong to the company".into()))?;
+        if membership.employment_status == "provisioning" {
+            return Err(AppError::Conflict(
+                "requires_activation: this legacy Agent is still provisioning; wait for activation, then retry the same request. Newly hired Agents are activated automatically"
+                    .into(),
+            ));
+        }
+        if membership.employment_status != "active" {
+            return Err(AppError::Unauthorized(
+                "conversation member is not active in the company".into(),
+            ));
+        }
         let agent = self
             .repo
             .get_agent_profile(agent_id)

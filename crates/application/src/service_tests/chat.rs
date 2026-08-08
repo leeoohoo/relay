@@ -580,7 +580,7 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             .save_agent_codex_trigger_config(trigger)
             .expect("test should reset the message wake state");
     }
-    let group_message = app
+    let _group_message = app
         .send_human_company_message(SendHumanCompanyMessageInput {
             human_user_id: owner.id,
             company_id: company.company.id,
@@ -602,10 +602,77 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             .repo
             .get_agent_codex_trigger_config_by_agent(agent_id)
             .expect("Agent trigger should exist");
-        assert_eq!(trigger.wake_requested_at, Some(group_message.created_at));
-        assert_eq!(trigger.wake_reason.as_deref(), Some("message"));
-        assert!(trigger.next_run_at <= group_message.created_at);
+        assert!(trigger.wake_requested_at.is_none());
+        assert!(trigger.wake_reason.is_none());
+        assert_eq!(trigger.next_run_at, future_check);
     }
+
+    let project = app
+        .create_company_project(CreateCompanyProjectInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            name: "Selective Wake Project".into(),
+            description: Some("验证项目群只唤醒 Ready 任务负责人".into()),
+            member_agent_ids: vec![beta.agent_profile.id],
+        })
+        .expect("alpha should create a project group");
+    let ready_task = app
+        .create_company_project_task_for_human(CreateCompanyProjectTaskForHumanInput {
+            human_user_id: owner.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            title: "执行项目群唤醒验证".into(),
+            description: None,
+            priority: None,
+            assignee_agent_id: Some(beta.agent_profile.id),
+            due_at: None,
+            depends_on_task_ids: Vec::new(),
+        })
+        .expect("owner should assign a ready project task");
+    for agent_id in [alpha.agent_profile.id, beta.agent_profile.id] {
+        let mut trigger = app
+            .repo
+            .get_agent_codex_trigger_config_by_agent(agent_id)
+            .expect("Agent trigger should exist");
+        trigger.next_run_at = future_check;
+        trigger.wake_requested_at = None;
+        trigger.wake_reason = None;
+        app.repo
+            .save_agent_codex_trigger_config(trigger)
+            .expect("test should reset the project message wake state");
+    }
+    let project_message = app
+        .send_human_company_message(SendHumanCompanyMessageInput {
+            human_user_id: owner.id,
+            company_id: company.company.id,
+            conversation_id: project.project_group.preview.id,
+            content: "项目进入执行阶段，请按 Ready 任务推进。".into(),
+        })
+        .expect("owner should broadcast to the project group");
+    let alpha_project_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
+        .expect("alpha trigger should exist");
+    assert!(alpha_project_trigger.wake_requested_at.is_none());
+    let beta_project_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(beta.agent_profile.id)
+        .expect("beta trigger should exist");
+    assert_eq!(
+        beta_project_trigger.wake_requested_at,
+        Some(project_message.created_at)
+    );
+    assert!(app
+        .list_agent_inbox_events(beta.agent_profile.id, true, 100)
+        .expect("beta inbox should load")
+        .iter()
+        .any(|event| {
+            event.event_type == "message.received"
+                && payload_uuid_field_optional(&event.payload_json, "message_id")
+                    == Some(project_message.id)
+                && payload_uuid_field_optional(&event.payload_json, "project_id").is_none()
+        }));
+    assert_eq!(ready_task.assignee_agent_id, Some(beta.agent_profile.id));
 
     for agent_id in [alpha.agent_profile.id, beta.agent_profile.id] {
         let mut trigger = app

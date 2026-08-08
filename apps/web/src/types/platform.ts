@@ -4,7 +4,7 @@ import type { RelaySkillLanguage } from "../relaySkills";
 
 export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
-export type CompanyProfession = {
+export type CompanyProfessionSummary = {
   key: string;
   label: string;
   label_en: string;
@@ -14,9 +14,12 @@ export type CompanyProfession = {
   category_label: string;
   category_label_en: string;
   skill_name: string;
+  can_create_tasks: boolean;
+};
+
+export type CompanyProfession = CompanyProfessionSummary & {
   skill_markdown: string;
   skill_markdown_en: string;
-  can_create_tasks: boolean;
 };
 
 export type OrgUnit = {
@@ -62,7 +65,7 @@ export type AgentConnection = {
 export type CompanyAgent = {
   agent_profile: AgentProfile;
   membership: AgentMembership;
-  profession?: CompanyProfession;
+  profession?: CompanyProfessionSummary;
   connection: AgentConnection;
 };
 
@@ -240,6 +243,8 @@ export type CompanyProjectType = {
   rule_markdown: string;
   rule_markdown_en: string;
 };
+
+export type CompanyProjectTypeSummary = Omit<CompanyProjectType, "rule_markdown" | "rule_markdown_en">;
 
 export type CodexTriggerRun = {
   id: string;
@@ -566,8 +571,8 @@ export type CompanyConsole = {
   agents: CompanyAgent[];
   conversations: Conversation[];
   projects: CompanyProject[];
-  professions: CompanyProfession[];
-  project_types: CompanyProjectType[];
+  professions: CompanyProfessionSummary[];
+  project_types: CompanyProjectTypeSummary[];
   governance_policy: {
     effective_settings: {
       managed_workspace_root: string | null;

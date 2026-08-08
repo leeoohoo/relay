@@ -101,6 +101,29 @@ fn staffing_tools_are_only_added_for_explicit_permissions() {
 }
 
 #[test]
+fn staffing_profession_keys_accept_common_aliases_and_expose_full_catalog() {
+    let engineering: CompanyProfessionKeyInput = serde_json::from_str("\"engineering_manager\"")
+        .expect("engineering_manager should map to technical_manager");
+    assert_eq!(engineering.as_str(), "technical_manager");
+    let quality: CompanyProfessionKeyInput = serde_json::from_str("\"quality_assurance\"")
+        .expect("quality_assurance should map to qa_engineer");
+    assert_eq!(quality.as_str(), "qa_engineer");
+
+    let schema = schemars::schema_for!(CompanyProfessionKeyInput);
+    let serialized = serde_json::to_string(&schema).expect("profession schema should serialize");
+    for key in [
+        "technical_manager",
+        "qa_engineer",
+        "game_engineer",
+        "database_engineer",
+        "erp_consultant",
+        "wms_consultant",
+    ] {
+        assert!(serialized.contains(key), "schema should expose {key}");
+    }
+}
+
+#[test]
 fn active_company_agents_receive_four_company_domain_tools() {
     let tools = company_mcp_tools(&[]);
     let names = tools

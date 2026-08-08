@@ -227,15 +227,38 @@ pub(super) fn prepare_relay_skills(
             skills_root.display()
         ))
     })?;
+    let runtime_skills_root = managed_runtime_skills_root(workspace_path, &identity_token)?;
+    fs::create_dir_all(&runtime_skills_root).map_err(|error| {
+        AppError::Validation(format!(
+            "failed to create external Relay skill runtime {}: {error}",
+            runtime_skills_root.display()
+        ))
+    })?;
     remove_stale_managed_skills(&skills_root, &managed_prefix)?;
-    write_managed_skill(&skills_root, &employee_name, &employee_content)?;
-    write_managed_skill(&skills_root, &profession_name, &profession_content)?;
-    write_managed_skill(&skills_root, &session_name, &session_content)?;
+    remove_stale_managed_skills(&runtime_skills_root, &managed_prefix)?;
+    write_and_link_managed_skill(
+        &runtime_skills_root,
+        &skills_root,
+        &employee_name,
+        &employee_content,
+    )?;
+    write_and_link_managed_skill(
+        &runtime_skills_root,
+        &skills_root,
+        &profession_name,
+        &profession_content,
+    )?;
+    write_and_link_managed_skill(
+        &runtime_skills_root,
+        &skills_root,
+        &session_name,
+        &session_content,
+    )?;
     if let (Some(name), Some(content)) = (staffing_name.as_deref(), staffing_content.as_deref()) {
-        write_managed_skill(&skills_root, name, content)?;
+        write_and_link_managed_skill(&runtime_skills_root, &skills_root, name, content)?;
     }
     if let (Some(name), Some(content)) = (project_name.as_deref(), project_content.as_deref()) {
-        write_managed_skill(&skills_root, name, content)?;
+        write_and_link_managed_skill(&runtime_skills_root, &skills_root, name, content)?;
     }
     exclude_managed_skills_from_git(workspace_path, &managed_prefix)?;
 
@@ -517,8 +540,8 @@ pub(super) fn remove_stale_managed_skills(
             AppError::Validation(format!("failed to inspect managed Relay skill: {error}"))
         })?;
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if file_name.starts_with(managed_prefix) && entry.path().is_dir() {
-            fs::remove_dir_all(entry.path()).map_err(|error| {
+        if file_name.starts_with(managed_prefix) {
+            remove_managed_skill_path(&entry.path()).map_err(|error| {
                 AppError::Validation(format!(
                     "failed to replace managed Relay skill {}: {error}",
                     entry.path().display()
@@ -527,6 +550,92 @@ pub(super) fn remove_stale_managed_skills(
         }
     }
     Ok(())
+}
+
+fn managed_runtime_skills_root(workspace_path: &Path, identity_token: &str) -> AppResult<PathBuf> {
+    let parent = workspace_path.parent().ok_or_else(|| {
+        AppError::Validation("Relay workspace must have a parent directory".into())
+    })?;
+    let workspace_name = workspace_path.file_name().ok_or_else(|| {
+        AppError::Validation("Relay workspace must have a final path component".into())
+    })?;
+    Ok(parent
+        .join(".relay-runtime-skills")
+        .join(workspace_name)
+        .join(identity_token))
+}
+
+fn write_and_link_managed_skill(
+    runtime_skills_root: &Path,
+    workspace_skills_root: &Path,
+    name: &str,
+    content: &str,
+) -> AppResult<()> {
+    write_managed_skill(runtime_skills_root, name, content)?;
+    let source = runtime_skills_root.join(name);
+    let target = workspace_skills_root.join(name);
+    create_directory_link(&source, &target)
+}
+
+fn remove_managed_skill_path(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        fs::remove_file(path)
+    } else {
+        fs::remove_dir_all(path)
+    }
+}
+
+#[cfg(unix)]
+fn create_directory_link(source: &Path, target: &Path) -> AppResult<()> {
+    if fs::symlink_metadata(target).is_ok() {
+        remove_managed_skill_path(target).map_err(|error| {
+            AppError::Validation(format!(
+                "failed to replace Relay skill link {}: {error}",
+                target.display()
+            ))
+        })?;
+    }
+    std::os::unix::fs::symlink(source, target).map_err(|error| {
+        AppError::Validation(format!(
+            "failed to link external Relay skill {}: {error}",
+            target.display()
+        ))
+    })
+}
+
+#[cfg(windows)]
+fn create_directory_link(source: &Path, target: &Path) -> AppResult<()> {
+    if fs::symlink_metadata(target).is_ok() {
+        remove_managed_skill_path(target).map_err(|error| {
+            AppError::Validation(format!(
+                "failed to replace Relay skill link {}: {error}",
+                target.display()
+            ))
+        })?;
+    }
+    if std::os::windows::fs::symlink_dir(source, target).is_ok() {
+        return Ok(());
+    }
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(target)
+        .arg(source)
+        .status()
+        .map_err(|error| {
+            AppError::Validation(format!(
+                "failed to create Relay skill junction {}: {error}",
+                target.display()
+            ))
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(AppError::Validation(format!(
+            "failed to create Relay skill junction {}",
+            target.display()
+        )))
+    }
 }
 
 pub(super) fn write_managed_skill(skills_root: &Path, name: &str, content: &str) -> AppResult<()> {

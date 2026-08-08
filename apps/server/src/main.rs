@@ -386,6 +386,10 @@ async fn main() -> anyhow::Result<()> {
             get(get_company_console),
         )
         .route(
+            "/api/v1/companies/{company_id}/skill-catalog",
+            get(get_company_skill_catalog),
+        )
+        .route(
             "/api/v1/companies/{company_id}/workspace-settings",
             post(update_company_workspace_settings),
         )

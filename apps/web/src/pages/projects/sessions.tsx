@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { CodexSession, CompanyProject } from "../../types/platform";
-import { formatTime, StatusBadge } from "../app/shared";
+import { codexSessionTurnLabel, formatTime, StatusBadge } from "../app/shared";
 
 export function ProjectSessionsCard(props: {
   companyId: string;
@@ -49,7 +49,7 @@ export function ProjectSessionsCard(props: {
           {sessions.map(({ session, agentName }) => (
             <div className="codex-work-session-row" key={session.id}>
               <StatusBadge value={session.status} />
-              <div><strong>{agentName}</strong><small>第 {session.generation} 代 · {session.scope_key}</small></div>
+              <div><strong>{agentName}</strong><small>第 {session.generation} 代 · {codexSessionTurnLabel(session)}</small></div>
               <p>{session.summary_short || "尚未生成最近工作总结"}</p>
               <time>{formatTime(session.last_used_at)}</time>
             </div>

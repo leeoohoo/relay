@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { api } from "../../api/client";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Icon } from "../../components/ui";
 import { useUiLanguage } from "../../i18n/uiLanguage";
@@ -21,12 +22,32 @@ import { companyAgentProfessionKey, copyText, Metric, relayAgentConnectionNames,
 export function SkillsView(props: {
   consoleData: CompanyConsole | null;
   systemProjectTypes: CompanyProjectType[];
+  token: string;
 }) {
   const { consoleData, systemProjectTypes } = props;
   const { language: uiLanguage } = useUiLanguage();
   const skillLanguage: RelaySkillLanguage = uiLanguage;
+  const [catalog, setCatalog] = useState<{
+    professions: CompanyProfession[];
+    project_types: CompanyProjectType[];
+  } | null>(null);
   const [tab, setTab] = useState<"agent_skills" | "project_rules">("agent_skills");
-  const professions = useMemo<CompanyProfession[]>(() => consoleData?.professions ?? Object.entries(RELAY_PROFESSION_SKILLS).map(([key, document]) => ({
+  useEffect(() => {
+    if (!consoleData) {
+      setCatalog(null);
+      return;
+    }
+    let active = true;
+    api<{ skill_catalog: { professions: CompanyProfession[]; project_types: CompanyProjectType[] } }>(
+      `/api/v1/companies/${consoleData.company.id}/skill-catalog`,
+      {},
+      props.token,
+    )
+      .then((response) => { if (active) setCatalog(response.skill_catalog); })
+      .catch(() => { if (active) setCatalog(null); });
+    return () => { active = false; };
+  }, [consoleData?.company.id, props.token]);
+  const professions = useMemo<CompanyProfession[]>(() => catalog?.professions ?? Object.entries(RELAY_PROFESSION_SKILLS).map(([key, document]) => ({
     key,
     label: document.title.replace("职业 Skill", ""),
     label_en: document.title.replace("职业 Skill", ""),
@@ -39,7 +60,7 @@ export function SkillsView(props: {
     skill_markdown: document.content,
     skill_markdown_en: document.content,
     can_create_tasks: key === "project_manager" || key === "product_manager" || key === "technical_manager",
-  })), [consoleData?.professions]);
+  })), [catalog?.professions]);
   const agents = useMemo(() => consoleData?.agents ?? [], [consoleData?.agents]);
   const [selectedAgentId, setSelectedAgentId] = useState(agents[0]?.agent_profile.id ?? "");
   const library = useMemo(() => [
@@ -65,7 +86,10 @@ export function SkillsView(props: {
   const [skillCategory, setSkillCategory] = useState("all");
   const visibleLibrary = useMemo(() => skillCategory === "all" ? library : library.filter((item) => item.category === skillCategory), [library, skillCategory]);
   const skillPagination = usePagination(visibleLibrary, 8, `${skillLanguage}:${skillCategory}:${visibleLibrary.length}`);
-  const projectTypes = useMemo(() => consoleData?.project_types ?? systemProjectTypes, [consoleData?.project_types, systemProjectTypes]);
+  const projectTypes = useMemo(
+    () => catalog?.project_types ?? systemProjectTypes,
+    [catalog?.project_types, systemProjectTypes],
+  );
   const projectTypeCategories = useMemo(() => Array.from(
     new Map(projectTypes.map((type) => [type.category_key, skillLanguage === "en" ? type.category_label_en : type.category_label])).entries(),
   ).map(([key, label]) => ({ key, label })), [projectTypes, skillLanguage]);

@@ -1,14 +1,14 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../../api/client";
 import { Field } from "../../components/ui";
-import type { CompanyAgent, CompanyProject, CompanyProjectType } from "../../types/platform";
+import type { CompanyAgent, CompanyProject, CompanyProjectType, CompanyProjectTypeSummary } from "../../types/platform";
 import { formatTime } from "../app/shared";
 import { activeProjectAgents, agentHasPermission, grantAgentProjectPermission, preferredProjectRuleAgentId } from "./permissions";
 
 export function ProjectRuleCard(props: {
   companyId: string;
   project: CompanyProject;
-  projectTypes: CompanyProjectType[];
+  projectTypes: CompanyProjectTypeSummary[];
   agents: CompanyAgent[];
   token: string;
   canManage: boolean;
@@ -22,11 +22,29 @@ export function ProjectRuleCard(props: {
   const [agentId, setAgentId] = useState(preferredAgentId);
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
+  const [systemRule, setSystemRule] = useState<CompanyProjectType | null>(null);
   const selectedAgent = projectAgents.find((agent) => agent.agent_profile.id === agentId);
   const selectedAgentNeedsPermission = Boolean(selectedAgent && !agentHasPermission(selectedAgent, "project.rules.manage"));
   const systemType = props.projectTypes.find((type) => type.key === props.project.project.project_type);
 
   useEffect(() => setContent(props.project.rule?.content ?? ""), [props.project.project.id, props.project.rule?.updated_at]);
+  useEffect(() => {
+    let active = true;
+    api<{ skill_catalog: { project_types: CompanyProjectType[] } }>(
+      `/api/v1/companies/${props.companyId}/skill-catalog`,
+      {},
+      props.token,
+    )
+      .then((response) => {
+        if (active) {
+          setSystemRule(response.skill_catalog.project_types.find(
+            (type) => type.key === props.project.project.project_type,
+          ) ?? null);
+        }
+      })
+      .catch(() => { if (active) setSystemRule(null); });
+    return () => { active = false; };
+  }, [props.companyId, props.project.project.project_type, props.token]);
   useEffect(() => {
     if (!projectAgents.some((agent) => agent.agent_profile.id === agentId)) {
       setAgentId(preferredAgentId);
@@ -81,7 +99,7 @@ export function ProjectRuleCard(props: {
           <div><span className="eyebrow">SYSTEM PROJECT SKILL</span><h3>{systemType?.label ?? "通用项目"}固定规则</h3><p>这是 Relay 按项目类型自动加载的强制基线。Human Rule 和 Agent 生成内容只能补充，不能删除或弱化。</p></div>
           <span className="pill neutral">自动加载</span>
         </div>
-        <pre>{systemType?.rule_markdown ?? "项目类型规则暂不可用"}</pre>
+        <pre>{systemRule?.rule_markdown ?? "正在读取项目类型规则…"}</pre>
       </section>
       <form className="project-rule-editor" onSubmit={saveRule}>
         <div className="project-tab-heading">
@@ -119,4 +137,3 @@ export function ProjectRuleCard(props: {
     </div>
   );
 }
-

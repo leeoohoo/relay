@@ -8,7 +8,7 @@ import type { Company } from "../../types/appShell";
 import type {
   CompanyAgent,
   CompanyConsole,
-  CompanyProfession,
+  CompanyProfessionSummary,
   OrgUnit,
 } from "../../types/platform";
 import { Dialog } from "./shared";
@@ -129,7 +129,7 @@ function suggestPersonalAgentName(agents: CompanyAgent[]) {
   return PERSONAL_AGENT_NAMES.find((name) => !used.has(name)) ?? "Alex";
 }
 
-export function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfession[]; skillLanguage: RelaySkillLanguage; token: string; onClose: () => void; onCreated: () => Promise<void>; onError: (error: unknown) => void }) {
+export function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]; agents: CompanyAgent[]; professions: CompanyProfessionSummary[]; skillLanguage: RelaySkillLanguage; token: string; onClose: () => void; onCreated: () => Promise<void>; onError: (error: unknown) => void }) {
   const hasActiveManager = props.agents.some((agent) => agent.membership.role_key === "company_manager" && agent.membership.employment_status === "active");
   const [displayName, setDisplayName] = useState(() => suggestPersonalAgentName(props.agents));
   const [handle, setHandle] = useState("");
@@ -140,7 +140,7 @@ export function CreateAgentDialog(props: { company: Company; orgUnits: OrgUnit[]
   const [roleKey, setRoleKey] = useState(hasActiveManager ? "member" : "company_manager");
   const [busy, setBusy] = useState(false);
   const professionGroups = useMemo(() => {
-    const groups = new Map<string, CompanyProfession[]>();
+    const groups = new Map<string, CompanyProfessionSummary[]>();
     props.professions.forEach((profession) => {
       const label = props.skillLanguage === "en" ? profession.category_label_en : profession.category_label;
       groups.set(label, [...(groups.get(label) ?? []), profession]);

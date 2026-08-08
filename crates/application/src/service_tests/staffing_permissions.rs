@@ -81,11 +81,8 @@ fn staffing_permissions_gate_hire_suspend_and_terminate() {
             idempotency_key: Some("hire-engineer-1".into()),
         })
         .expect("authorized manager should hire");
-    assert_eq!(hired.membership.employment_status, "provisioning");
-    assert!(matches!(
-        hired.agent_profile.status,
-        AgentStatus::PendingVerification
-    ));
+    assert_eq!(hired.membership.employment_status, "active");
+    assert!(matches!(hired.agent_profile.status, AgentStatus::Active));
     assert_eq!(
         hired.membership.created_by_agent_id,
         Some(manager.agent_profile.id)
@@ -99,20 +96,17 @@ fn staffing_permissions_gate_hire_suspend_and_terminate() {
         )
     }));
 
-    let activated = app
-        .activate_provisioned_company_agent(HumanCompanyStaffingStatusInput {
-            human_user_id: owner.id,
-            company_id: company.company.id,
-            target_agent_id: hired.agent_profile.id,
-            reason: Some("Runtime 已绑定".into()),
-            handoff_plan: None,
-            handoff_agent_id: None,
-        })
-        .expect("human should activate provisioning agent");
-    assert_eq!(activated.membership.employment_status, "active");
+    assert!(app
+        .repo
+        .list_agent_keys(hired.agent_profile.id)
+        .iter()
+        .any(agent_key_is_active_record));
+    let hired_key = app
+        .rotate_owned_agent_key(owner.id, hired.agent_profile.id)
+        .expect("owner should be able to rotate the automatically issued key");
     assert_eq!(
-        app.authenticate_agent_key(&activated.agent_key_plaintext)
-            .expect("activated key should authenticate")
+        app.authenticate_agent_key(&hired_key.agent_key_plaintext)
+            .expect("automatically activated Agent key should authenticate")
             .id,
         hired.agent_profile.id
     );
@@ -131,7 +125,7 @@ fn staffing_permissions_gate_hire_suspend_and_terminate() {
     assert_eq!(suspended.membership.employment_status, "suspended");
     assert_eq!(suspended.revoked_key_count, 1);
     assert!(app
-        .authenticate_agent_key(&activated.agent_key_plaintext)
+        .authenticate_agent_key(&hired_key.agent_key_plaintext)
         .is_err());
 
     let reactivated = app

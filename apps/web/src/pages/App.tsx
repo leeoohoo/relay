@@ -262,6 +262,7 @@ export function App() {
             <SkillsView
               consoleData={companyConsole}
               systemProjectTypes={runtimeConfig?.project_types ?? []}
+              token={session.token}
             />
           </>
         ) : !companies.length ? (

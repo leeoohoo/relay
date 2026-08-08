@@ -170,7 +170,7 @@ fn human_managers_create_assign_and_update_project_tasks() {
         feature_goals: None,
         feature_shell_tool: None,
         max_run_seconds: 600,
-        next_run_at: now,
+        next_run_at: now + Duration::hours(6),
         lease_owner: None,
         lease_expires_at: None,
         manual_run_requested_at: None,
@@ -185,6 +185,9 @@ fn human_managers_create_assign_and_update_project_tasks() {
         created_at: now,
         updated_at: now,
     };
+    app.repo
+        .save_agent_codex_trigger_config(trigger.clone())
+        .expect("test should persist the engineer Trigger");
     let waiting_decision = app
         .decide_agent_codex_work(&trigger)
         .expect("trigger should classify waiting tasks");
@@ -226,8 +229,27 @@ fn human_managers_create_assign_and_update_project_tasks() {
         depends_on_task_ids: Some(Vec::new()),
     })
     .expect("prerequisite should complete");
+    let ready_event = app
+        .list_agent_inbox_events(engineer.agent_profile.id, true, 50)
+        .expect("engineer inbox should load")
+        .into_iter()
+        .find(|event| {
+            event.event_type == "company.project.task_ready"
+                && payload_uuid_field_optional(&event.payload_json, "task_id") == Some(task.id)
+        })
+        .expect("completing the prerequisite should enqueue a ready event");
+    let ready_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(engineer.agent_profile.id)
+        .expect("engineer Trigger should remain configured");
+    assert_eq!(ready_trigger.wake_reason.as_deref(), Some("task_ready"));
+    let ready_wake_at = ready_trigger
+        .wake_requested_at
+        .expect("ready task should request a wake");
+    assert!(ready_wake_at <= ready_event.created_at);
+    assert!(ready_trigger.next_run_at <= ready_wake_at);
     let ready_decision = app
-        .decide_agent_codex_work(&trigger)
+        .decide_agent_codex_work(&ready_trigger)
         .expect("trigger should re-check completed prerequisites");
     assert!(ready_decision.should_run);
     assert_eq!(ready_decision.active_task_count, 1);

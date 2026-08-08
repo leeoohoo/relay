@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { Field, Icon } from "../../components/ui";
-import type { CompanyConsole, CompanyProjectType } from "../../types/platform";
+import type { CompanyConsole, CompanyProjectTypeSummary } from "../../types/platform";
 import { companyAgentProfessionKey, Dialog } from "../app/shared";
 
 export function CreateProjectDialog(props: {
@@ -28,7 +28,7 @@ export function CreateProjectDialog(props: {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const selectedType = props.consoleData.project_types.find((item) => item.key === projectType);
   const projectTypeGroups = useMemo(() => {
-    const groups = new Map<string, CompanyProjectType[]>();
+    const groups = new Map<string, CompanyProjectTypeSummary[]>();
     props.consoleData.project_types.forEach((type) => {
       const categoryLabel = skillLanguage === "en" ? type.category_label_en : type.category_label;
       const current = groups.get(categoryLabel) ?? [];
@@ -146,7 +146,7 @@ export function CreateProjectDialog(props: {
           <span className="eyebrow">FIXED PROJECT SKILL</span>
           <strong>{selectedType ? skillLanguage === "en" ? selectedType.label_en : selectedType.label : "创建后自动识别"}</strong>
           <p>{selectedType ? `${skillLanguage === "en" ? selectedType.category_label_en : selectedType.category_label} · ${skillLanguage === "en" ? selectedType.description_en : selectedType.description}` : "Relay 会综合项目说明与文件结构选择类型；Human 仍可在创建前明确指定。"}</p>
-          {selectedType ? <pre>{skillLanguage === "en" ? selectedType.rule_markdown_en : selectedType.rule_markdown}</pre> : null}
+          {selectedType ? <small>完整固定规则会在项目创建后按需加载。</small> : null}
         </div>
         <div className="project-member-selector">
           <strong>项目成员</strong><small>负责人会自动加入；其他成员可在这里一并加入项目群。</small>

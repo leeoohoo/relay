@@ -135,6 +135,15 @@ fn control_session_loads_profession_skill_without_project_skill() {
         .join(&prepared.employee_name)
         .join("SKILL.md")
         .is_file());
+    #[cfg(unix)]
+    assert!(fs::symlink_metadata(
+        workspace
+            .join(".agents/skills")
+            .join(&prepared.employee_name)
+    )
+    .expect("managed Skill link should exist")
+    .file_type()
+    .is_symlink());
     assert!(workspace
         .join(".agents/skills")
         .join(&prepared.profession_name)
@@ -159,6 +168,16 @@ fn control_session_loads_profession_skill_without_project_skill() {
     assert!(prepared.project_name.is_none());
     assert!(!prepared.version_hash.is_empty());
     fs::remove_dir_all(workspace).expect("test workspace should be removed");
+}
+
+#[test]
+fn session_summary_replaces_workspace_and_redacts_host_username() {
+    let workspace = PathBuf::from("/Users/alice/.relay/worktrees/agent-1");
+    let summary = "Changed [/Users/alice/.relay/worktrees/agent-1/src/main.rs](/Users/alice/.relay/worktrees/agent-1/src/main.rs) and inspected /Users/alice/private.txt";
+    let sanitized = sanitize_workspace_output(summary, &workspace);
+    assert!(sanitized.contains("[./src/main.rs](./src/main.rs)"));
+    assert!(sanitized.contains("~/private.txt"));
+    assert!(!sanitized.contains("alice"));
 }
 
 #[test]

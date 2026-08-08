@@ -80,8 +80,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             agents: Vec::new(),
             conversations: vec![default_group],
             projects: Vec::new(),
-            professions: company_profession_catalog(),
-            project_types: company_project_type_catalog(),
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
             governance_policy,
         })
     }
@@ -120,7 +126,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .get_agent_profile(membership.agent_profile_id)
                     .ok_or_else(|| AppError::NotFound("company agent profile not found".into()))?;
                 let connection = self.company_agent_connection_view(&membership);
-                let profession = infer_company_profession(Some(&membership.job_title));
+                let profession = CompanyProfessionSummary::from(infer_company_profession(Some(
+                    &membership.job_title,
+                )));
                 Ok(CompanyConsoleAgentView {
                     agent_profile,
                     membership,
@@ -199,9 +207,32 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             agents,
             conversations,
             projects,
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
+            governance_policy: self.company_governance_policy_view(company_id),
+        })
+    }
+
+    pub fn get_company_skill_catalog(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<CompanySkillCatalogView> {
+        self.repo
+            .get_company_human_member_result(company_id, human_user_id)?
+            .filter(|membership| membership.status == "active")
+            .ok_or_else(|| {
+                AppError::Unauthorized("human user is not an active company member".into())
+            })?;
+        Ok(CompanySkillCatalogView {
             professions: company_profession_catalog(),
             project_types: company_project_type_catalog(),
-            governance_policy: self.company_governance_policy_view(company_id),
         })
     }
 

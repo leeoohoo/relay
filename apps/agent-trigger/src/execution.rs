@@ -552,7 +552,7 @@ async fn run_codex_stage(
             codex_session_key_matches(&session.workspace_key, &session_key)
                 .then_some(session.codex_thread_id)
         });
-    codex_runner
+    let mut result = codex_runner
         .run(CodexRunRequest {
             cwd: workspace.path.clone(),
             codex_profile: trigger.codex_profile.clone(),
@@ -601,7 +601,14 @@ async fn run_codex_stage(
                 }) as Arc<dyn CodexCancellationHandler>
             }),
         })
-        .await
+        .await?;
+    if let Some(message) = result.final_message.as_mut() {
+        *message = sanitize_workspace_output(message, &workspace.path);
+    }
+    if let Some(message) = result.error_message.as_mut() {
+        *message = sanitize_workspace_output(message, &workspace.path);
+    }
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -665,6 +672,13 @@ fn persist_codex_stage_session(
             "summary": summary,
             "project_id": project_id,
             "branch": workspace.branch,
+            "last_turn_status": match result.status {
+                CodexRunStatus::Succeeded => "succeeded",
+                CodexRunStatus::Failed => "failed",
+                CodexRunStatus::TimedOut => "timed_out",
+                CodexRunStatus::Cancelled => "cancelled",
+            },
+            "continuation_expected": result.status == CodexRunStatus::TimedOut,
             "updated_at": now,
         }),
         skill_bundle_version: skills.version_hash.clone(),
@@ -688,6 +702,35 @@ fn memory_snapshot_version(memories: &[AgentMemory]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     hash_secret(&source).chars().take(16).collect()
+}
+
+pub(super) fn sanitize_workspace_output(value: &str, workspace_path: &Path) -> String {
+    let mut sanitized = value.replace(workspace_path.to_string_lossy().as_ref(), ".");
+    if let Ok(canonical_path) = workspace_path.canonicalize() {
+        let canonical_path = canonical_path.to_string_lossy();
+        if canonical_path.as_ref() != workspace_path.to_string_lossy().as_ref() {
+            sanitized = sanitized.replace(canonical_path.as_ref(), ".");
+        }
+    }
+    sanitized = redact_home_user_segment(&sanitized, "/Users/", '/');
+    sanitized = redact_home_user_segment(&sanitized, "/home/", '/');
+    sanitized
+}
+
+fn redact_home_user_segment(value: &str, prefix: &str, separator: char) -> String {
+    let mut output = value.to_string();
+    let mut search_from = 0;
+    while let Some(relative_start) = output[search_from..].find(prefix) {
+        let start = search_from + relative_start;
+        let username_start = start + prefix.len();
+        let Some(relative_end) = output[username_start..].find(separator) else {
+            break;
+        };
+        let end = username_start + relative_end;
+        output.replace_range(start..end, "~");
+        search_from = start + 1;
+    }
+    output
 }
 
 fn empty_stage_session(agent_id: Uuid, project_id: Uuid) -> AgentCodexSession {

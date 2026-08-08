@@ -3,7 +3,7 @@ import { api } from "../../api/client";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Icon } from "../../components/ui";
 import type { CodexSession, CompanyAgent, CompanyConsole } from "../../types/platform";
-import { Dialog, formatTime, StatusBadge } from "./shared";
+import { codexSessionTurnLabel, Dialog, formatTime, StatusBadge } from "./shared";
 
 export function AgentSessionsDialog(props: {
   agent: CompanyAgent;
@@ -72,7 +72,7 @@ export function AgentSessionsDialog(props: {
               return (
                 <div className="codex-work-session-row" key={session.id}>
                   <StatusBadge value={session.status} />
-                  <div><strong>{title}</strong><small>{session.session_kind === "control" ? "消息、协调与派工" : `项目工作 · 第 ${session.generation} 代`}</small></div>
+                  <div><strong>{title}</strong><small>{session.session_kind === "control" ? "消息、协调与派工" : `项目工作 · 第 ${session.generation} 代`} · {codexSessionTurnLabel(session)}</small></div>
                   <p>{session.summary_short || "尚未生成最近工作总结"}</p>
                   <time>{formatTime(session.last_used_at)}</time>
                 </div>

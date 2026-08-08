@@ -9,12 +9,13 @@ import type {
   AgentToolApproval,
   CodexPluginOperation,
   CodexReasoningEffort,
+  CodexSession,
   CodexTriggerRun,
   CodexTriggerView,
   CompanyAgent,
-  CompanyProfession,
+  CompanyProfessionSummary,
   CompanyProjectTask,
-  CompanyProjectType,
+  CompanyProjectTypeSummary,
 } from "../../types/platform";
 
 const SESSION_KEY = "agent_company_session";
@@ -43,6 +44,16 @@ export function EmptyCompany(props: { onCreate: () => void }) { return <div clas
 export function LoadingState() { return <div className="center-state"><span className="loader" /><h2>正在读取公司目录</h2></div>; }
 export function Metric(props: { label: string; value: string; detail: string }) { return <div className="metric"><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></div>; }
 export function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
+export function codexSessionTurnLabel(session: CodexSession) {
+  const status = typeof session.checkpoint_json.last_turn_status === "string"
+    ? session.checkpoint_json.last_turn_status
+    : null;
+  if (status === "timed_out" && session.checkpoint_json.continuation_expected === true) return "上轮达到时限，已保留会话等待续跑";
+  if (status === "succeeded") return "上轮已完成，会话可继续复用";
+  if (status === "failed") return "上轮失败，会话仍保留用于诊断或恢复";
+  if (status === "cancelled") return "上轮因项目暂停而停止";
+  return session.status === "active" ? "会话可复用，当前未必正在执行" : "历史会话";
+}
 export function Toast(props: { children: ReactNode; tone?: "error"; onClose: () => void }) { return <div className={`toast ${props.tone ?? ""}`}><span>{props.children}</span><button onClick={props.onClose}><Icon name="close" /></button></div>; }
 
 export function readSession(): Session | null {
@@ -110,7 +121,7 @@ export function codexReasoningEffortLabel(value: CodexReasoningEffort | null, la
   if (!value) return "跟随模型默认";
   return ({ none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最大", ultra: "极致" } as Record<CodexReasoningEffort, string>)[value];
 }
-export function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProfession[]) {
+export function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProfessionSummary[]) {
   if (agent.profession?.key) return agent.profession.key;
   const title = (agent.membership.job_title || "").trim().toLowerCase();
   const exact = professions.find((profession) => profession.label.toLowerCase() === title);
@@ -137,7 +148,7 @@ export function companyAgentProfessionKey(agent: CompanyAgent, professions: Comp
   return "general_member";
 }
 export function projectStatusLabel(value: string) { return ({ planned: "计划中", active: "进行中", paused: "已暂停", blocked: "已阻塞", completed: "已完成", cancelled: "已取消" } as Record<string, string>)[value] ?? value; }
-export function projectTypeLabel(value: string, types: CompanyProjectType[], language: RelaySkillLanguage = "zh-CN") {
+export function projectTypeLabel(value: string, types: CompanyProjectTypeSummary[], language: RelaySkillLanguage = "zh-CN") {
   const projectType = types.find((type) => type.key === value);
   return projectType ? language === "en" ? projectType.label_en : projectType.label : value;
 }

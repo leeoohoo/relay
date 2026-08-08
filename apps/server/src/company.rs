@@ -51,6 +51,18 @@ pub(super) async fn get_company_console(
     Ok(Json(serde_json::json!({ "company_console": company })))
 }
 
+pub(super) async fn get_company_skill_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let catalog = state
+        .platform
+        .get_company_skill_catalog(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "skill_catalog": catalog })))
+}
+
 pub(super) async fn list_company_memories(
     State(state): State<AppState>,
     headers: HeaderMap,

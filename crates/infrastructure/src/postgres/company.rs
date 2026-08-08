@@ -575,6 +575,44 @@ impl CompanyPlatformRepository for PostgresPlatformRepository {
                     &bundle.membership.updated_at,
                 ],
             )?;
+            tx.execute(
+                r#"
+                INSERT INTO agent_keys (
+                    id, agent_profile_id, key_name, key_prefix, key_hash,
+                    scopes, last_used_at, last_used_ip, expires_at, revoked_at, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6, NULL, $7, $8, $9)
+                "#,
+                &[
+                    &bundle.key_record.id,
+                    &bundle.key_record.agent_profile_id,
+                    &bundle.key_record.key_name,
+                    &bundle.key_record.key_prefix,
+                    &bundle.key_record.key_hash,
+                    &bundle.key_record.last_used_at,
+                    &bundle.key_record.expires_at,
+                    &bundle.key_record.revoked_at,
+                    &bundle.key_record.created_at,
+                ],
+            )?;
+            tx.execute(
+                r#"
+                INSERT INTO agent_key_issue_logs (
+                    id, agent_profile_id, agent_key_id, issue_type,
+                    issued_by_user_id, metadata, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "#,
+                &[
+                    &bundle.key_issue_log.id,
+                    &bundle.key_issue_log.agent_profile_id,
+                    &bundle.key_issue_log.agent_key_id,
+                    &agent_key_issue_type_to_str(&bundle.key_issue_log.issue_type),
+                    &bundle.key_issue_log.issued_by_user_id,
+                    &Json(bundle.key_issue_log.metadata.clone()),
+                    &bundle.key_issue_log.created_at,
+                ],
+            )?;
             let title = Some(bundle.self_notes_conversation.title.as_str());
             tx.execute(
                 r#"
@@ -606,6 +644,24 @@ impl CompanyPlatformRepository for PostgresPlatformRepository {
                     &bundle.self_notes_conversation.id,
                     &bundle.agent_profile.id,
                     &bundle.self_notes_conversation.updated_at,
+                ],
+            )?;
+            tx.execute(
+                r#"
+                INSERT INTO conversation_members (
+                    id, conversation_id, agent_profile_id, member_role, joined_at
+                )
+                SELECT $1, conversation.id, $2, 'member', $3
+                FROM conversations conversation
+                WHERE conversation.company_id = $4
+                  AND conversation.context_type = 'company_all'
+                ON CONFLICT (conversation_id, agent_profile_id) DO NOTHING
+                "#,
+                &[
+                    &Uuid::new_v4(),
+                    &bundle.agent_profile.id,
+                    &bundle.membership.joined_at,
+                    &bundle.membership.company_id,
                 ],
             )?;
             insert_agent_staffing_action(&mut tx, &bundle.action)?;

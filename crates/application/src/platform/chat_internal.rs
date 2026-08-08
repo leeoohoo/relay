@@ -55,17 +55,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 input.mentioned_agent_ids,
                 input.mention_all,
             )?;
-        let project_owner_broadcast = if context.context_type == CONVERSATION_CONTEXT_PROJECT_GROUP
-        {
-            let project_id = context.project_id.ok_or_else(|| {
-                AppError::Internal("project group conversation is missing project_id".into())
-            })?;
-            self.repo
-                .get_company_project_result(project_id)?
-                .is_some_and(|project| project.owner_agent_id == input.actor_agent_id)
-        } else {
-            false
-        };
+        let wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
+            &context,
+            &notification_recipient_ids,
+            &mentioned_agent_ids,
+            input.mention_all,
+        )?;
         let message = MessageView {
             id: Uuid::new_v4(),
             conversation_id: input.conversation_id,
@@ -88,10 +83,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &notification_recipient_ids,
             &mentioned_agent_ids,
             input.mention_all,
-            context.context_type == CONVERSATION_CONTEXT_COMPANY_DIRECT
-                || input.mention_all
-                || !mentioned_agent_ids.is_empty()
-                || project_owner_broadcast,
+            &wake_recipient_agent_ids,
         )?;
         Ok(message)
     }
@@ -151,5 +143,60 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             recipients.retain(|agent_id| *agent_id != sender_agent_id);
         }
         Ok((normalized_mentions, recipients))
+    }
+
+    pub(super) fn resolve_company_message_wake_recipients(
+        &self,
+        context: &ConversationContext,
+        recipient_agent_ids: &[Uuid],
+        mentioned_agent_ids: &[Uuid],
+        mention_all: bool,
+    ) -> AppResult<Vec<Uuid>> {
+        if context.context_type == CONVERSATION_CONTEXT_COMPANY_DIRECT || mention_all {
+            return Ok(recipient_agent_ids.to_vec());
+        }
+        if !mentioned_agent_ids.is_empty() {
+            return Ok(recipient_agent_ids
+                .iter()
+                .copied()
+                .filter(|agent_id| mentioned_agent_ids.contains(agent_id))
+                .collect());
+        }
+        if context.context_type != CONVERSATION_CONTEXT_PROJECT_GROUP {
+            return Ok(Vec::new());
+        }
+        let project_id = context.project_id.ok_or_else(|| {
+            AppError::Internal("project group conversation is missing project_id".into())
+        })?;
+        let tasks = self.repo.list_company_project_tasks_result(project_id)?;
+        let dependencies = self.repo.list_company_project_task_dependencies(project_id);
+        Ok(recipient_agent_ids
+            .iter()
+            .copied()
+            .filter(|agent_id| {
+                tasks.iter().any(|task| {
+                    task.assignee_agent_id == Some(*agent_id)
+                        && matches!(
+                            task.status.as_str(),
+                            PROJECT_TASK_STATUS_TODO | PROJECT_TASK_STATUS_IN_PROGRESS
+                        )
+                        && dependencies
+                            .iter()
+                            .filter(|dependency| dependency.task_id == task.id)
+                            .all(|dependency| {
+                                tasks
+                                    .iter()
+                                    .find(|candidate| candidate.id == dependency.depends_on_task_id)
+                                    .is_some_and(|dependency_task| {
+                                        matches!(
+                                            dependency_task.status.as_str(),
+                                            PROJECT_TASK_STATUS_DONE
+                                                | PROJECT_TASK_STATUS_CANCELLED
+                                        )
+                                    })
+                            })
+                })
+            })
+            .collect())
     }
 }

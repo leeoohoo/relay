@@ -4,7 +4,7 @@ import type { CompanyRealtimeEvent } from "../../api/types";
 import { Field } from "../../components/ui";
 import { useUiLanguage } from "../../i18n/uiLanguage";
 import type { CodexRunnerProfileView, CodexSession, CodexTriggerView } from "../../types/platform";
-import { codexActivityPhaseLabel, codexOperationalStatusLabel, codexReasoningEffortLabel, codexRunDisplayMessage, codexTriggerStatusLabel, codexTriggerTypeLabel, formatElapsed, formatInterval, formatRunSeconds, formatTime, StatusBadge } from "../app/shared";
+import { codexActivityPhaseLabel, codexOperationalStatusLabel, codexReasoningEffortLabel, codexRunDisplayMessage, codexSessionTurnLabel, codexTriggerStatusLabel, codexTriggerTypeLabel, formatElapsed, formatInterval, formatRunSeconds, formatTime, StatusBadge } from "../app/shared";
 
 export function CodexTriggerPanel(props: {
   companyId: string;
@@ -150,10 +150,11 @@ export function CodexTriggerPanel(props: {
             const projectName = session.project_id
               ? props.projects.find((project) => project.id === session.project_id)?.name ?? `项目 ${session.project_id.slice(0, 8)}`
               : "Relay 控制会话";
+            const sessionRunning = trigger?.recent_runs.some((run) => run.status === "running" && run.project_id === session.project_id) ?? false;
             return (
               <div className="codex-work-session-row" key={session.id}>
-                <StatusBadge value={session.status} />
-                <div><strong>{projectName}</strong><small>{session.session_kind === "control" ? "消息、协调与派工" : `项目工作会话 · 第 ${session.generation} 代`}</small></div>
+                <StatusBadge value={sessionRunning ? "running" : session.status} />
+                <div><strong>{projectName}</strong><small>{sessionRunning ? "当前 Trigger 正在使用这个会话" : codexSessionTurnLabel(session)}</small></div>
                 <p>{session.summary_short || "尚未生成最近工作总结"}</p>
                 <time>{formatTime(session.last_used_at)}</time>
               </div>
