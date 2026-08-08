@@ -40,14 +40,11 @@ where
     }
     send_json_rpc(writer, &json!({ "method": "initialized", "params": {} })).await?;
 
-    // Interactive MCP prompts must reach Relay even when ordinary Codex
-    // commands are configured as `never` approval. Otherwise Codex rejects a
-    // prompt-protected browser tool before emitting requestUserInput.
-    let app_server_approval_policy = "on-request";
+    let app_server_approval_policy = app_server_approval_policy(request);
     let mut thread_params = json!({
         "cwd": request.cwd.to_string_lossy(),
         "sandbox": sandbox_mode,
-        "approvalPolicy": app_server_approval_policy,
+        "approvalPolicy": app_server_approval_policy.clone(),
         "approvalsReviewer": "user"
     });
     if let Some(model) = request.model.as_deref() {
@@ -269,6 +266,24 @@ where
         error_message: error_message
             .or_else(|| Some("Codex app-server closed before turn/completed".into())),
         turn_started,
+    })
+}
+
+fn app_server_approval_policy(request: &CodexRunRequest) -> Value {
+    if request.approval_policy == "on-request" {
+        return json!("on-request");
+    }
+    json!({
+        "granular": {
+            "sandbox_approval": false,
+            "rules": false,
+            "skill_approval": false,
+            "request_permissions": false,
+            "mcp_elicitations": request
+                .managed_mcp_servers
+                .iter()
+                .any(ManagedCodexMcpServer::requires_human_approval)
+        }
     })
 }
 
