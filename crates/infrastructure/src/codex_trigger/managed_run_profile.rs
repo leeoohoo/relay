@@ -23,6 +23,30 @@ impl CodexTriggerRunner {
         Ok(())
     }
 
+    pub(super) fn apply_app_server_profile_settings(
+        &self,
+        command: &mut Command,
+        request: &CodexRunRequest,
+    ) -> AppResult<()> {
+        validate_config_key(&request.codex_profile, "Codex profile")?;
+        if request.codex_profile.starts_with("relay_") {
+            managed_profile_id(&request.codex_profile).ok_or_else(|| {
+                AppError::Validation("managed Codex profile selector is invalid".into())
+            })?;
+        }
+
+        // Codex CLI 0.146 rejects `--profile` for `app-server`. Relay already
+        // injects the effective runtime settings explicitly, so app-server only
+        // needs the per-run plugin exclusions that the exec path stores in a
+        // derived profile.
+        for plugin_id in disabled_plugin_ids(&request.managed_mcp_servers) {
+            command
+                .arg("--config")
+                .arg(format!("plugins.{}.enabled=false", toml_string(&plugin_id)));
+        }
+        Ok(())
+    }
+
     fn codex_home_for_run(&self, request: &CodexRunRequest) -> AppResult<PathBuf> {
         if let Some(value) = request
             .environment

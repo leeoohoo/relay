@@ -254,8 +254,7 @@ impl CodexTriggerRunner {
         })?;
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args);
-        self.apply_run_profile_arguments(&mut command, request)
-            .await?;
+        self.apply_app_server_profile_settings(&mut command, request)?;
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
         command

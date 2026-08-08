@@ -102,15 +102,12 @@ fn browser_navigation_approval_continues_the_same_app_server_turn() {
     let codex_home = workspace.join("codex-home");
     std::fs::create_dir_all(&codex_home).expect("codex home");
     let script = r#"case "$*" in *'mcp_servers.chrome-devtools.tools.navigate_page.approval_mode="prompt"'*) ;; *) exit 7 ;; esac
-case "$*" in *'--profile relay_managed_cli_'*) ;; *) exit 8 ;; esac
-set -- "$CODEX_HOME"/relay_managed_cli_*.config.toml
-test "$#" -eq 1 && test -f "$1" || exit 10
-grep -F '[plugins."browser@openai-bundled"]' "$1" >/dev/null || exit 11
-grep -F '[plugins."chrome@openai-bundled"]' "$1" >/dev/null || exit 12
-grep -F '[plugins."computer-use@openai-bundled"]' "$1" >/dev/null || exit 13
-grep -F '[plugins."visualize@openai-bundled"]' "$1" >/dev/null || exit 14
-grep -F '[plugins."documents@openai-primary-runtime"]' "$1" >/dev/null || exit 15
-test "$(grep -c '^enabled = false$' "$1")" -eq 10 || exit 16
+case "$*" in *'--profile'*) exit 8 ;; esac
+case "$*" in *'plugins."browser@openai-bundled".enabled=false'*) ;; *) exit 11 ;; esac
+case "$*" in *'plugins."chrome@openai-bundled".enabled=false'*) ;; *) exit 12 ;; esac
+case "$*" in *'plugins."computer-use@openai-bundled".enabled=false'*) ;; *) exit 13 ;; esac
+case "$*" in *'plugins."visualize@openai-bundled".enabled=false'*) ;; *) exit 14 ;; esac
+case "$*" in *'plugins."documents@openai-primary-runtime".enabled=false'*) ;; *) exit 15 ;; esac
 IFS= read -r initialize
 printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
 IFS= read -r initialized
