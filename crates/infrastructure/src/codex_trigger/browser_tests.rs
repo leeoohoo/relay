@@ -69,6 +69,13 @@ fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
         .args
         .iter()
         .any(|argument| argument == "--allow-unrestricted-paths"));
+    assert!(first
+        .args
+        .iter()
+        .any(|argument| argument == "--add-host=host.docker.internal:host-gateway"));
+    assert!(first.args.iter().any(|argument| {
+        argument == "--chrome-arg=--host-resolver-rules=MAP localhost host.docker.internal"
+    }));
     assert!(first.args.iter().any(|argument| {
         argument.starts_with("--volume=")
             && argument.ends_with(":ro")
@@ -101,7 +108,9 @@ test "$#" -eq 1 && test -f "$1" || exit 10
 grep -F '[plugins."browser@openai-bundled"]' "$1" >/dev/null || exit 11
 grep -F '[plugins."chrome@openai-bundled"]' "$1" >/dev/null || exit 12
 grep -F '[plugins."computer-use@openai-bundled"]' "$1" >/dev/null || exit 13
-test "$(grep -c '^enabled = false$' "$1")" -eq 3 || exit 14
+grep -F '[plugins."visualize@openai-bundled"]' "$1" >/dev/null || exit 14
+grep -F '[plugins."documents@openai-primary-runtime"]' "$1" >/dev/null || exit 15
+test "$(grep -c '^enabled = false$' "$1")" -eq 10 || exit 16
 IFS= read -r initialize
 printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
 IFS= read -r initialized

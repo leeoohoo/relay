@@ -15,7 +15,7 @@ fn plugin_operations_map_to_cross_platform_codex_cli_subcommands() {
 
 #[cfg(unix)]
 #[test]
-fn plugin_discovery_hides_desktop_only_plugins() {
+fn plugin_discovery_hides_plugins_without_relay_cli_runtime_support() {
     let profile_id = Uuid::new_v4();
     let selector = format!("relay_{profile_id}");
     let state_root = std::env::temp_dir().join(format!(
@@ -27,7 +27,7 @@ fn plugin_discovery_hides_desktop_only_plugins() {
         .join("homes")
         .join(profile_id.to_string());
     let script = format!(
-        r#"test "$CODEX_HOME" = '{}' || exit 8; case "$*" in *"marketplace"*) printf '%s\n' '{{"marketplaces":[{{"name":"openai-bundled"}}]}}' ;; *) printf '%s\n' '{{"installed":[],"available":[{{"pluginId":"browser@openai-bundled"}},{{"pluginId":"github@openai-api-curated"}}]}}' ;; esac"#,
+        r#"test "$CODEX_HOME" = '{}' || exit 8; case "$*" in *"marketplace"*) printf '%s\n' '{{"marketplaces":[{{"name":"openai-bundled"}},{{"name":"openai-primary-runtime"}},{{"name":"openai-api-curated"}}]}}' ;; *) printf '%s\n' '{{"installed":[{{"pluginId":"documents@openai-primary-runtime","marketplaceName":"openai-primary-runtime"}}],"available":[{{"pluginId":"browser@openai-bundled","marketplaceName":"openai-bundled"}},{{"pluginId":"visualize@openai-bundled","marketplaceName":"openai-bundled"}},{{"pluginId":"github@openai-api-curated","marketplaceName":"openai-api-curated"}}]}}' ;; esac"#,
         expected_home.display()
     );
     let mut runner = CodexTriggerRunner::new(
@@ -46,6 +46,7 @@ fn plugin_discovery_hides_desktop_only_plugins() {
         .expect("plugin discovery");
 
     assert_eq!(discovery.available.as_array().map(Vec::len), Some(1));
+    assert_eq!(discovery.installed.as_array().map(Vec::len), Some(0));
     assert_eq!(
         discovery.available[0]
             .get("pluginId")
@@ -53,6 +54,12 @@ fn plugin_discovery_hides_desktop_only_plugins() {
         Some("github@openai-api-curated")
     );
     assert_eq!(discovery.marketplaces.as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        discovery.marketplaces[0]
+            .get("name")
+            .and_then(Value::as_str),
+        Some("openai-api-curated")
+    );
 }
 
 #[cfg(unix)]
@@ -89,7 +96,7 @@ fn plugin_operations_use_codex_cli_add_and_remove_subcommands() {
 }
 
 #[test]
-fn desktop_only_plugins_cannot_be_installed_for_relay_cli_runners() {
+fn app_only_plugins_cannot_be_installed_for_relay_cli_runners() {
     let runner = CodexTriggerRunner::new(
         PathBuf::from("codex"),
         Vec::new(),
@@ -105,8 +112,18 @@ fn desktop_only_plugins_cannot_be_installed_for_relay_cli_runners() {
             "install",
             Some("browser@openai-bundled"),
         ))
-        .expect_err("desktop plugin must be rejected");
-    assert!(error.to_string().contains("Codex desktop host"));
+        .expect_err("app-only plugin must be rejected");
+    assert!(error.to_string().contains("Codex app-only host"));
+
+    let runtime_error = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(runner.apply_plugin_operation(
+            "default",
+            "install",
+            Some("documents@openai-primary-runtime"),
+        ))
+        .expect_err("app-runtime plugin must be rejected");
+    assert!(runtime_error.to_string().contains("bundled runtime"));
 }
 
 #[test]
@@ -115,7 +132,27 @@ fn stale_catalogs_are_filtered_before_they_reach_relay_views() {
         {"pluginId": "browser@openai-bundled"},
         {"pluginId": "chrome@openai-bundled"},
         {"pluginId": "computer-use@openai-bundled"},
+        {"pluginId": "visualize@openai-bundled"},
+        {"pluginId": "record-and-replay@openai-bundled"},
+        {"pluginId": "documents@openai-primary-runtime"},
         {"pluginId": "github@openai-api-curated"}
     ]));
     assert_eq!(filtered, json!([{"pluginId": "github@openai-api-curated"}]));
+}
+
+#[test]
+fn plugin_marketplaces_without_supported_items_are_hidden() {
+    let filtered = filter_relay_supported_codex_marketplaces(
+        &json!([
+            {"name": "openai-bundled"},
+            {"name": "openai-primary-runtime"},
+            {"name": "openai-api-curated"}
+        ]),
+        &json!([]),
+        &json!([{
+            "pluginId": "github@openai-api-curated",
+            "marketplaceName": "openai-api-curated"
+        }]),
+    );
+    assert_eq!(filtered, json!([{"name": "openai-api-curated"}]));
 }

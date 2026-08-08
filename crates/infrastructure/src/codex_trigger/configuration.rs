@@ -540,19 +540,22 @@ impl CodexTriggerRunner {
                 30,
             )
             .await?;
+        let installed = plugins
+            .get("installed")
+            .map(filter_relay_supported_codex_plugin_items)
+            .unwrap_or_else(|| json!([]));
+        let available = plugins
+            .get("available")
+            .map(filter_relay_supported_codex_plugin_items)
+            .unwrap_or_else(|| json!([]));
+        let marketplaces = marketplaces
+            .get("marketplaces")
+            .map(|items| filter_relay_supported_codex_marketplaces(items, &installed, &available))
+            .unwrap_or_else(|| json!([]));
         Ok(CodexPluginCatalogDiscovery {
-            installed: plugins
-                .get("installed")
-                .map(filter_relay_supported_codex_plugin_items)
-                .unwrap_or_else(|| json!([])),
-            available: plugins
-                .get("available")
-                .map(filter_relay_supported_codex_plugin_items)
-                .unwrap_or_else(|| json!([])),
-            marketplaces: marketplaces
-                .get("marketplaces")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
+            installed,
+            available,
+            marketplaces,
         })
     }
 
@@ -572,7 +575,7 @@ impl CodexTriggerRunner {
                 validate_plugin_id(plugin_id)?;
                 if operation == "install" && !is_relay_supported_codex_plugin_id(plugin_id) {
                     return Err(AppError::Validation(
-                        "this plugin requires a Codex desktop host and is not available to Relay's Codex CLI runners"
+                        "this plugin requires a Codex app-only host capability or bundled runtime and is not available to Relay's Codex CLI runners"
                             .into(),
                     ));
                 }

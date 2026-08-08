@@ -32,14 +32,22 @@ const SESSION_KIND_ENV: &str = "RELAY_AGENT_SESSION_KIND";
 const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: u64 = 200_000;
 const MAX_STDERR_BYTES: usize = 32 * 1024;
 const MAX_CODEX_JSON_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
-const RELAY_UNSUPPORTED_CODEX_PLUGIN_IDS: [&str; 3] = [
+const RELAY_UNSUPPORTED_CODEX_PLUGIN_IDS: [&str; 10] = [
     "browser@openai-bundled",
     "chrome@openai-bundled",
     "computer-use@openai-bundled",
+    "visualize@openai-bundled",
+    "record-and-replay@openai-bundled",
+    "documents@openai-primary-runtime",
+    "pdf@openai-primary-runtime",
+    "spreadsheets@openai-primary-runtime",
+    "presentations@openai-primary-runtime",
+    "template-creator@openai-primary-runtime",
 ];
 
 pub fn is_relay_supported_codex_plugin_id(plugin_id: &str) -> bool {
-    !RELAY_UNSUPPORTED_CODEX_PLUGIN_IDS.contains(&plugin_id)
+    !plugin_id.ends_with("@openai-primary-runtime")
+        && !RELAY_UNSUPPORTED_CODEX_PLUGIN_IDS.contains(&plugin_id)
 }
 
 pub fn filter_relay_supported_codex_plugin_items(items: &Value) -> Value {
@@ -53,6 +61,34 @@ pub fn filter_relay_supported_codex_plugin_items(items: &Value) -> Value {
                     .get("pluginId")
                     .and_then(Value::as_str)
                     .is_some_and(is_relay_supported_codex_plugin_id)
+            })
+            .cloned()
+            .collect(),
+    )
+}
+
+pub fn filter_relay_supported_codex_marketplaces(
+    marketplaces: &Value,
+    installed: &Value,
+    available: &Value,
+) -> Value {
+    let supported_marketplaces = installed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(available.as_array().into_iter().flatten())
+        .filter_map(|plugin| plugin.get("marketplaceName").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    Value::Array(
+        marketplaces
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|marketplace| {
+                marketplace
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| supported_marketplaces.contains(name))
             })
             .cloned()
             .collect(),

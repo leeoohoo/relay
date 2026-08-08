@@ -389,6 +389,13 @@ pub(super) fn map_company_codex_runner_profile(row: Row) -> CompanyCodexRunnerPr
 pub(super) fn map_codex_plugin_catalog_snapshot(row: Row) -> CodexPluginCatalogSnapshot {
     let installed = row.get::<_, Json<Value>>("installed").0;
     let available = row.get::<_, Json<Value>>("available").0;
+    let installed = crate::codex_trigger::filter_relay_supported_codex_plugin_items(&installed);
+    let available = crate::codex_trigger::filter_relay_supported_codex_plugin_items(&available);
+    let marketplaces = crate::codex_trigger::filter_relay_supported_codex_marketplaces(
+        &row.get::<_, Json<Value>>("marketplaces").0,
+        &installed,
+        &available,
+    );
     CodexPluginCatalogSnapshot {
         runner_id: row.get("runner_id"),
         target_selector: row.get("target_selector"),
@@ -397,9 +404,9 @@ pub(super) fn map_codex_plugin_catalog_snapshot(row: Row) -> CodexPluginCatalogS
         fingerprint: row.get("fingerprint"),
         discovery_status: row.get("discovery_status"),
         diagnostic_message: row.get("diagnostic_message"),
-        installed: crate::codex_trigger::filter_relay_supported_codex_plugin_items(&installed),
-        available: crate::codex_trigger::filter_relay_supported_codex_plugin_items(&available),
-        marketplaces: row.get::<_, Json<Value>>("marketplaces").0,
+        installed,
+        available,
+        marketplaces,
         discovered_at: row.get("discovered_at"),
         updated_at: row.get("updated_at"),
     }
