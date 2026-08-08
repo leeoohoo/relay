@@ -4,7 +4,9 @@ impl CodexTriggerRunner {
     pub async fn run(&self, request: CodexRunRequest) -> AppResult<CodexRunResult> {
         validate_request(&request)?;
         if let Some(thread_id) = request.existing_thread_id.as_deref() {
-            let resumed = self.run_once(&request, Some(thread_id)).await?;
+            let resumed = self
+                .run_once_with_startup_retry(&request, Some(thread_id))
+                .await?;
             if should_replace_session(&resumed) {
                 report_progress(
                     request.progress_handler.as_ref(),
@@ -12,13 +14,32 @@ impl CodexTriggerRunner {
                     "Codex 原会话无法稳定完成，正在创建下一代会话继续处理",
                     Some(thread_id),
                 );
-                let created = self.run_once(&request, None).await?;
+                let created = self.run_once_with_startup_retry(&request, None).await?;
                 return Ok(to_public_result(created, false, true));
             }
             return Ok(to_public_result(resumed, true, false));
         }
-        let created = self.run_once(&request, None).await?;
+        let created = self.run_once_with_startup_retry(&request, None).await?;
         Ok(to_public_result(created, false, false))
+    }
+
+    async fn run_once_with_startup_retry(
+        &self,
+        request: &CodexRunRequest,
+        resume_thread_id: Option<&str>,
+    ) -> AppResult<ProcessOutcome> {
+        let first = self.run_once(request, resume_thread_id).await?;
+        if !should_retry_app_server_startup(&first) {
+            return Ok(first);
+        }
+        report_progress(
+            request.progress_handler.as_ref(),
+            "reconnecting",
+            "Codex 启动连接意外中断，正在自动重试",
+            resume_thread_id,
+        );
+        sleep(Duration::from_secs(1)).await;
+        self.run_once(request, resume_thread_id).await
     }
 
     async fn run_once(
@@ -324,7 +345,7 @@ impl CodexTriggerRunner {
             Some(Ok(Err(error))) => ProcessOutcome {
                 status: CodexRunStatus::Failed,
                 thread_id: resume_thread_id.map(str::to_string),
-                exit_code: Some(1),
+                exit_code: None,
                 final_message: None,
                 error_message: Some(truncate(&sanitize_error(&error.to_string()), 2_000)),
                 turn_started: false,
@@ -365,11 +386,15 @@ impl CodexTriggerRunner {
             }
         };
         let stderr = stderr_task.await.map_err(join_error)??;
-        if outcome.status == CodexRunStatus::Failed
-            && outcome.error_message.is_none()
-            && !stderr.trim().is_empty()
-        {
-            outcome.error_message = Some(truncate(&sanitize_error(&stderr), 2_000));
+        if outcome.status == CodexRunStatus::Failed && !stderr.trim().is_empty() {
+            let stderr = sanitize_error(&stderr);
+            outcome.error_message = Some(truncate(
+                &match outcome.error_message.take() {
+                    Some(message) => format!("{message}; Codex stderr: {stderr}"),
+                    None => stderr,
+                },
+                2_000,
+            ));
         }
         if outcome.exit_code.is_none() {
             outcome.exit_code = exit_status.and_then(|status| status.code());

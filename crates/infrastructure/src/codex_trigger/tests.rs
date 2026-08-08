@@ -413,6 +413,29 @@ fn unresumable_or_terminal_stream_errors_replace_a_session() {
 }
 
 #[test]
+fn only_pre_initialize_app_server_disconnects_are_retried() {
+    assert!(should_retry_app_server_startup(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: Some(70),
+        final_message: None,
+        error_message: Some(
+            "Codex app-server closed before JSON-RPC response 0; Codex stderr: temporary failure"
+                .into(),
+        ),
+        turn_started: false,
+    }));
+    assert!(!should_retry_app_server_startup(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: Some(1),
+        final_message: None,
+        error_message: Some("turn failed".into()),
+        turn_started: true,
+    }));
+}
+
+#[test]
 fn codex_prompt_accepts_multiline_instructions_but_rejects_unsafe_controls() {
     assert!(validate_prompt("先读取 Inbox。\n然后处理任务。\n\t没有任务时结束。").is_ok());
     assert!(validate_prompt("unsafe\rprompt").is_err());
@@ -889,5 +912,79 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-approval"
     assert_eq!(result.thread_id.as_deref(), Some("thread-approval"));
     assert_eq!(result.final_message.as_deref(), Some("push completed"));
     assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    std::fs::remove_dir_all(workspace).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn app_server_retries_once_when_it_exits_before_initialize() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-fake-app-server-retry-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let script = r#"marker="$PWD/app-server-started"
+if [ ! -f "$marker" ]; then
+  touch "$marker"
+  printf '%s\n' 'temporary app-server startup failure' >&2
+  exit 70
+fi
+IFS= read -r initialize
+printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
+IFS= read -r initialized
+IFS= read -r thread
+printf '%s\n' '{"id":1,"result":{"thread":{"id":"thread-retried"},"model":"fake","modelProvider":"fake","cwd":"/tmp","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"readOnlyAccess":{"type":"fullAccess"},"networkAccess":true,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false}}}'
+IFS= read -r turn
+printf '%s\n' '{"id":2,"result":{"turn":{"id":"turn-retried","items":[],"status":"inProgress"}}}'
+printf '%s\n' '{"method":"turn/started","params":{"threadId":"thread-retried","turn":{"id":"turn-retried","items":[],"status":"inProgress"}}}'
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-retried","turnId":"turn-retried","item":{"id":"message-1","type":"agentMessage","text":"startup recovered"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-retried","turn":{"id":"turn-retried","items":[{"id":"message-1","type":"agentMessage","text":"startup recovered"}],"status":"completed"}}}'"#;
+    let script_path = workspace.join("fake-app-server-retry.sh");
+    std::fs::write(&script_path, script).expect("fake app-server retry script");
+    let runner = CodexTriggerRunner::new(
+        PathBuf::from("/bin/sh"),
+        vec![script_path.to_string_lossy().into_owned()],
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    let result = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(runner.run(CodexRunRequest {
+            cwd: workspace.clone(),
+            codex_profile: "default".into(),
+            model: None,
+            reasoning_effort: None,
+            reasoning_summary: Some("auto".into()),
+            verbosity: None,
+            personality: None,
+            service_tier: None,
+            sandbox_mode: "workspace_write".into(),
+            approval_policy: "on-request".into(),
+            network_access: true,
+            web_search: "cached".into(),
+            feature_multi_agent: true,
+            feature_remote_plugin: true,
+            feature_hooks: true,
+            feature_goals: true,
+            feature_shell_tool: true,
+            max_run_seconds: 10,
+            prompt: "retry startup".into(),
+            existing_thread_id: Some("thread-existing".into()),
+            run_token: "art_test".into(),
+            session_kind: "project".into(),
+            environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
+            approval_handler: Some(Arc::new(AcceptingApprovalHandler::default())),
+            progress_handler: None,
+            cancellation_handler: None,
+        }))
+        .expect("app-server startup retry");
+
+    assert_eq!(result.status, CodexRunStatus::Succeeded);
+    assert_eq!(result.thread_id.as_deref(), Some("thread-retried"));
+    assert_eq!(result.final_message.as_deref(), Some("startup recovered"));
+    assert!(result.resumed_existing_session);
     std::fs::remove_dir_all(workspace).expect("cleanup");
 }

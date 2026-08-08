@@ -352,6 +352,17 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
         .any(|marker| message.contains(marker))
 }
 
+pub(super) fn should_retry_app_server_startup(outcome: &ProcessOutcome) -> bool {
+    outcome.status == CodexRunStatus::Failed
+        && !outcome.turn_started
+        && outcome
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("codex app-server closed before json-rpc response 0")
+}
+
 pub(super) fn to_public_result(
     outcome: ProcessOutcome,
     resumed_existing_session: bool,
