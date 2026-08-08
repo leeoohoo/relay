@@ -147,6 +147,8 @@ fn browser_navigation_approval_continues_the_same_app_server_turn() {
     let codex_home = workspace.join("codex-home");
     std::fs::create_dir_all(&codex_home).expect("codex home");
     let script = r#"case "$*" in *'mcp_servers.chrome-devtools.tools.navigate_page.approval_mode="prompt"'*) ;; *) exit 7 ;; esac
+case "$*" in *'approval_policy={ granular = { sandbox_approval = false, rules = false, skill_approval = false, request_permissions = false, mcp_elicitations = true } }'*) ;; *) exit 19 ;; esac
+case "$*" in *'approvals_reviewer="user"'*) ;; *) exit 20 ;; esac
 case "$*" in *'--profile'*) exit 8 ;; esac
 case "$*" in *'plugins."browser@openai-bundled".enabled=false'*) ;; *) exit 11 ;; esac
 case "$*" in *'plugins."chrome@openai-bundled".enabled=false'*) ;; *) exit 12 ;; esac

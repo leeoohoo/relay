@@ -269,7 +269,7 @@ where
     })
 }
 
-fn app_server_approval_policy(request: &CodexRunRequest) -> Value {
+pub(super) fn app_server_approval_policy(request: &CodexRunRequest) -> Value {
     if request.approval_policy == "on-request" {
         return json!("on-request");
     }
@@ -285,6 +285,19 @@ fn app_server_approval_policy(request: &CodexRunRequest) -> Value {
                 .any(ManagedCodexMcpServer::requires_human_approval)
         }
     })
+}
+
+pub(super) fn app_server_approval_policy_config(request: &CodexRunRequest) -> String {
+    if request.approval_policy == "on-request" {
+        return toml_string("on-request");
+    }
+    let mcp_elicitations = request
+        .managed_mcp_servers
+        .iter()
+        .any(ManagedCodexMcpServer::requires_human_approval);
+    format!(
+        "{{ granular = {{ sandbox_approval = false, rules = false, skill_approval = false, request_permissions = false, mcp_elicitations = {mcp_elicitations} }} }}"
+    )
 }
 
 pub(super) async fn handle_app_server_request<W>(
