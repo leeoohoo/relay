@@ -635,7 +635,76 @@ pub(super) fn join_error(error: tokio::task::JoinError) -> AppError {
 }
 
 pub(super) fn sanitize_error(value: &str) -> String {
-    value.replace(['\r', '\n'], " ")
+    let normalized = value.replace(['\r', '\n'], " ");
+    let mut redacted = Vec::new();
+    let mut redact_next = false;
+    for token in normalized.split_whitespace() {
+        let lower = token.to_ascii_lowercase();
+        if redact_next {
+            if lower == "bearer" {
+                redacted.push(token.to_string());
+                continue;
+            }
+            redacted.push("[REDACTED]".to_string());
+            redact_next = false;
+            continue;
+        }
+        if lower == "bearer" {
+            redacted.push(token.to_string());
+            redact_next = true;
+            continue;
+        }
+        if let Some(separator) = sensitive_assignment_separator(&lower) {
+            redacted.push(format!("{}[REDACTED]", &token[..=separator]));
+            continue;
+        }
+        if sensitive_key(&lower) {
+            redacted.push(token.to_string());
+            redact_next = true;
+            continue;
+        }
+        redacted.push(token.to_string());
+    }
+    redacted.join(" ")
+}
+
+fn sensitive_assignment_separator(token: &str) -> Option<usize> {
+    ['=', ':'].into_iter().find_map(|separator| {
+        token.find(separator).and_then(|index| {
+            let key = &token[..index];
+            (index + separator.len_utf8() < token.len() && sensitive_key(key)).then_some(index)
+        })
+    })
+}
+
+fn sensitive_key(value: &str) -> bool {
+    let key = value.trim_matches(|character: char| {
+        matches!(
+            character,
+            '-' | '/' | '\'' | '"' | '{' | '[' | '}' | ']' | ':' | '='
+        )
+    });
+    [
+        "password",
+        "passwd",
+        "token",
+        "secret",
+        "api_key",
+        "apikey",
+        "authorization",
+        "private_key",
+        "client_secret",
+        "client-secret",
+    ]
+    .into_iter()
+    .any(|name| {
+        key == name
+            || key.ends_with(&format!(".{name}"))
+            || key.ends_with(&format!("_{name}"))
+            || key.ends_with(&format!("-{name}"))
+            || key.contains(&format!("?{name}"))
+            || key.contains(&format!("&{name}"))
+    })
 }
 
 pub(super) fn truncate(value: &str, max_characters: usize) -> String {

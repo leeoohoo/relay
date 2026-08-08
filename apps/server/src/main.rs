@@ -20,7 +20,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use futures_util::Stream;
@@ -646,6 +646,7 @@ async fn main() -> anyhow::Result<()> {
             post(rotate_admin_agent_key),
         )
         .route("/api/v1/dev/bootstrap", post(dev_bootstrap_agent))
+        .route("/api/{*path}", any(api_not_found))
         .route_service(STANDARD_MCP_PATH, standard_mcp)
         .fallback_service(
             ServeDir::new(resolve_web_dist_dir())
@@ -675,6 +676,10 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn api_not_found() -> ApiError {
+    ApiError(AppError::NotFound("API route not found".into()))
 }
 
 #[cfg(test)]

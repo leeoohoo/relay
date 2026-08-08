@@ -115,6 +115,45 @@ fn context_compaction_is_reported_as_session_maintenance() {
     assert!(completed.1.contains("已压缩"));
 }
 
+#[test]
+fn agent_messages_report_the_actual_progress_text() {
+    let item = json!({
+        "type": "agent_message",
+        "text": "Production 已进入 Surefire，正在等待目标测试结果。"
+    });
+    let (phase, summary) =
+        summarize_codex_item(&item, true).expect("agent message summary should exist");
+
+    assert_eq!(phase, "reporting");
+    assert_eq!(
+        summary,
+        "Production 已进入 Surefire，正在等待目标测试结果。"
+    );
+}
+
+#[test]
+fn empty_agent_messages_keep_a_useful_fallback() {
+    let (phase, summary) = summarize_codex_item(&json!({ "type": "agentMessage" }), true)
+        .expect("agent message fallback should exist");
+
+    assert_eq!(phase, "reporting");
+    assert_eq!(summary, "Agent 已更新执行进度");
+}
+
+#[test]
+fn progress_text_redacts_common_secret_assignments() {
+    let sanitized = sanitize_error(
+        "mvn -Dflyway.password=wms_dev_password API_TOKEN=abc --client-secret hidden Authorization: Bearer token-value",
+    );
+
+    assert!(sanitized.contains("-Dflyway.password=[REDACTED]"));
+    assert!(sanitized.contains("API_TOKEN=[REDACTED]"));
+    assert!(sanitized.contains("--client-secret [REDACTED]"));
+    assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
+    assert!(!sanitized.contains("wms_dev_password"));
+    assert!(!sanitized.contains("token-value"));
+}
+
 #[derive(Default)]
 struct AcceptingApprovalHandler {
     calls: AtomicUsize,

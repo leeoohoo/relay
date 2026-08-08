@@ -24,9 +24,13 @@ pub(super) async fn process_claimed_trigger(
         Err(error) => TriggerExecution {
             succeeded: false,
             error_message: Some(sanitize_error(&error.to_string())),
+            retry_after_seconds: None,
         },
     };
-    let next_run_at = next_trigger_run_at(&trigger, finished_at, completion.succeeded);
+    let next_run_at = completion
+        .retry_after_seconds
+        .map(|seconds| finished_at + Duration::seconds(seconds))
+        .unwrap_or_else(|| next_trigger_run_at(&trigger, finished_at, completion.succeeded));
     if let Err(error) =
         platform.complete_agent_codex_trigger_lease(CompleteAgentCodexTriggerLeaseInput {
             trigger_config_id: trigger.id,
@@ -133,6 +137,7 @@ pub(super) async fn execute_trigger(
         return Ok(TriggerExecution {
             succeeded: true,
             error_message: None,
+            retry_after_seconds: None,
         });
     }
     if platform.has_running_agent_codex_trigger_run(trigger.agent_profile_id) {
@@ -144,6 +149,7 @@ pub(super) async fn execute_trigger(
         return Ok(TriggerExecution {
             succeeded: true,
             error_message: None,
+            retry_after_seconds: None,
         });
     }
     let agent = platform.get_agent_profile_by_id(trigger.agent_profile_id)?;
@@ -276,6 +282,7 @@ pub(super) async fn execute_trigger(
         .map(|message| truncate(message, 2_000));
 
     let mut worker_failure = None;
+    let mut worker_retry_requested = false;
     let intents = platform.list_agent_execution_intents(
         trigger.agent_profile_id,
         Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
@@ -325,8 +332,43 @@ pub(super) async fn execute_trigger(
                     .as_deref()
                     .map(|message| truncate(message, 2_000));
             }
+            Ok((result, session)) if result.status == CodexRunStatus::TimedOut => {
+                intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+                intent.worker_session_id = Some(session.id);
+                intent.result_summary = result
+                    .final_message
+                    .as_deref()
+                    .map(|message| truncate(message, 4_000))
+                    .unwrap_or_default();
+                intent.error_message =
+                    Some("本轮达到运行时间上限，Relay 将从当前项目会话继续执行".into());
+                intent.claimed_at = None;
+                intent.completed_at = None;
+                platform.update_agent_execution_intent(intent)?;
+                run.project_id = session.project_id;
+                run.codex_thread_id = Some(session.codex_thread_id);
+                run.final_message_summary = result
+                    .final_message
+                    .as_deref()
+                    .map(|message| truncate(message, 2_000));
+                record_run_activity(
+                    platform,
+                    run.id,
+                    "continuing",
+                    "本轮达到运行时间上限，已保存项目会话，将自动继续",
+                    run.codex_thread_id.clone(),
+                );
+                worker_retry_requested = true;
+                worker_failure = Some(result);
+                break;
+            }
             Ok((result, _)) => {
-                intent.status = AGENT_EXECUTION_INTENT_STATUS_FAILED.into();
+                intent.status = if result.status == CodexRunStatus::Cancelled {
+                    AGENT_EXECUTION_INTENT_STATUS_CANCELLED
+                } else {
+                    AGENT_EXECUTION_INTENT_STATUS_FAILED
+                }
+                .into();
                 intent.error_message = result.error_message.clone();
                 intent.result_summary = result.final_message.clone().unwrap_or_default();
                 intent.completed_at = Some(now_utc());
@@ -357,14 +399,16 @@ pub(super) async fn execute_trigger(
         run.error_message = None;
     }
     platform.update_agent_codex_trigger_run(run.clone())?;
-    let final_status = if worker_failure.is_some() {
-        CodexRunStatus::Failed
-    } else {
-        CodexRunStatus::Succeeded
-    };
+    let final_status = worker_failure
+        .as_ref()
+        .map(|result| result.status)
+        .unwrap_or(CodexRunStatus::Succeeded);
     let (final_phase, final_summary) = match final_status {
         CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
         CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
+        CodexRunStatus::TimedOut if worker_retry_requested => {
+            ("continuing", "已保存当前进度，即将从同一项目会话继续")
+        }
         CodexRunStatus::TimedOut => ("timed_out", "Codex 本轮执行超时"),
         CodexRunStatus::Cancelled => ("cancelled", "项目已暂停，Codex 本轮已停止"),
     };
@@ -376,8 +420,11 @@ pub(super) async fn execute_trigger(
         run.codex_thread_id.clone(),
     );
     Ok(TriggerExecution {
-        succeeded: worker_failure.is_none(),
-        error_message: run.error_message,
+        succeeded: worker_failure.is_none() || worker_retry_requested,
+        error_message: (!worker_retry_requested)
+            .then_some(run.error_message)
+            .flatten(),
+        retry_after_seconds: worker_retry_requested.then_some(10),
     })
 }
 
@@ -460,7 +507,10 @@ async fn execute_project_intent(
         run_token,
     )
     .await?;
-    let session = if result.status == CodexRunStatus::Succeeded {
+    let session = if matches!(
+        result.status,
+        CodexRunStatus::Succeeded | CodexRunStatus::TimedOut
+    ) {
         persist_codex_stage_session(
             platform,
             trigger.agent_profile_id,
@@ -688,6 +738,7 @@ fn trigger_execution_from_result(result: &CodexRunResult) -> TriggerExecution {
         error_message: (result.status != CodexRunStatus::Cancelled)
             .then_some(result.error_message.clone())
             .flatten(),
+        retry_after_seconds: None,
     }
 }
 

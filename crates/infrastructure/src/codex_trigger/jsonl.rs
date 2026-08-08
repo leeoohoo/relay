@@ -212,7 +212,7 @@ pub(super) fn summarize_codex_item(item: &Value, completed: bool) -> Option<(Str
         }
         "file_change" | "fileChange" => format!("{completion}修改项目文件"),
         "reasoning" => format!("{completion}分析问题和下一步"),
-        "agent_message" | "agentMessage" => format!("{completion}整理回复和执行结果"),
+        "agent_message" | "agentMessage" => agent_message_summary(item, completed),
         "web_search" | "webSearch" => format!("{completion}搜索资料"),
         "todo_list" | "todoList" => format!("{completion}更新执行计划"),
         "context_compaction" | "contextCompaction" => {
@@ -236,6 +236,19 @@ pub(super) fn summarize_codex_item(item: &Value, completed: bool) -> Option<(Str
         _ => "running",
     };
     Some((phase.into(), summary))
+}
+
+fn agent_message_summary(item: &Value, completed: bool) -> String {
+    let text = item
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    match text {
+        Some(text) => truncate(&sanitize_error(text), 500),
+        None if completed => "Agent 已更新执行进度".into(),
+        None => "Agent 正在说明当前进度".into(),
+    }
 }
 
 pub(super) fn mcp_tool_action(item: &Value) -> Option<String> {
