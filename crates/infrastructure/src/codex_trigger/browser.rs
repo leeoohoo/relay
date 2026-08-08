@@ -130,7 +130,8 @@ impl BrowserMcpConfig {
             format!("--user-data-dir={BROWSER_PROFILE_CONTAINER_PATH}"),
             "--viewport=1440x900".into(),
             "--chrome-arg=--no-sandbox".into(),
-            "--chrome-arg=--host-resolver-rules=MAP localhost host.docker.internal".into(),
+            "--chrome-arg=--host-resolver-rules=MAP 127.0.0.1 host.docker.internal, MAP localhost host.docker.internal".into(),
+            "--chrome-arg=--force-prefers-reduced-motion=reduce".into(),
             "--no-usage-statistics".into(),
             "--no-performance-crux".into(),
             "--allow-unrestricted-paths".into(),
@@ -151,7 +152,7 @@ impl BrowserMcpConfig {
             required: false,
             startup_timeout_sec: Some(90),
             tool_timeout_sec: Some(180),
-            default_tools_approval_mode: "auto".into(),
+            default_tools_approval_mode: "approve".into(),
             tool_approval_modes,
         }))
     }

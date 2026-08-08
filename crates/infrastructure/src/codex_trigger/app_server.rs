@@ -124,10 +124,7 @@ where
             continue;
         }
         if value.get("id").is_some() && value.get("method").is_some() {
-            let item = value
-                .pointer("/params/itemId")
-                .and_then(Value::as_str)
-                .and_then(|item_id| active_mcp_items.get(item_id));
+            let item = active_mcp_item_for_request(&value, &active_mcp_items);
             handle_app_server_request(writer, &value, approval_handler, item).await?;
             continue;
         }
@@ -318,10 +315,14 @@ where
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::Validation("Codex server request had no method".into()))?;
     let params = value.get("params").cloned().unwrap_or_else(|| json!({}));
-    if method == "item/tool/requestUserInput" {
+    if matches!(
+        method,
+        "item/tool/requestUserInput" | "mcpServer/elicitation/request"
+    ) {
         return handle_browser_tool_approval(
             writer,
             rpc_id,
+            method,
             &params,
             active_item,
             approval_handler,
@@ -382,9 +383,10 @@ where
     send_approval_response(writer, rpc_id, method, &params, decision).await
 }
 
-async fn handle_browser_tool_approval<W>(
+pub(super) async fn handle_browser_tool_approval<W>(
     writer: &mut W,
     rpc_id: Value,
+    method: &str,
     params: &Value,
     active_item: Option<&Value>,
     approval_handler: &dyn CodexApprovalHandler,
@@ -392,7 +394,20 @@ async fn handle_browser_tool_approval<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let Some(item) = active_item.filter(|item| is_managed_browser_approval_item(item)) else {
+    if method == "mcpServer/elicitation/request" && !is_mcp_tool_approval_elicitation(params) {
+        return send_json_rpc(
+            writer,
+            &json!({
+                "id": rpc_id,
+                "error": { "code": -32601, "message": "Unsupported MCP elicitation request" }
+            }),
+        )
+        .await;
+    }
+    let managed_item = active_item.filter(|item| is_managed_browser_item(item));
+    let managed_server = managed_item.is_some()
+        || params.get("serverName").and_then(Value::as_str) == Some(MANAGED_BROWSER_MCP_NAME);
+    if !managed_server {
         return send_json_rpc(
             writer,
             &json!({
@@ -401,14 +416,36 @@ where
             }),
         )
         .await;
+    }
+    let Some(tool) = managed_item
+        .and_then(|item| item.get("tool").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| mcp_tool_name_from_params(params))
+    else {
+        return send_json_rpc(
+            writer,
+            &json!({
+                "id": rpc_id,
+                "error": { "code": -32601, "message": "Unsupported managed browser tool request" }
+            }),
+        )
+        .await;
     };
-    let tool = item
-        .get("tool")
-        .and_then(Value::as_str)
-        .unwrap_or("browser");
-    let input = normalized_mcp_arguments(item.get("arguments"));
+    let input = managed_item
+        .map(|item| normalized_mcp_arguments(item.get("arguments")))
+        .or_else(|| params.pointer("/_meta/tool_params").cloned())
+        .unwrap_or_else(|| json!({}));
+    if !requires_browser_human_approval(&tool) {
+        return send_approval_response(
+            writer,
+            rpc_id,
+            method,
+            params,
+            CodexApprovalDecision::Accept,
+        )
+        .await;
+    }
     let url = input.get("url").and_then(Value::as_str).map(str::to_string);
-    let reason = match (tool, url.as_deref()) {
+    let reason = match (tool.as_str(), url.as_deref()) {
         ("navigate_page" | "new_page", Some(url)) => {
             format!("Agent 请求通过浏览器访问 {url}")
         }
@@ -425,7 +462,9 @@ where
             },
             reason,
             arguments: json!({
-                "server": item.get("server").cloned().unwrap_or(Value::Null),
+                "server": managed_item
+                    .and_then(|item| item.get("server").cloned())
+                    .unwrap_or_else(|| json!(MANAGED_BROWSER_MCP_NAME)),
                 "tool": tool,
                 "url": url,
                 "input": input,
@@ -439,7 +478,7 @@ where
             let _ = send_approval_response(
                 writer,
                 rpc_id.clone(),
-                "item/tool/requestUserInput",
+                method,
                 params,
                 CodexApprovalDecision::Decline,
             )
@@ -447,23 +486,65 @@ where
             return Err(error);
         }
     };
-    send_approval_response(
-        writer,
-        rpc_id,
-        "item/tool/requestUserInput",
-        params,
-        decision,
-    )
-    .await
+    send_approval_response(writer, rpc_id, method, params, decision).await
 }
 
-fn is_managed_browser_approval_item(item: &Value) -> bool {
+pub(super) fn active_mcp_item_for_request<'a>(
+    request: &Value,
+    active_mcp_items: &'a HashMap<String, Value>,
+) -> Option<&'a Value> {
+    if let Some(item_id) = request.pointer("/params/itemId").and_then(Value::as_str) {
+        return active_mcp_items.get(item_id);
+    }
+    if request.get("method").and_then(Value::as_str) != Some("mcpServer/elicitation/request") {
+        return None;
+    }
+    let params = request.get("params")?;
+    let server_name = params.get("serverName").and_then(Value::as_str)?;
+    let requested_arguments = params.pointer("/_meta/tool_params");
+    let mut matching_server_items = active_mcp_items.values().filter(|item| {
+        item.get("type").and_then(Value::as_str) == Some("mcpToolCall")
+            && item.get("server").and_then(Value::as_str) == Some(server_name)
+    });
+    if let Some(requested_arguments) = requested_arguments {
+        if let Some(item) = matching_server_items
+            .clone()
+            .find(|item| normalized_mcp_arguments(item.get("arguments")) == *requested_arguments)
+        {
+            return Some(item);
+        }
+    }
+    let item = matching_server_items.next()?;
+    matching_server_items.next().is_none().then_some(item)
+}
+
+fn is_mcp_tool_approval_elicitation(params: &Value) -> bool {
+    params.get("mode").and_then(Value::as_str) == Some("form")
+        && params
+            .pointer("/_meta/codex_approval_kind")
+            .and_then(Value::as_str)
+            == Some("mcp_tool_call")
+}
+
+fn is_managed_browser_item(item: &Value) -> bool {
     item.get("type").and_then(Value::as_str) == Some("mcpToolCall")
         && item.get("server").and_then(Value::as_str) == Some(MANAGED_BROWSER_MCP_NAME)
-        && matches!(
-            item.get("tool").and_then(Value::as_str),
-            Some("navigate_page" | "new_page" | "upload_file")
-        )
+}
+
+fn requires_browser_human_approval(tool: &str) -> bool {
+    matches!(tool, "navigate_page" | "new_page" | "upload_file")
+}
+
+fn mcp_tool_name_from_params(params: &Value) -> Option<String> {
+    for pointer in ["/_meta/tool_name", "/toolName", "/tool"] {
+        if let Some(tool) = params.pointer(pointer).and_then(Value::as_str) {
+            return Some(tool.to_string());
+        }
+    }
+    let message = params.get("message").and_then(Value::as_str)?;
+    let (_, suffix) = message.rsplit_once(" tool ")?;
+    let tool = suffix.trim().trim_end_matches('?').trim();
+    (!tool.is_empty()).then(|| tool.to_string())
 }
 
 fn normalized_mcp_arguments(arguments: Option<&Value>) -> Value {
@@ -502,6 +583,13 @@ where
             json!({ "permissions": permissions, "scope": "turn" })
         }
         "item/tool/requestUserInput" => tool_user_input_response(params, decision),
+        "mcpServer/elicitation/request" => {
+            if decision == CodexApprovalDecision::Accept {
+                json!({ "action": "accept", "content": {}, "_meta": null })
+            } else {
+                json!({ "action": "decline", "content": null, "_meta": null })
+            }
+        }
         "execCommandApproval" | "applyPatchApproval" => {
             if decision == CodexApprovalDecision::Accept {
                 json!({ "decision": "approved" })

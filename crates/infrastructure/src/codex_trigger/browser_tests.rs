@@ -74,8 +74,14 @@ fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
         .iter()
         .any(|argument| argument == "--add-host=host.docker.internal:host-gateway"));
     assert!(first.args.iter().any(|argument| {
-        argument == "--chrome-arg=--host-resolver-rules=MAP localhost host.docker.internal"
+        argument
+            == "--chrome-arg=--host-resolver-rules=MAP 127.0.0.1 host.docker.internal, MAP localhost host.docker.internal"
     }));
+    assert!(first
+        .args
+        .iter()
+        .any(|argument| argument == "--chrome-arg=--force-prefers-reduced-motion=reduce"));
+    assert_eq!(first.default_tools_approval_mode, "approve");
     assert!(first.args.iter().any(|argument| {
         argument.starts_with("--volume=")
             && argument.ends_with(":ro")
@@ -166,9 +172,9 @@ IFS= read -r turn
 case "$turn" in *'"approvalPolicy":{"granular":{"mcp_elicitations":true,"request_permissions":false,"rules":false,"sandbox_approval":false,"skill_approval":false}}'*) ;; *) exit 18 ;; esac
 printf '%s\n' '{"id":2,"result":{"turn":{"id":"turn-browser","items":[],"status":"inProgress"}}}'
 printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-browser","turnId":"turn-browser","item":{"id":"browser-item","type":"mcpToolCall","server":"chrome-devtools","tool":"navigate_page","arguments":{"url":"https://example.com/dashboard"},"status":"inProgress"}}}'
-printf '%s\n' '{"id":99,"method":"item/tool/requestUserInput","params":{"threadId":"thread-browser","turnId":"turn-browser","itemId":"browser-item","questions":[{"id":"approval","header":"Website access","question":"Allow navigation?","options":[{"label":"Accept","description":"Continue"},{"label":"Decline","description":"Stop"}]}]}}'
+printf '%s\n' '{"id":99,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-browser","turnId":"turn-browser","serverName":"chrome-devtools","mode":"form","_meta":{"codex_approval_kind":"mcp_tool_call","tool_params":{"url":"https://example.com/dashboard"}},"message":"Allow the chrome-devtools MCP server to run tool navigate_page?","requestedSchema":{"type":"object","properties":{}}}}'
 IFS= read -r approval
-case "$approval" in *'"answers":{"approval":{"answers":["Accept"]}}'*) ;; *) exit 9 ;; esac
+case "$approval" in *'"action":"accept","content":{}'*) ;; *) exit 9 ;; esac
 printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-browser","turnId":"turn-browser","item":{"id":"browser-item","type":"mcpToolCall","server":"chrome-devtools","tool":"navigate_page","arguments":{"url":"https://example.com/dashboard"},"status":"completed"}}}'
 printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-browser","turnId":"turn-browser","item":{"id":"message-1","type":"agentMessage","text":"browser completed"}}}'
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-browser","turn":{"id":"turn-browser","items":[{"id":"message-1","type":"agentMessage","text":"browser completed"}],"status":"completed"}}}'"#;
@@ -248,4 +254,163 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-browser",
     );
     drop(requests);
     std::fs::remove_dir_all(workspace).expect("cleanup workspace");
+}
+
+#[test]
+fn new_mcp_elicitation_matches_the_active_browser_call_by_arguments() {
+    let first = json!({
+        "id": "first",
+        "type": "mcpToolCall",
+        "server": "chrome-devtools",
+        "tool": "new_page",
+        "arguments": { "url": "https://example.com/first" }
+    });
+    let second = json!({
+        "id": "second",
+        "type": "mcpToolCall",
+        "server": "chrome-devtools",
+        "tool": "new_page",
+        "arguments": { "url": "https://example.com/second" }
+    });
+    let active = HashMap::from([("first".into(), first), ("second".into(), second)]);
+    let request = json!({
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "serverName": "chrome-devtools",
+            "mode": "form",
+            "_meta": {
+                "codex_approval_kind": "mcp_tool_call",
+                "tool_params": { "url": "https://example.com/second" }
+            }
+        }
+    });
+
+    let matched = active_mcp_item_for_request(&request, &active).expect("matching MCP call");
+    assert_eq!(matched.get("id").and_then(Value::as_str), Some("second"));
+}
+
+#[test]
+fn new_mcp_elicitation_response_uses_codex_v2_shape() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let mut accepted = Vec::new();
+    runtime
+        .block_on(send_approval_response(
+            &mut accepted,
+            json!(99),
+            "mcpServer/elicitation/request",
+            &json!({}),
+            CodexApprovalDecision::Accept,
+        ))
+        .expect("accept response");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&accepted).expect("accept JSON"),
+        json!({
+            "id": 99,
+            "result": { "action": "accept", "content": {}, "_meta": null }
+        })
+    );
+
+    let mut declined = Vec::new();
+    runtime
+        .block_on(send_approval_response(
+            &mut declined,
+            json!(100),
+            "mcpServer/elicitation/request",
+            &json!({}),
+            CodexApprovalDecision::Decline,
+        ))
+        .expect("decline response");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&declined).expect("decline JSON"),
+        json!({
+            "id": 100,
+            "result": { "action": "decline", "content": null, "_meta": null }
+        })
+    );
+}
+
+#[test]
+fn managed_browser_follow_up_tools_are_accepted_without_another_human_approval() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let handler = CapturingApprovalHandler::default();
+    let item = json!({
+        "id": "snapshot-item",
+        "type": "mcpToolCall",
+        "server": "chrome-devtools",
+        "tool": "take_snapshot",
+        "arguments": {}
+    });
+    let params = json!({
+        "serverName": "chrome-devtools",
+        "mode": "form",
+        "_meta": {
+            "codex_approval_kind": "mcp_tool_call",
+            "tool_params": {}
+        }
+    });
+    let mut response = Vec::new();
+
+    runtime
+        .block_on(handle_browser_tool_approval(
+            &mut response,
+            json!(101),
+            "mcpServer/elicitation/request",
+            &params,
+            Some(&item),
+            &handler,
+        ))
+        .expect("follow-up browser approval response");
+
+    assert_eq!(
+        serde_json::from_slice::<Value>(&response).expect("response JSON"),
+        json!({
+            "id": 101,
+            "result": { "action": "accept", "content": {}, "_meta": null }
+        })
+    );
+    assert!(handler
+        .requests
+        .lock()
+        .expect("approval requests")
+        .is_empty());
+}
+
+#[test]
+fn managed_browser_follow_up_approval_survives_missing_item_started_event() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let handler = CapturingApprovalHandler::default();
+    let params = json!({
+        "serverName": "chrome-devtools",
+        "mode": "form",
+        "message": "Allow the chrome-devtools MCP server to run tool evaluate_script?",
+        "_meta": {
+            "codex_approval_kind": "mcp_tool_call",
+            "tool_params": { "function": "() => document.title" }
+        }
+    });
+    let mut response = Vec::new();
+
+    runtime
+        .block_on(handle_browser_tool_approval(
+            &mut response,
+            json!(102),
+            "mcpServer/elicitation/request",
+            &params,
+            None,
+            &handler,
+        ))
+        .expect("follow-up browser approval response");
+
+    assert_eq!(
+        serde_json::from_slice::<Value>(&response).expect("response JSON"),
+        json!({
+            "id": 102,
+            "result": { "action": "accept", "content": {}, "_meta": null }
+        })
+    );
+    assert!(handler
+        .requests
+        .lock()
+        .expect("approval requests")
+        .is_empty());
 }
