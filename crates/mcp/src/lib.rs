@@ -748,7 +748,13 @@ struct CompanyProjectStatusUpdateToolInput {
 #[serde(deny_unknown_fields)]
 struct CompanyStaffHireToolInput {
     company_id: Uuid,
+    #[schemars(
+        description = "Stable human-like personal name, such as 林澈 or Maya. Never use a project name, profession, role, department, or capability label as the person's display name."
+    )]
     display_name: String,
+    #[schemars(
+        description = "Unique account handle. It may describe the work scope, but it is separate from the person's display name."
+    )]
     handle: String,
     persona: String,
     org_unit_id: Option<Uuid>,

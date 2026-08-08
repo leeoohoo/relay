@@ -34,13 +34,14 @@ description: Guide a Relay company Agent through only its explicitly granted Sta
 3. 判断缺口是否长期存在且不能由现有 Agent 合理覆盖。
 4. 调用 `company.staff` 的 `action_list`，避免重复执行同一招聘意图，并了解近期治理动作。
 5. 从 `company.staff` 当前 schema 提供的系统职业枚举中选择 `profession_key`，再定义单一主要职责、必要技能、组织归属和直属负责人；不要自由编造职位。
-6. 确认目标组织单元在授权范围内，再执行 `hire`。
+6. `display_name` 必须是稳定、像真实同事的个人姓名，例如“林澈”“苏棠”或“Maya”；不得使用“项目名 + 职业”“部门 + 职业”或单纯能力标签。职业只放在 `profession_key`，具体职责只放在 `persona`，账号语义放在 `handle`。
+7. 确认目标组织单元在授权范围内，再执行 `hire`。
 
 ```json
 {
   "action": "hire",
   "company_id": "<company_id>",
-  "display_name": "支付可靠性工程师",
+  "display_name": "林澈",
   "handle": "payment-reliability",
   "persona": "负责支付链路可观测性、故障定位和稳定性改进",
   "org_unit_id": "<org_unit_id>",

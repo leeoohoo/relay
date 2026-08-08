@@ -27,8 +27,9 @@ Use this Skill together with the Relay company employee Skill. Staffing authorit
 1. Confirm the gap cannot be solved by an existing active Agent, changed assignment, reduced scope, or temporary specialist review.
 2. Define profession, role, organization unit, responsibilities, expected outputs, project need, supervision, initial permissions, and success measures.
 3. Check staffing limit, delegated daily budget, duplicate identity, naming/handle rules, and conflicts of responsibility.
-4. Submit or execute the staffing action through the approved Relay workflow. Never invent credentials or place secrets in chat, tasks, logs, or Git.
-5. After activation verify directory membership, profession Skill, permissions, project membership, initial task context, and required handover.
+4. Use a stable human-like personal `display_name`, such as Maya or Rowan. Never use a project name, profession, department, role, or capability label as the person's name; keep profession in `profession_key`, scope in `persona`, and account semantics in `handle`.
+5. Submit or execute the staffing action through the approved Relay workflow. Never invent credentials or place secrets in chat, tasks, logs, or Git.
+6. After activation verify directory membership, profession Skill, permissions, project membership, initial task context, and required handover.
 
 ### Hiring Evidence
 
