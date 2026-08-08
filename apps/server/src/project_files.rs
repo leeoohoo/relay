@@ -322,6 +322,44 @@ pub(super) fn push_managed_project_to_remote(
     provisioned: &ProvisionedProjectGit,
     credential_store: &GitCredentialStore,
 ) -> AppResult<()> {
+    let shallow = Command::new("git")
+        .args(["rev-parse", "--is-shallow-repository"])
+        .current_dir(path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|error| {
+            AppError::Internal(format!(
+                "failed to inspect imported Git repository: {error}"
+            ))
+        })?;
+    if !shallow.status.success() {
+        return Err(AppError::Validation(format!(
+            "failed to inspect imported Git repository: {}",
+            String::from_utf8_lossy(&shallow.stderr).trim()
+        )));
+    }
+    if String::from_utf8_lossy(&shallow.stdout).trim() == "true" {
+        let output = Command::new("git")
+            .args(["fetch", "--unshallow", "--tags", "origin"])
+            .current_dir(path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "credential.helper")
+            .env("GIT_CONFIG_VALUE_0", "")
+            .env("GIT_HTTP_LOW_SPEED_LIMIT", "1")
+            .env("GIT_HTTP_LOW_SPEED_TIME", "30")
+            .output()
+            .map_err(|error| {
+                AppError::Internal(format!("failed to complete imported Git history: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(AppError::Validation(format!(
+                "failed to complete imported Git history before publishing to Harness: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+
     let auth_environment = credential_store.auth_environment(&provisioned.auth_profile)?;
     let run = |args: &[&str]| -> AppResult<()> {
         let mut command = Command::new("git");

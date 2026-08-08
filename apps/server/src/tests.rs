@@ -152,6 +152,99 @@ fn imported_project_is_published_to_the_provisioned_remote() {
 }
 
 #[test]
+fn shallow_git_import_is_completed_before_harness_publish() {
+    let root = std::env::temp_dir().join(format!("relay-shallow-publish-{}", Uuid::new_v4()));
+    let source = root.join("source");
+    let project = root.join("project");
+    let remote = root.join("remote.git");
+    fs::create_dir_all(&source).expect("source directory");
+
+    let run = |path: &FsPath, args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("git command should start");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&source, &["init", "-b", "main"]);
+    run(&source, &["config", "user.name", "Relay Test"]);
+    run(
+        &source,
+        &["config", "user.email", "relay-test@local.invalid"],
+    );
+    fs::write(source.join("README.md"), "first\n").expect("first revision");
+    run(&source, &["add", "README.md"]);
+    run(&source, &["commit", "-m", "first"]);
+    fs::write(source.join("README.md"), "second\n").expect("second revision");
+    run(&source, &["commit", "-am", "second"]);
+
+    let clone = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "--single-branch",
+            "--branch",
+            "main",
+            &format!("file://{}", source.display()),
+            project.to_str().expect("project path"),
+        ])
+        .output()
+        .expect("shallow clone should start");
+    assert!(
+        clone.status.success(),
+        "shallow clone failed: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+
+    let init_remote = Command::new("git")
+        .args(["init", "--bare", remote.to_str().expect("remote path")])
+        .output()
+        .expect("bare remote initialization");
+    assert!(init_remote.status.success());
+
+    let project_id = Uuid::new_v4();
+    let credential_store = GitCredentialStore::at(root.join("credentials")).expect("credentials");
+    let auth_profile = credential_store
+        .store_managed_git_token(
+            project_id,
+            "relay-test",
+            "test-token-with-more-than-20-characters",
+        )
+        .expect("managed token");
+    let provisioned = ProvisionedProjectGit {
+        remote_url: format!("file://{}", remote.display()),
+        push_url: None,
+        default_branch: "main".into(),
+        auth_profile,
+        repository_identifier: "shallow-imported-project".into(),
+    };
+
+    push_managed_project_to_remote(&project, &provisioned, &credential_store)
+        .expect("shallow project publish");
+
+    let count = Command::new("git")
+        .args([
+            "--git-dir",
+            remote.to_str().expect("remote path"),
+            "rev-list",
+            "--count",
+            "main",
+        ])
+        .output()
+        .expect("read remote history");
+    assert!(count.status.success());
+    assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "2");
+    fs::remove_dir_all(root).expect("test publish should be removable");
+}
+
+#[test]
 fn uploaded_project_paths_are_normalized_and_exclude_generated_directories() {
     assert_eq!(
         normalize_uploaded_project_path("src\\main.rs").expect("valid path"),
