@@ -12,6 +12,13 @@ import type { HumanUser } from "../types/appShell";
 import type { Conversation, Message, PendingMessageFile } from "../types/chat";
 import type { CompanyAgent, CompanyConsole } from "../types/platform";
 
+type MessageEntityReference = {
+  id: string;
+  kind: "agent" | "project" | "task";
+  label: string;
+  projectId?: string;
+};
+
 export function MessagesView(props: {
   consoleData: CompanyConsole;
   humanUser: HumanUser;
@@ -49,6 +56,35 @@ export function MessagesView(props: {
   const activeAgents = props.consoleData.agents.filter((agent) => agent.membership.employment_status === "active");
   const agentNames = useMemo(() => new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent.agent_profile.display_name])), [props.consoleData.agents]);
   const agentDirectory = useMemo(() => new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent])), [props.consoleData.agents]);
+  const messageEntityReferences = useMemo(() => {
+    const references = new Map<string, MessageEntityReference>();
+    for (const agent of props.consoleData.agents) {
+      const reference = {
+        id: agent.agent_profile.id,
+        kind: "agent" as const,
+        label: `Agent：${agent.agent_profile.display_name}`,
+      };
+      references.set(agent.agent_profile.id, reference);
+      references.set(agent.membership.id, { ...reference, id: agent.membership.id });
+    }
+    for (const project of props.consoleData.projects) {
+      references.set(project.project.id, {
+        id: project.project.id,
+        kind: "project",
+        label: `项目：${project.project.name}`,
+        projectId: project.project.id,
+      });
+      for (const task of project.tasks) {
+        references.set(task.id, {
+          id: task.id,
+          kind: "task",
+          label: `任务：${task.title}`,
+          projectId: project.project.id,
+        });
+      }
+    }
+    return references;
+  }, [props.consoleData.agents, props.consoleData.projects]);
   const visibleConversations = useMemo(() => {
     const query = conversationQuery.trim().toLocaleLowerCase();
     if (!query) return props.consoleData.conversations;
@@ -353,7 +389,17 @@ export function MessagesView(props: {
                 <span className="agent-avatar small">{senderName.slice(0, 1)}</span>
                 <div className="message-body">
                   <header className="message-meta"><strong>{senderName}{isHuman ? " · Human" : ""}</strong><time>{formatTime(message.created_at)}</time></header>
-                  {message.content ? <div className="message-bubble">{renderMessageContent(message.content, selectedConversationAgents)}</div> : null}
+                  {message.content ? <div className="message-bubble">{renderMessageContent(
+                    message.content,
+                    selectedConversationAgents,
+                    messageEntityReferences,
+                    selectedProject?.project.id ?? null,
+                    (reference) => {
+                      if (reference.kind === "task" && reference.projectId === selectedProject?.project.id) {
+                        openProjectTask(reference.id);
+                      }
+                    },
+                  )}</div> : null}
                   <MessageAttachments message={message} token={props.token} onError={props.onError} />
                 </div>
               </article>;
@@ -452,7 +498,13 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function renderMessageContent(content: string, agents: CompanyAgent[]): ReactNode {
+function renderMessageContent(
+  content: string,
+  agents: CompanyAgent[],
+  entityReferences: Map<string, MessageEntityReference>,
+  activeProjectId: string | null,
+  onEntityClick: (reference: MessageEntityReference) => void,
+): ReactNode {
   const mentionTokens = Array.from(new Set([
     "所有人",
     ...agents.flatMap((agent) => [
@@ -460,13 +512,40 @@ function renderMessageContent(content: string, agents: CompanyAgent[]): ReactNod
       agent.agent_profile.handle.replace(/^@/, ""),
     ]),
   ])).filter(Boolean).sort((left, right) => right.length - left.length);
-  const inlinePattern = new RegExp(`(\`[^\`]+\`|https?:\\/\\/[^\\s]+${mentionTokens.length ? `|@(?:${mentionTokens.map(escapeRegExp).join("|")})` : ""})`, "gu");
-  const renderInline = (value: string, keyPrefix: string) => value.split(inlinePattern).map((part, index) => {
-    if (part.startsWith("@")) return <mark className="message-mention" key={`${keyPrefix}-${index}`}>{part}</mark>;
-    if (part.startsWith("`") && part.endsWith("`")) return <code key={`${keyPrefix}-${index}`}>{part.slice(1, -1)}</code>;
-    if (/^https?:\/\//u.test(part)) return <a href={part} target="_blank" rel="noreferrer" key={`${keyPrefix}-${index}`}>{part}</a>;
-    return part;
-  });
+  const uuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}";
+  const uuidOnlyPattern = new RegExp(`^${uuidPattern}$`, "u");
+  const inlinePattern = new RegExp(`(\`[^\`]+\`|https?:\\/\\/[^\\s]+${mentionTokens.length ? `|@(?:${mentionTokens.map(escapeRegExp).join("|")})` : ""}|${uuidPattern})`, "gu");
+  const renderInline = (value: string, keyPrefix: string) => {
+    const parts = value.split(inlinePattern);
+    return parts.map((part, index) => {
+      if (part.startsWith("@")) return <mark className="message-mention" key={`${keyPrefix}-${index}`}>{part}</mark>;
+      const codeValue = part.startsWith("`") && part.endsWith("`") ? part.slice(1, -1) : null;
+      const referenceId = codeValue && uuidOnlyPattern.test(codeValue)
+        ? codeValue
+        : uuidOnlyPattern.test(part) ? part : null;
+      if (referenceId) {
+        const reference = entityReferences.get(referenceId);
+        const previousText = parts.slice(0, index).join("");
+        const fallbackLabel = /intent\s*$/iu.test(previousText) ? "工作派发记录" : "系统记录";
+        const label = reference?.label ?? fallbackLabel;
+        const clickable = reference?.kind === "task" && reference.projectId === activeProjectId;
+        return clickable ? (
+          <button
+            className={`message-entity-reference ${reference.kind}`}
+            key={`${keyPrefix}-${index}`}
+            type="button"
+            title={`${label}\nID：${referenceId}`}
+            onClick={() => onEntityClick(reference)}
+          >{label}</button>
+        ) : (
+          <span className={`message-entity-reference ${reference?.kind ?? "record"}`} key={`${keyPrefix}-${index}`} title={`${label}\nID：${referenceId}`}>{label}</span>
+        );
+      }
+      if (codeValue !== null) return <code key={`${keyPrefix}-${index}`}>{codeValue}</code>;
+      if (/^https?:\/\//u.test(part)) return <a href={part} target="_blank" rel="noreferrer" key={`${keyPrefix}-${index}`}>{part}</a>;
+      return part;
+    });
+  };
   return <div className="message-rich-text">{content.trim().split(/\n{2,}/u).map((block, blockIndex) => {
     const lines = block.split("\n").filter((line) => line.trim());
     const numbered = lines.length > 1 && lines.every((line) => /^\s*\d+[.)]\s+/u.test(line));

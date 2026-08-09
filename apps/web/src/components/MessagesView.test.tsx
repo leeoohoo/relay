@@ -7,6 +7,7 @@ import { MessagesView } from "./MessagesView";
 vi.mock("../api/client", () => ({ api: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
+const taskId = "6c3a8ead-68bb-4e9d-9e79-45b31f4762ef";
 
 const trigger: CodexTriggerView = {
   runner_profile_id: "profile-1",
@@ -120,7 +121,7 @@ const consoleData: CompanyConsole = {
     asset_refresh: null,
     members: [],
     tasks: [{
-      id: "task-1",
+      id: taskId,
       project_id: "project-1",
       title: "实现库存工作台",
       description: "",
@@ -157,6 +158,53 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
+  it("shows entity names instead of raw UUIDs in chat messages", async () => {
+    const intentId = "d7225caf-9e91-457e-a3fa-bd95a177d42b";
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) {
+        return {
+          messages: [{
+            id: "message-entity-reference",
+            conversation_id: "conversation-1",
+            sender_agent_id: "agent-1",
+            sender_human_user_id: null,
+            content: `任务 \`${taskId}\` 已完成，我已派发 Intent \`${intentId}\`。`,
+            attachments: [],
+            created_at: "2026-08-07T03:05:00Z",
+          }],
+          next_cursor: null,
+          has_more: false,
+        };
+      }
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    const taskReference = await screen.findByRole("button", { name: "任务：实现库存工作台" });
+    expect(taskReference.getAttribute("title")).toContain(taskId);
+    expect(screen.getByText("工作派发记录").getAttribute("title")).toContain(intentId);
+    expect(screen.queryByText(taskId)).not.toBeInTheDocument();
+    expect(screen.queryByText(intentId)).not.toBeInTheDocument();
+
+    fireEvent.click(taskReference);
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /实现库存工作台/ })
+      .find((element) => element.getAttribute("aria-pressed") === "true")).toBeInTheDocument();
+  });
+
   it("opens the current project directory and task list without leaving chat", async () => {
     const { container } = render(
       <MessagesView

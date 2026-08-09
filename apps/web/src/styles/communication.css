@@ -186,6 +186,44 @@
   background: rgba(168, 255, 96, .055);
   font: .92em/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+.message-entity-reference {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 420px);
+  margin: 0 1px;
+  border: 1px solid rgba(77, 226, 255, .16);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: #b9eef4;
+  background: rgba(77, 226, 255, .065);
+  font-family: inherit;
+  font-size: .92em;
+  font-weight: 600;
+  line-height: 1.45;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.message-entity-reference {
+  cursor: pointer;
+}
+button.message-entity-reference:hover,
+button.message-entity-reference:focus-visible {
+  border-color: rgba(77, 226, 255, .34);
+  color: #e5fbff;
+  background: rgba(77, 226, 255, .12);
+}
+.message-entity-reference.task {
+  border-color: rgba(168, 255, 96, .16);
+  color: #c9f5ad;
+  background: rgba(168, 255, 96, .065);
+}
+.message-entity-reference.record {
+  color: #b6c3cc;
+  border-color: rgba(145, 163, 177, .16);
+  background: rgba(145, 163, 177, .06);
+}
 .message-rich-text a {
   color: #6fe7f5;
   text-decoration: none;
