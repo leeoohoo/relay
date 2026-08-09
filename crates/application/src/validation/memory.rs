@@ -171,24 +171,79 @@ pub(crate) fn validate_agent_memory_source_refs(
             "an Agent memory supports at most 20 source references".into(),
         ));
     }
-    for source in source_refs {
+    for (index, source) in source_refs.iter().enumerate() {
         if !matches!(
             source.source_type.as_str(),
-            "message" | "task" | "run" | "project" | "human" | "manual"
+            "message" | "task" | "run" | "project" | "human" | "git_commit" | "manual"
         ) {
-            return Err(AppError::Validation(
-                "memory source_type must be message, task, run, project, human, or manual".into(),
-            ));
+            return Err(AppError::Validation(format!(
+                "memory source_refs[{index}].source_type must be message, task, run, project, human, git_commit, or manual"
+            )));
+        }
+        let source_id = source.source_id.trim();
+        if matches!(
+            source.source_type.as_str(),
+            "message" | "task" | "run" | "project" | "human"
+        ) {
+            Uuid::parse_str(source_id).map_err(|_| {
+                AppError::Validation(format!(
+                    "memory source_refs[{index}].source_id must be a canonical Relay UUID when source_type is {}",
+                    source.source_type
+                ))
+            })?;
+        } else if source.source_type == "git_commit" {
+            if !(7..=64).contains(&source_id.len())
+                || !source_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(AppError::Validation(format!(
+                    "memory source_refs[{index}].source_id must be a 7 to 64 character hexadecimal Git object ID when source_type is git_commit"
+                )));
+            }
+        } else if source_id.is_empty()
+            || source_id.chars().count() > 200
+            || source_id.chars().any(char::is_control)
+        {
+            return Err(AppError::Validation(format!(
+                "memory source_refs[{index}].source_id must contain 1 to 200 non-control characters when source_type is manual"
+            )));
         }
         if source
             .label
             .as_ref()
             .is_some_and(|label| label.chars().count() > 200)
         {
-            return Err(AppError::Validation(
-                "memory source label must not exceed 200 characters".into(),
-            ));
+            return Err(AppError::Validation(format!(
+                "memory source_refs[{index}].label must not exceed 200 characters"
+            )));
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_reference_validation_accepts_git_commit_sha() {
+        validate_agent_memory_source_refs(&[AgentMemorySourceRef {
+            source_type: "git_commit".into(),
+            source_id: "7ed28bec6af9d8cbd8b438f371bd70299a0c4858".into(),
+            label: Some("QA evidence commit".into()),
+        }])
+        .expect("a full Git commit SHA should be accepted");
+    }
+
+    #[test]
+    fn source_reference_validation_names_invalid_internal_id_field() {
+        let error = validate_agent_memory_source_refs(&[AgentMemorySourceRef {
+            source_type: "task".into(),
+            source_id: "T06-not-a-relay-uuid".into(),
+            label: None,
+        }])
+        .expect_err("a composite task reference should be rejected");
+
+        assert!(error.to_string().contains("source_refs[0].source_id"));
+        assert!(error.to_string().contains("canonical Relay UUID"));
+    }
 }

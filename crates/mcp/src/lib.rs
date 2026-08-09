@@ -203,8 +203,14 @@ enum AgentMemoryOperation {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct AgentMemorySourceRefToolInput {
+    #[schemars(
+        description = "Source kind. Internal Relay objects use message, task, run, project, or human; Git evidence uses git_commit; manual is reserved for a stable caller-defined reference."
+    )]
     source_type: String,
-    source_id: Uuid,
+    #[schemars(
+        description = "Stable source identifier. Use a canonical Relay UUID for message/task/run/project/human, a 7-64 character hexadecimal Git object ID for git_commit, or a non-empty caller-defined identifier for manual. Do not concatenate labels or prefixes with a Relay UUID."
+    )]
+    source_id: String,
     label: Option<String>,
 }
 

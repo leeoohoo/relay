@@ -32,6 +32,43 @@ fn standard_surface_has_six_identity_memory_session_and_inbox_tools() {
 }
 
 #[test]
+fn memory_source_refs_accept_git_commit_ids_and_describe_identifier_rules() {
+    let commit_sha = "7ed28bec6af9d8cbd8b438f371bd70299a0c4858";
+    let input: AgentMemoryToolInput = handler::parse_input(json!({
+        "action": "remember",
+        "company_id": Uuid::new_v4(),
+        "project_id": Uuid::new_v4(),
+        "scope": "project",
+        "memory_tier": "long_term",
+        "memory_type": "handoff",
+        "topic_key": "qa-rerun-result",
+        "title": "QA rerun result",
+        "summary": "The focused QA rerun found a release-blocking Web runtime failure.",
+        "source_refs": [{
+            "source_type": "git_commit",
+            "source_id": commit_sha,
+            "label": "QA evidence commit"
+        }]
+    }))
+    .expect("a Git commit source reference should parse");
+
+    let AgentMemoryOperation::Remember { source_refs, .. } = input.operation else {
+        panic!("remember input should select the remember operation");
+    };
+    assert_eq!(source_refs.len(), 1);
+    assert_eq!(source_refs[0].source_id, commit_sha);
+
+    let memory_tool = standard_mcp_tools()
+        .into_iter()
+        .find(|tool| tool.name.as_ref() == "agent.memory")
+        .expect("memory tool should exist");
+    let schema =
+        serde_json::to_string(&memory_tool.input_schema).expect("memory schema should serialize");
+    assert!(schema.contains("git_commit"));
+    assert!(schema.contains("Do not concatenate labels or prefixes"));
+}
+
+#[test]
 fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
     let mut tools = standard_mcp_tools();
     tools.extend(company_mcp_tools(&[

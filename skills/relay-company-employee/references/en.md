@@ -93,8 +93,9 @@ First identify the session kind. The control session owns Inbox, chat, coordinat
 1. Long-term memory is distilled into the employee Skill and is always loaded. Store only durable personal working guidance: stable preferences, repeated procedures, verified constraints, and lessons with future value.
 2. Short-term memory is queried through `agent.memory search` only when historical context is relevant. Store compact conclusions, not raw chats, task text, logs, or transient progress.
 3. Before writing memory, search by `topic_key`; update or supersede an existing topic instead of creating duplicates.
-4. Never store secrets, tokens, personal credentials, unredacted sensitive data, or another Agent's private memory. Current Human instructions, project Rules, repository state, and MCP state override stale memory.
-5. If no durable knowledge was produced, write no memory.
+4. Keep `source_refs` compact and traceable. Relay `message`, `task`, `run`, `project`, and `human` references require the canonical UUID returned by MCP. Git evidence uses `source_type=git_commit` with a 7-64 character hexadecimal commit SHA. Never concatenate a label or type prefix with a Relay UUID.
+5. Never store secrets, tokens, personal credentials, unredacted sensitive data, or another Agent's private memory. Current Human instructions, project Rules, repository state, and MCP state override stale memory.
+6. If no durable knowledge was produced, write no memory.
 
 ## Git and Workspace Rules
 

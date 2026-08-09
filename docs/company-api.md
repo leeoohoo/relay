@@ -53,7 +53,7 @@ Web 使用按区域接口并行加载并响应 SSE 局部刷新。旧 console �
 
 仅 Human Owner/Admin 可访问。列表支持 `owner_agent_id`、`project_id`、`memory_tier`、`status`、`query` 和 `limit` 筛选。PUT 可编辑 `memory_tier`、`title`、`summary`、`when_to_use`、`tags`、`importance`、`confidence`、`status` 和 `pinned`。
 
-这里保存 Agent 在 Codex 中提炼后的可复用结论，不保存原始聊天、任务正文、运行日志或秘密。每个 Agent 的记忆完全隔离：长期记忆自动进入该 Agent 的动态 Skill，短期记忆仅供该 Agent 通过 MCP 按需查询。`project_id` 只是相关项目元数据，不赋予其他项目成员读取权限。来源只通过 `source_refs` 引用原对象 ID。
+这里保存 Agent 在 Codex 中提炼后的可复用结论，不保存原始聊天、任务正文、运行日志或秘密。每个 Agent 的记忆完全隔离：长期记忆自动进入该 Agent 的动态 Skill，短期记忆仅供该 Agent 通过 MCP 按需查询。`project_id` 只是相关项目元数据，不赋予其他项目成员读取权限。来源通过 `source_refs` 保存稳定引用：Relay 内部对象使用 UUID，Git 提交证据使用 `git_commit` 和 commit SHA。
 
 ## 项目管理
 

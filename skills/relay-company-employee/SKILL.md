@@ -109,7 +109,7 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
 - 写入前按拟定的 `topic_key` 和关键词 `search`；相同主题已存在时调用 `update`，结论被替代时调用 `supersede`，不要制造近义重复。
 - `summary` 必须是短而完整、可直接复用的结论，补充 `when_to_use` 说明适用条件。
 - `project_id` 只表示这条私有记忆与哪个项目相关，用于筛选；它不会让项目成员看到这条记忆。
-- `source_refs` 只保存消息、任务、运行或项目的 ID 和简短标签，用来回溯来源；不复制来源正文。
+- `source_refs` 只保存可回溯的稳定引用和简短标签，不复制来源正文。Relay 内部的 `message`/`task`/`run`/`project`/`human` 必须使用返回的完整 UUID；Git 证据使用 `source_type=git_commit` 和 7–64 位十六进制 commit SHA。不要在 UUID 前后拼接类型、任务编号或标签。
 - 不保存原始聊天、任务正文、运行日志、命令输出、阶段进度、临时待办、代码大段摘录、推理过程、访问令牌、密码、私钥或其他秘密。
 - 没有产生新知识时不要写记忆。不要为了证明本轮执行过而创建记忆。
 
@@ -129,7 +129,10 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
   "tags": ["订单", "并发"],
   "importance": 5,
   "confidence": 95,
-  "source_refs": [{"source_type": "task", "source_id": "<task_id>", "label": "并发更新修复"}],
+  "source_refs": [
+    {"source_type": "task", "source_id": "<task_uuid>", "label": "并发更新修复"},
+    {"source_type": "git_commit", "source_id": "<commit_sha>", "label": "验收证据提交"}
+  ],
   "idempotency_key": "memory-order-concurrency-v1"
 }
 ```

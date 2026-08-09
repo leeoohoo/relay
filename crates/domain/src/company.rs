@@ -403,7 +403,7 @@ pub struct CompanyProjectAssetRefreshConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentMemorySourceRef {
     pub source_type: String,
-    pub source_id: Uuid,
+    pub source_id: String,
     pub label: Option<String>,
 }
 
