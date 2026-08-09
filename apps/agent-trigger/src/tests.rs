@@ -238,13 +238,33 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(chinese.contains("不调用 `agent.inbox.wait`"));
     assert!(chinese.contains("统一留给控制会话"));
     assert!(chinese.contains("必须使用 Relay 托管的 `chrome-devtools` MCP"));
+    assert!(chinese.contains("`.relay/browser-artifacts/`"));
     assert!(chinese.contains("不得改用 Codex 桌面 Browser/Chrome"));
 
     let english = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "en");
     assert!(english.contains("Ignore `inbox_notice`"));
     assert!(english.contains("control session"));
     assert!(english.contains("Relay-managed `chrome-devtools` MCP"));
+    assert!(english.contains("`.relay/browser-artifacts/`"));
     assert!(english.contains("Do not use Codex desktop Browser/Chrome"));
+}
+
+#[test]
+fn managed_browser_artifacts_are_excluded_from_project_git_status() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-browser-artifact-exclude-test-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&workspace).expect("test workspace should be created");
+
+    exclude_managed_skills_from_git(&workspace, "relay-test-")
+        .expect("managed runtime paths should be excluded");
+
+    let exclude = fs::read_to_string(workspace.join(".relay-git/info/exclude"))
+        .expect("exclude file should exist");
+    assert!(exclude.contains("/.agents/skills/relay-test-*/"));
+    assert!(exclude.contains("/.relay/browser-artifacts/"));
+    fs::remove_dir_all(workspace).expect("test workspace should be removed");
 }
 
 #[test]

@@ -51,20 +51,28 @@ fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
         .managed_browser_mcp_server(company, agent, second_project, &workspace)
         .expect("second browser MCP")
         .expect("enabled browser MCP");
-    let first_mount = first
+    let first_profile_mount = first
         .args
         .iter()
-        .find(|argument| argument.starts_with("--volume="))
+        .find(|argument| {
+            argument.starts_with("--volume=")
+                && argument.contains(&first_project.to_string())
+                && !argument.contains(BROWSER_ARTIFACTS_RELATIVE_PATH)
+        })
         .expect("first profile mount");
-    let second_mount = second
+    let second_profile_mount = second
         .args
         .iter()
-        .find(|argument| argument.starts_with("--volume="))
+        .find(|argument| {
+            argument.starts_with("--volume=")
+                && argument.contains(&second_project.to_string())
+                && !argument.contains(BROWSER_ARTIFACTS_RELATIVE_PATH)
+        })
         .expect("second profile mount");
 
-    assert_ne!(first_mount, second_mount);
-    assert!(first_mount.contains(&first_project.to_string()));
-    assert!(second_mount.contains(&second_project.to_string()));
+    assert_ne!(first_profile_mount, second_profile_mount);
+    assert!(first_profile_mount.contains(&first_project.to_string()));
+    assert!(second_profile_mount.contains(&second_project.to_string()));
     assert!(first
         .args
         .iter()
@@ -86,6 +94,16 @@ fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
         argument.starts_with("--volume=")
             && argument.ends_with(":ro")
             && argument.contains(&canonical_workspace.to_string_lossy().to_string())
+    }));
+    let canonical_artifacts = canonical_workspace.join(BROWSER_ARTIFACTS_RELATIVE_PATH);
+    assert!(canonical_artifacts.is_dir());
+    assert!(first.args.iter().any(|argument| {
+        argument.starts_with("--volume=")
+            && argument.ends_with(":rw")
+            && argument.contains(&canonical_artifacts.to_string_lossy().to_string())
+    }));
+    assert!(first.args.iter().any(|argument| {
+        argument == &format!("--workdir={}", canonical_workspace.to_string_lossy())
     }));
     assert_eq!(
         first

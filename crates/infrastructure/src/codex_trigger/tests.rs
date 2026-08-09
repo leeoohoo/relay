@@ -328,7 +328,27 @@ fn mcp_progress_summary_includes_the_action() {
         summarize_codex_item(&failed_item, true).expect("failure summary should exist");
     assert_eq!(
         failed,
-        "工具调用失败：relay_company.company.project（action: member_add）"
+        "工具调用失败：relay_company.company.project（action: member_add） — Agent is still provisioning"
+    );
+
+    let failed_content_item = json!({
+        "type": "mcpToolCall",
+        "server": "chrome-devtools",
+        "tool": "take_snapshot",
+        "status": "failed",
+        "result": {
+            "isError": true,
+            "content": [{
+                "type": "text",
+                "text": "Could not save a file\nCause: EACCES: permission denied, mkdir '/docs'"
+            }]
+        }
+    });
+    let (_, failed_content) = summarize_codex_item(&failed_content_item, true)
+        .expect("failure content summary should exist");
+    assert_eq!(
+        failed_content,
+        "工具调用失败：chrome-devtools.take_snapshot — Could not save a file Cause: EACCES: permission denied, mkdir '/docs'"
     );
 }
 

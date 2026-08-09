@@ -3,6 +3,7 @@ use super::*;
 pub(super) const MANAGED_BROWSER_MCP_NAME: &str = "chrome-devtools";
 const DEFAULT_BROWSER_MCP_IMAGE: &str = "relay/chrome-devtools-mcp:1.6.0";
 const BROWSER_PROFILE_CONTAINER_PATH: &str = "/relay-browser-profile";
+pub(super) const BROWSER_ARTIFACTS_RELATIVE_PATH: &str = ".relay/browser-artifacts";
 pub(super) const CHROMIUM_RUNTIME_FILES: [&str; 4] = [
     "SingletonLock",
     "SingletonSocket",
@@ -99,6 +100,7 @@ impl BrowserMcpConfig {
                 "managed browser workspace must be a directory".into(),
             ));
         }
+        let artifacts = create_browser_artifacts(&workspace)?;
         let mut args = vec![
             "run".into(),
             "--rm".into(),
@@ -123,6 +125,8 @@ impl BrowserMcpConfig {
             BROWSER_PROFILE_CONTAINER_PATH
         ));
         args.push(format!("--volume={0}:{0}:ro", workspace.to_string_lossy()));
+        args.push(format!("--volume={0}:{0}:rw", artifacts.to_string_lossy()));
+        args.push(format!("--workdir={}", workspace.to_string_lossy()));
         args.extend([
             self.image.clone(),
             "--headless".into(),
@@ -236,6 +240,37 @@ fn create_browser_profile(path: &Path) -> AppResult<()> {
         )?;
     }
     Ok(())
+}
+
+fn create_browser_artifacts(workspace: &Path) -> AppResult<PathBuf> {
+    let path = workspace.join(BROWSER_ARTIFACTS_RELATIVE_PATH);
+    std::fs::create_dir_all(&path).map_err(|error| {
+        AppError::Internal(format!(
+            "cannot create managed browser artifact directory: {error}"
+        ))
+    })?;
+    let path = path.canonicalize().map_err(|error| {
+        AppError::Internal(format!(
+            "cannot resolve managed browser artifact directory: {error}"
+        ))
+    })?;
+    if !path.starts_with(workspace) {
+        return Err(AppError::Validation(
+            "managed browser artifact directory must remain inside the project workspace".into(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                AppError::Internal(format!(
+                    "cannot protect managed browser artifact directory: {error}"
+                ))
+            },
+        )?;
+    }
+    Ok(path)
 }
 
 fn remove_stale_chromium_runtime_files(profile: &Path) -> AppResult<()> {
