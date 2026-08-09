@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) struct WakeupPromptContext<'a> {
     pub(super) agent: &'a AgentProfile,
+    pub(super) job_title: &'a str,
     pub(super) project_name: Option<&'a str>,
     pub(super) pending_inbox_count: usize,
     pub(super) active_task_count: usize,
@@ -13,6 +14,7 @@ pub(super) struct WakeupPromptContext<'a> {
 
 pub(super) struct WorkerPromptContext<'a> {
     pub(super) agent: &'a AgentProfile,
+    pub(super) job_title: &'a str,
     pub(super) project: &'a CompanyProject,
     pub(super) intent: &'a AgentExecutionIntent,
     pub(super) workspace: &'a PreparedGitWorkspace,
@@ -22,6 +24,7 @@ pub(super) struct WorkerPromptContext<'a> {
 pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
     let WakeupPromptContext {
         agent,
+        job_title,
         project_name,
         pending_inbox_count,
         active_task_count,
@@ -44,18 +47,20 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         .map(|name| format!("，并在涉及人员管理时同时使用 `${name}`"))
         .unwrap_or_default();
     format!(
-        "你是 Relay 公司 Agent @{handle}（{display_name}），这是控制会话的一次有效唤醒。{project_context}\n\
+        "你是 Relay 公司 Agent @{handle}（{display_name}），岗位为 {job_title}。Relay 已通过本轮专属 run token 固定并认证此身份，这是控制会话的一次有效唤醒。{project_context}\n\
+         不要向 Human、同事或其他工具重新询问或确认“我是谁”；不要把身份核对作为工作步骤或状态汇报。`agent.bootstrap` 只用于刷新公司、权限、会话和工作状态，不用于协商身份；若 MCP 返回未认证或身份绑定错误，将其视为运行环境故障并停止本轮。\n\
          当前工作目录是专属于本 Agent 的 Relay 控制工作区，worktree key 为 {worktree_key}。这里用于消息分诊、协调和派工，不是项目代码工作区。\n\
          必须先使用 `${employee_skill}`、`${profession_skill}` 和 `${session_skill}`{staffing_skill}；职业执行 Skill 在控制会话中同样生效，用于判断职责、拆解、质量要求和是否需要启动项目工作。Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准。\n\
          宿主机 Codex CLI 已加载管理员启用的插件。当前任务需要浏览器、文档、表格、设计、安全扫描或外部服务能力时，优先使用匹配的已安装插件及其 Skill/MCP；不要假设未安装的插件可用，也不要自行绕过插件认证策略。\n\
-         先调用 required Relay MCP 的 agent.bootstrap，查看其中的 work_sessions，再调用 company.task 的 my 和 agent.inbox.wait 读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。需要更多会话信息时调用 agent.work_session 的 list/get。\n\
+         先调用 required Relay MCP 的 agent.bootstrap 刷新动态公司上下文并查看其中的 work_sessions，再调用 company.task 的 my 和 agent.inbox.wait 读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。需要更多会话信息时调用 agent.work_session 的 list/get。不要在输出中复述身份卡。\n\
          你的 Agent 核心与控制长期记忆已经固化在 `${employee_skill}` 中；短期记忆只在需要历史线索时通过 agent.memory search 查询。控制会话不得读取或固化其他项目的实现细节。\n\
          {asset_refresh_context} 如果它或其他事项需要项目执行，调用 agent.work_session 的 dispatch 创建结构化 Intent；项目工作会话由 Relay 按 Agent + Project 绑定解析。不要在控制工作区修改代码、运行项目测试、提交 Git，也不要自行选择 Thread ID。\n\
-         仅在消息明确 @/私聊要求回应、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。不要发送纯粹的“收到”“暂无待办”或等待占位消息。\n\
+         Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
          已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
          如果没有分配给你的可执行工作、依赖尚未完成或还没有轮到你，不发送 Relay 消息，直接结束本轮。切勿操作当前工作目录之外的项目。",
         handle = agent.handle.trim_start_matches('@'),
         display_name = agent.display_name,
+        job_title = job_title,
         worktree_key = workspace.worktree_key,
         employee_skill = relay_skills.employee_name,
         profession_skill = relay_skills.profession_name,
@@ -95,7 +100,8 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
         .as_deref()
         .unwrap_or("relay-project-context");
     format!(
-        "你是 Relay 公司 Agent @{handle}（{display_name}），本轮已进入项目 `{project_name}` 的独立工作会话。\n\
+        "你是 Relay 公司 Agent @{handle}（{display_name}），岗位为 {job_title}。Relay 已通过本轮专属 run token 固定并认证此身份，本轮已进入项目 `{project_name}` 的独立工作会话。\n\
+         不要重新确认、询问或汇报自己的身份，也不要为了身份调用 `agent.bootstrap`；认证异常应作为运行环境故障直接停止。\n\
          当前工作目录是该 Agent 在本项目的隔离工作区，worktree key 为 {worktree_key}，分支为 {branch}。\n\
          必须使用 `${employee_skill}`、`${profession_skill}`、`${session_skill}` 和 `${project_skill}`。职业 Skill 与项目 Rule 的流程和质量门槛不能省略。\n\
          本轮 Execution Intent ID：{intent_id}\n\
@@ -104,13 +110,14 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
          关联 Task IDs：{task_ids}\n\
          来源 Event IDs：{event_ids}\n\
          验收标准：\n{criteria}\n\
-         先调用 agent.bootstrap，再用 company.project get 和 company.task get/list 核实实时状态。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
+         直接用 company.project get 和 company.task get/list 核实当前项目与任务实时状态。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
          项目工作会话不承担 Inbox 分诊：忽略 Relay 工具响应中的 inbox_notice，不调用 agent.inbox.wait/ack，不因群聊、私聊或新事件中断当前 Intent。通信事件统一留给本 Agent 的控制会话；只有本 Intent 明确要求的最终项目同步可以在交付收口时发送一次。\n\
          完成必要的设计、实现、测试、文档和 Git 提交推送；不要直接写受保护默认分支。更新关联任务与项目状态。\n\
          长期记忆只保存稳定知识：跨项目通用内容使用 agent scope，当前项目特有内容使用 project scope 并带 project_id；阶段性线索使用 short_term。禁止保存聊天原文、任务正文、日志和凭证。\n\
          最终回复必须简洁列出：已完成、验证、未完成/阻塞、下一步、分支和 Commit。",
         handle = context.agent.handle.trim_start_matches('@'),
         display_name = context.agent.display_name,
+        job_title = context.job_title,
         project_name = context.project.name,
         worktree_key = context.workspace.worktree_key,
         branch = context.workspace.branch,
@@ -177,46 +184,39 @@ pub(super) fn prepare_relay_skills(
     } else {
         STAFFING_SKILL_TEMPLATE
     };
-    let employee_base_content = bind_relay_skill(
-        &tailor_relay_skill_to_permissions(employee_template, permissions),
-        &employee_name,
+    let employee_base_content = append_agent_identity_card(
+        &bind_relay_skill(
+            &tailor_relay_skill_to_permissions(employee_template, permissions),
+            &employee_name,
+            &employee_name,
+        ),
         agent,
-        &employee_name,
+        job_title,
+        &profession.key,
         skill_language,
     );
     let employee_content =
         append_agent_long_term_memories(&employee_base_content, long_term_memories, skill_language);
     let profession_template = profession_skill_template(&profession.key, skill_language);
-    let profession_content = bind_relay_skill(
-        &profession_template,
-        &profession_name,
-        agent,
-        &employee_name,
-        skill_language,
-    );
+    let profession_content =
+        bind_relay_skill(&profession_template, &profession_name, &employee_name);
     let session_content = bind_relay_skill(
         &session_skill_template(bundle_kind, skill_language),
         &session_name,
-        agent,
         &employee_name,
-        skill_language,
     );
     let staffing_content = staffing_name.as_ref().map(|name| {
         bind_relay_skill(
             &tailor_relay_skill_to_permissions(staffing_template, permissions),
             name,
-            agent,
             &employee_name,
-            skill_language,
         )
     });
     let project_content = project.zip(project_name.as_deref()).map(|(project, name)| {
         bind_relay_skill(
             &build_project_skill_template(project, project_rule, skill_language),
             name,
-            agent,
             &employee_name,
-            skill_language,
         )
     });
 
@@ -484,12 +484,10 @@ pub(super) fn tailor_relay_skill_to_permissions(template: &str, permissions: &[S
 pub(super) fn bind_relay_skill(
     template: &str,
     skill_name: &str,
-    agent: &AgentProfile,
     employee_skill_name: &str,
-    skill_language: &str,
 ) -> String {
     let mut replaced_name = false;
-    let mut content = template
+    let content = template
         .lines()
         .map(|line| {
             if !replaced_name && line.starts_with("name:") {
@@ -502,28 +500,56 @@ pub(super) fn bind_relay_skill(
         .collect::<Vec<_>>()
         .join("\n")
         .replace("relay-company-employee", employee_skill_name);
-    let identity_guide = if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+    format!("{}\n", content.trim())
+}
+
+pub(super) fn append_agent_identity_card(
+    content: &str,
+    agent: &AgentProfile,
+    job_title: &str,
+    profession_key: &str,
+    skill_language: &str,
+) -> String {
+    let persona = if agent.persona.trim().is_empty() {
+        if skill_language == COMPANY_SKILL_LANGUAGE_EN {
+            "Not specified"
+        } else {
+            "未设置"
+        }
+    } else {
+        agent.persona.trim()
+    };
+    let identity_card = if skill_language == COMPANY_SKILL_LANGUAGE_EN {
         format!(
-            "\n\n## Relay Account Binding\n\n- This Skill represents only Relay Agent `@{}` (`{}`).\n- Call `agent.bootstrap` first on every cycle and stop immediately if the returned identity differs.\n- Use only company, project, task, and permission data returned by MCP in the current cycle.",
+            "\n\n## Relay Authenticated Identity\n\n- Display name: `{}`\n- Handle: `@{}`\n- Agent ID: `{}`\n- Job title: `{}`\n- Profession key: `{}`\n- Persona: {}\n- Relay has already bound this identity to the current run token and MCP server. Treat it as a session invariant: do not ask a Human or coworker to confirm it, do not narrate identity checks, and do not call `agent.bootstrap` merely to discover who you are.\n- Use `agent.bootstrap` in the control session only to refresh dynamic company, permission, coworker, session, project, and inbox state. Authentication or binding errors are runtime failures, not identity questions.",
+            agent.display_name,
             agent.handle.trim_start_matches('@'),
-            agent.id
+            agent.id,
+            job_title,
+            profession_key,
+            persona,
         )
     } else {
         format!(
-            "\n\n## Relay 账号绑定\n\n- 本 Skill 只代表 Relay Agent `@{}`（`{}`）。\n- 每轮先调用 `agent.bootstrap` 核对返回身份；身份不一致时立即停止。\n- 只使用本轮 MCP 返回的公司、项目、任务和权限。",
+            "\n\n## Relay 已认证身份\n\n- 显示名称：`{}`\n- Handle：`@{}`\n- Agent ID：`{}`\n- 岗位：`{}`\n- 职业键：`{}`\n- Persona：{}\n- Relay 已将此身份绑定到当前 run token 和 MCP Server。它是会话不变量：不得向 Human 或同事再次确认，不得把身份核对写成执行步骤或状态汇报，也不得仅为了知道自己是谁而调用 `agent.bootstrap`。\n- 控制会话调用 `agent.bootstrap` 只为刷新公司、权限、同事、会话、项目和 Inbox 等动态状态。认证或绑定错误属于运行环境故障，不是身份问题。",
+            agent.display_name,
             agent.handle.trim_start_matches('@'),
-            agent.id
+            agent.id,
+            job_title,
+            profession_key,
+            persona,
         )
     };
-    if let Some(heading_start) = content.find("\n# ") {
+    let mut output = content.trim().to_string();
+    if let Some(heading_start) = output.find("\n# ") {
         let heading_start = heading_start + 1;
-        let heading_end = content[heading_start..]
+        let heading_end = output[heading_start..]
             .find('\n')
             .map(|offset| heading_start + offset)
-            .unwrap_or(content.len());
-        content.insert_str(heading_end, &identity_guide);
+            .unwrap_or(output.len());
+        output.insert_str(heading_end, &identity_card);
     }
-    format!("{}\n", content.trim())
+    format!("{}\n", output.trim())
 }
 
 pub(super) fn remove_stale_managed_skills(

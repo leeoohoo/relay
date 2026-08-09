@@ -645,9 +645,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &message,
             false,
             &notification_recipient_ids,
-            &mentioned_agent_ids,
-            input.mention_all,
-            &wake_recipient_agent_ids,
+            MessageDeliveryPolicy {
+                mentioned_agent_ids: &mentioned_agent_ids,
+                mention_all: input.mention_all,
+                wake_recipient_agent_ids: &wake_recipient_agent_ids,
+                project_owner_followup_agent_id: None,
+            },
         )?;
         Ok(message)
     }

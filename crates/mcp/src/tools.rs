@@ -4,7 +4,7 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
     vec![
         read_only_tool::<EmptyInput>(
             "agent.bootstrap",
-            "Start here. Return the authenticated Agent's identity, company, organization, coworkers, permissions, conversations, projects, pending inbox, and suggested next tools.",
+            "Refresh the authenticated Agent's dynamic company context: organization, coworkers, permissions, conversations, projects, pending inbox, work sessions, and suggested next tools. The credential already fixes identity; control sessions use this for current state, while project workers may read their bound project and tasks directly.",
         ),
         action_tool::<AgentProfileUpdateToolInput>(
             "agent.profile.update",
@@ -24,7 +24,7 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
         ),
         mutating_tool::<AgentInboxProcessInput>(
             "agent.inbox.ack",
-            "Mark one inbox event as processed after the agent has handled it.",
+            "Mark one inbox event as processed after the Agent has handled it. A Human direct-message event cannot be acknowledged until this Agent has sent a substantive reply in that conversation.",
             true,
         ),
     ]

@@ -160,6 +160,49 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ));
         }
 
+        if event.event_type == "message.received"
+            && payload_uuid_field_optional(&event.payload_json, "sender_human_user_id").is_some()
+        {
+            let conversation_id = payload_uuid_field_optional(
+                &event.payload_json,
+                "conversation_id",
+            )
+            .ok_or_else(|| {
+                AppError::Validation("human message event is missing conversation_id".into())
+            })?;
+            let direct_from_human = self
+                .repo
+                .get_conversation_context_result(conversation_id)?
+                .is_some_and(|context| context.context_type == CONVERSATION_CONTEXT_COMPANY_DIRECT);
+            if direct_from_human {
+                let source_message_id = payload_uuid_field_optional(
+                    &event.payload_json,
+                    "message_id",
+                )
+                .ok_or_else(|| {
+                    AppError::Validation("human direct message event is missing message_id".into())
+                })?;
+                let messages = self
+                    .repo
+                    .get_conversation_messages_result(conversation_id)?;
+                let replied = messages
+                    .iter()
+                    .position(|message| message.id == source_message_id)
+                    .is_some_and(|source_index| {
+                        messages[source_index + 1..].iter().any(|message| {
+                            message.sender_agent_id == Some(input.actor_agent_id)
+                                && !message.content.trim().is_empty()
+                        })
+                    });
+                if !replied {
+                    return Err(AppError::Conflict(
+                        "Human direct messages must receive a substantive Agent reply before the inbox event can be acknowledged"
+                            .into(),
+                    ));
+                }
+            }
+        }
+
         if event.event_type == "company.project.rule_generation_requested" {
             let project_id = payload_uuid_field_optional(&event.payload_json, "project_id")
                 .ok_or_else(|| {
@@ -233,9 +276,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         message: &MessageView,
         runtime_generated: bool,
         recipient_agent_ids: &[Uuid],
-        mentioned_agent_ids: &[Uuid],
-        mention_all: bool,
-        wake_recipient_agent_ids: &[Uuid],
+        policy: MessageDeliveryPolicy<'_>,
     ) -> AppResult<()> {
         for recipient_agent_id in recipient_agent_ids.iter().copied() {
             self.enqueue_agent_event(
@@ -249,13 +290,17 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     "content": message.content,
                     "attachments": message.attachments,
                     "runtime_generated": runtime_generated,
-                    "mentioned_agent_ids": mentioned_agent_ids,
-                    "mention_all": mention_all,
-                    "mentioned": mention_all || mentioned_agent_ids.contains(&recipient_agent_id)
+                    "mentioned_agent_ids": policy.mentioned_agent_ids,
+                    "mention_all": policy.mention_all,
+                    "mentioned": policy.mention_all || policy.mentioned_agent_ids.contains(&recipient_agent_id),
+                    "project_owner_followup": policy.project_owner_followup_agent_id == Some(recipient_agent_id)
                 }),
                 10,
             )?;
-            if wake_recipient_agent_ids.contains(&recipient_agent_id) {
+            if policy
+                .wake_recipient_agent_ids
+                .contains(&recipient_agent_id)
+            {
                 self.repo.request_agent_codex_trigger_wake(
                     recipient_agent_id,
                     message.created_at,

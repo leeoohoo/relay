@@ -108,6 +108,13 @@ pub struct PlatformApp<
     verifier: V,
 }
 
+struct MessageDeliveryPolicy<'a> {
+    mentioned_agent_ids: &'a [Uuid],
+    mention_all: bool,
+    wake_recipient_agent_ids: &'a [Uuid],
+    project_owner_followup_agent_id: Option<Uuid>,
+}
+
 impl<R: PlatformRepository> PlatformApp<R, StubOwnershipProofVerifier> {
     pub fn new(repo: R) -> Self {
         Self {

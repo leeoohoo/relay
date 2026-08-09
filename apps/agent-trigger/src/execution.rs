@@ -224,6 +224,7 @@ pub(super) async fn execute_trigger(
     control_settings.feature_shell_tool = false;
     let control_prompt = build_wakeup_prompt(WakeupPromptContext {
         agent: &agent,
+        job_title: &membership.job_title,
         project_name: decision
             .project
             .as_ref()
@@ -487,6 +488,7 @@ async fn execute_project_intent(
     )?;
     let prompt = build_worker_prompt(WorkerPromptContext {
         agent,
+        job_title: &membership.job_title,
         project: &project_view.project,
         intent,
         workspace: &workspace,

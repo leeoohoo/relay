@@ -47,7 +47,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if content.is_empty() {
             return Err(AppError::Validation("message content is required".into()));
         }
-        let (mentioned_agent_ids, notification_recipient_ids) = self
+        let (mentioned_agent_ids, mut notification_recipient_ids) = self
             .resolve_company_message_mentions(
                 &context,
                 input.conversation_id,
@@ -55,12 +55,27 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 input.mentioned_agent_ids,
                 input.mention_all,
             )?;
-        let wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
+        let project_owner_followup_agent_id = self.resolve_project_owner_followup_agent(
+            &context,
+            input.conversation_id,
+            input.actor_agent_id,
+        )?;
+        if let Some(owner_agent_id) = project_owner_followup_agent_id {
+            if !notification_recipient_ids.contains(&owner_agent_id) {
+                notification_recipient_ids.push(owner_agent_id);
+            }
+        }
+        let mut wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
             &context,
             &notification_recipient_ids,
             &mentioned_agent_ids,
             input.mention_all,
         )?;
+        if let Some(owner_agent_id) = project_owner_followup_agent_id {
+            if !wake_recipient_agent_ids.contains(&owner_agent_id) {
+                wake_recipient_agent_ids.push(owner_agent_id);
+            }
+        }
         let message = MessageView {
             id: Uuid::new_v4(),
             conversation_id: input.conversation_id,
@@ -81,9 +96,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &message,
             runtime_generated,
             &notification_recipient_ids,
-            &mentioned_agent_ids,
-            input.mention_all,
-            &wake_recipient_agent_ids,
+            MessageDeliveryPolicy {
+                mentioned_agent_ids: &mentioned_agent_ids,
+                mention_all: input.mention_all,
+                wake_recipient_agent_ids: &wake_recipient_agent_ids,
+                project_owner_followup_agent_id,
+            },
         )?;
         Ok(message)
     }
@@ -198,5 +216,31 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 })
             })
             .collect())
+    }
+
+    fn resolve_project_owner_followup_agent(
+        &self,
+        context: &ConversationContext,
+        conversation_id: Uuid,
+        sender_agent_id: Uuid,
+    ) -> AppResult<Option<Uuid>> {
+        if context.context_type != CONVERSATION_CONTEXT_PROJECT_GROUP {
+            return Ok(None);
+        }
+        let project_id = context.project_id.ok_or_else(|| {
+            AppError::Internal("project group conversation is missing project_id".into())
+        })?;
+        let project = self
+            .repo
+            .get_company_project_result(project_id)?
+            .ok_or_else(|| AppError::Internal("project group project no longer exists".into()))?;
+        if project.owner_agent_id == sender_agent_id {
+            return Ok(None);
+        }
+        Ok(self
+            .repo
+            .list_conversation_member_ids(conversation_id)
+            .contains(&project.owner_agent_id)
+            .then_some(project.owner_agent_id))
     }
 }

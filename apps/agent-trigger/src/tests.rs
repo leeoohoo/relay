@@ -186,6 +186,13 @@ fn control_session_loads_profession_skill_without_project_skill() {
         .join(&prepared.employee_name)
         .join("SKILL.md")
         .is_file());
+    let employee_skill = fs::read_to_string(
+        workspace
+            .join(".agents/skills")
+            .join(&prepared.employee_name)
+            .join("SKILL.md"),
+    )
+    .expect("employee skill should be readable");
     #[cfg(unix)]
     assert!(fs::symlink_metadata(
         workspace
@@ -215,10 +222,110 @@ fn control_session_loads_profession_skill_without_project_skill() {
     )
     .expect("control session skill should be readable");
     assert!(profession_skill.contains("软件工程师"));
+    assert!(employee_skill.contains("Relay 已认证身份"));
+    assert!(employee_skill.contains("岗位：`软件工程师`"));
+    assert!(employee_skill.contains("不得向 Human 或同事再次确认"));
+    assert!(!employee_skill.contains("每轮先调用 `agent.bootstrap` 核对返回身份"));
+    assert!(!profession_skill.contains("Relay 已认证身份"));
     assert!(control_skill.contains("必须同时遵循职业 Skill"));
     assert!(prepared.project_name.is_none());
     assert!(!prepared.version_hash.is_empty());
     fs::remove_dir_all(workspace).expect("test workspace should be removed");
+}
+
+#[test]
+fn prompts_treat_identity_as_authenticated_session_state() {
+    let now = now_utc();
+    let agent = AgentProfile {
+        id: Uuid::new_v4(),
+        owner_user_id: Uuid::new_v4(),
+        display_name: "Luna".into(),
+        handle: "luna-engineer".into(),
+        persona: "负责可靠交付".into(),
+        collaboration_preference: "available".into(),
+        status: AgentStatus::Active,
+        created_at: now,
+    };
+    let workspace = PreparedGitWorkspace {
+        path: PathBuf::from("/tmp/relay-agent"),
+        worktree_key: "project/agent".into(),
+        branch: "relay/agent/work".into(),
+        auth_environment: HashMap::new(),
+    };
+    let skills = PreparedRelaySkills {
+        employee_name: "relay-luna-employee".into(),
+        profession_name: "relay-luna-profession-software-engineer".into(),
+        session_name: "relay-luna-control".into(),
+        project_name: Some("relay-luna-project".into()),
+        staffing_name: None,
+        version_hash: "v1".into(),
+    };
+    let control_prompt = build_wakeup_prompt(WakeupPromptContext {
+        agent: &agent,
+        job_title: "软件工程师",
+        project_name: None,
+        pending_inbox_count: 0,
+        active_task_count: 1,
+        waiting_task_count: 0,
+        asset_refresh_due: false,
+        workspace: &workspace,
+        relay_skills: &skills,
+    });
+    assert!(control_prompt.contains("run token 固定并认证此身份"));
+    assert!(control_prompt.contains("不要向 Human、同事或其他工具重新询问或确认"));
+    assert!(control_prompt.contains("agent.bootstrap` 只用于刷新公司、权限、会话和工作状态"));
+    assert!(!control_prompt.contains("核对返回身份"));
+
+    let project = CompanyProject {
+        id: Uuid::new_v4(),
+        company_id: Uuid::new_v4(),
+        name: "Relay Web".into(),
+        description: "管理控制台".into(),
+        project_type: "software_development".into(),
+        project_type_source: "human".into(),
+        project_type_confidence: 100,
+        project_type_evidence: vec![],
+        status: "active".into(),
+        owner_agent_id: agent.id,
+        project_group_conversation_id: Uuid::new_v4(),
+        created_by_agent_id: agent.id,
+        updated_by_agent_id: None,
+        due_at: None,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    let intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: project.company_id,
+        agent_profile_id: agent.id,
+        project_id: project.id,
+        worker_session_id: None,
+        source_event_ids: vec![],
+        task_ids: vec![],
+        action_type: "execute".into(),
+        objective: "完成任务".into(),
+        acceptance_criteria: vec![],
+        priority: "normal".into(),
+        dedupe_key: "test".into(),
+        status: "pending".into(),
+        result_summary: String::new(),
+        error_message: None,
+        created_at: now,
+        claimed_at: None,
+        completed_at: None,
+    };
+    let worker_prompt = build_worker_prompt(WorkerPromptContext {
+        agent: &agent,
+        job_title: "软件工程师",
+        project: &project,
+        intent: &intent,
+        workspace: &workspace,
+        relay_skills: &skills,
+    });
+    assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
+    assert!(worker_prompt.contains("直接用 company.project get 和 company.task get/list"));
+    assert!(!worker_prompt.contains("先调用 agent.bootstrap"));
 }
 
 #[test]
@@ -307,7 +414,9 @@ fn english_relay_skills_are_materialized_without_chinese_operating_rules() {
             .join("SKILL.md"),
     )
     .expect("profession skill should be readable");
-    assert!(employee_skill.contains("Relay Account Binding"));
+    assert!(employee_skill.contains("Relay Authenticated Identity"));
+    assert!(employee_skill.contains("session invariant"));
+    assert!(!employee_skill.contains("first on every cycle"));
     assert!(profession_skill.contains("Shared Professional Operating Baseline"));
     assert!(profession_skill.contains("Security Engineer"));
     fs::remove_dir_all(workspace).expect("test workspace should be removed");
