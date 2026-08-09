@@ -218,6 +218,10 @@ case "$MODE" in
   up|restart)
     start_all
     ;;
+  trigger-restart)
+    start_trigger
+    print_status
+    ;;
   down)
     stop_trigger
     bash "$ROOT_DIR/scripts/start_docker.sh" down --harness "$HARNESS_MODE"
@@ -231,7 +235,7 @@ case "$MODE" in
     bash "$ROOT_DIR/scripts/start_docker.sh" logs --harness "$HARNESS_MODE"
     ;;
   *)
-    echo "Usage: $0 [up|restart|down|status|logs]" >&2
+    echo "Usage: $0 [up|restart|trigger-restart|down|status|logs]" >&2
     exit 1
     ;;
 esac

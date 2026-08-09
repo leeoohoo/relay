@@ -383,6 +383,9 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
     {
         return true;
     }
+    if !outcome.turn_started && message.contains("codex app-server timed out waiting for") {
+        return true;
+    }
     if outcome.turn_started {
         return false;
     }
@@ -402,14 +405,16 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
 }
 
 pub(super) fn should_retry_app_server_startup(outcome: &ProcessOutcome) -> bool {
-    outcome.status == CodexRunStatus::Failed
-        && !outcome.turn_started
-        && outcome
-            .error_message
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .contains("codex app-server closed before json-rpc response 0")
+    if outcome.status != CodexRunStatus::Failed || outcome.turn_started {
+        return false;
+    }
+    let message = outcome
+        .error_message
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    message.contains("codex app-server closed before json-rpc response 0")
+        || message.contains("codex app-server timed out waiting for initialize response 0")
 }
 
 pub(super) fn to_public_result(

@@ -1,5 +1,9 @@
 use super::*;
 
+const APP_SERVER_INITIALIZE_TIMEOUT_SECS: u64 = 20;
+const APP_SERVER_THREAD_TIMEOUT_SECS: u64 = 30;
+const APP_SERVER_TURN_START_TIMEOUT_SECS: u64 = 45;
+
 pub(super) async fn drive_app_server<W, R>(
     writer: &mut W,
     reader: R,
@@ -13,6 +17,12 @@ where
     R: AsyncRead + Unpin,
 {
     let mut reader = BufReader::new(reader);
+    report_progress(
+        request.progress_handler.as_ref(),
+        "starting",
+        "正在初始化 Codex app-server",
+        resume_thread_id,
+    );
     send_json_rpc(
         writer,
         &json!({
@@ -32,7 +42,13 @@ where
         }),
     )
     .await?;
-    let initialize = wait_for_rpc_response(&mut reader, 0).await?;
+    let initialize = wait_for_rpc_response_with_timeout(
+        &mut reader,
+        0,
+        "initialize",
+        Duration::from_secs(APP_SERVER_INITIALIZE_TIMEOUT_SECS),
+    )
+    .await?;
     if let Some(error) = rpc_error_message(&initialize) {
         return Err(AppError::Validation(format!(
             "Codex app-server initialization failed: {error}"
@@ -56,12 +72,28 @@ where
     } else {
         "thread/start"
     };
+    report_progress(
+        request.progress_handler.as_ref(),
+        "starting",
+        if resume_thread_id.is_some() {
+            "正在恢复 Codex 固定会话"
+        } else {
+            "正在创建 Codex 固定会话"
+        },
+        resume_thread_id,
+    );
     send_json_rpc(
         writer,
         &json!({ "method": thread_method, "id": 1, "params": thread_params }),
     )
     .await?;
-    let thread_response = wait_for_rpc_response(&mut reader, 1).await?;
+    let thread_response = wait_for_rpc_response_with_timeout(
+        &mut reader,
+        1,
+        thread_method,
+        Duration::from_secs(APP_SERVER_THREAD_TIMEOUT_SECS),
+    )
+    .await?;
     if let Some(error) = rpc_error_message(&thread_response) {
         return Ok(ProcessOutcome {
             status: CodexRunStatus::Failed,
@@ -103,12 +135,35 @@ where
         &json!({ "method": "turn/start", "id": 2, "params": turn_params }),
     )
     .await?;
+    report_progress(
+        request.progress_handler.as_ref(),
+        "starting",
+        "正在启动 Codex 工作 Turn",
+        Some(&thread_id),
+    );
 
     let mut turn_started = false;
     let mut final_message = None;
     let mut error_message = None;
     let mut active_mcp_items = HashMap::<String, Value>::new();
-    while let Some(value) = next_json_rpc(&mut reader).await? {
+    loop {
+        let next = if turn_started {
+            next_json_rpc(&mut reader).await?
+        } else {
+            timeout(
+                Duration::from_secs(APP_SERVER_TURN_START_TIMEOUT_SECS),
+                next_json_rpc(&mut reader),
+            )
+            .await
+            .map_err(|_| {
+                AppError::Validation(
+                    "Codex app-server timed out waiting for turn/start response".into(),
+                )
+            })??
+        };
+        let Some(value) = next else {
+            break;
+        };
         if json_rpc_id_matches(&value, 2) {
             if let Some(error) = rpc_error_message(&value) {
                 return Ok(ProcessOutcome {
@@ -685,6 +740,24 @@ where
     Err(AppError::Validation(format!(
         "Codex app-server closed before JSON-RPC response {expected_id}"
     )))
+}
+
+pub(super) async fn wait_for_rpc_response_with_timeout<R>(
+    reader: &mut BufReader<R>,
+    expected_id: i64,
+    stage: &str,
+    wait_timeout: Duration,
+) -> AppResult<Value>
+where
+    R: AsyncRead + Unpin,
+{
+    timeout(wait_timeout, wait_for_rpc_response(reader, expected_id))
+        .await
+        .map_err(|_| {
+            AppError::Validation(format!(
+                "Codex app-server timed out waiting for {stage} response {expected_id}"
+            ))
+        })?
 }
 
 pub(super) async fn next_json_rpc<R>(reader: &mut BufReader<R>) -> AppResult<Option<Value>>

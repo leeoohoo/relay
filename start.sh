@@ -11,9 +11,12 @@ usage() {
 Relay startup helper
 
 Usage:
-  ./start.sh [up|restart|down|status|logs]
+  ./start.sh [up|restart|trigger-restart|down|status|logs]
       Start or manage the complete Relay product.
       Equivalent to: ./scripts/start.sh
+
+      `trigger-restart` rebuilds/restarts only the host Trigger and keeps
+      Relay Server, PostgreSQL, Harness, and their containers running.
 
   ./start.sh dev [up|restart|down|logs|status|doctor]
       Start the contributor development environment.

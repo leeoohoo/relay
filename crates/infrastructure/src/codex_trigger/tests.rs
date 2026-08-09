@@ -363,6 +363,24 @@ fn only_pre_initialize_app_server_disconnects_are_retried() {
         error_message: Some("turn failed".into()),
         turn_started: true,
     }));
+    assert!(should_retry_app_server_startup(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: None,
+        final_message: None,
+        error_message: Some("Codex app-server timed out waiting for initialize response 0".into(),),
+        turn_started: false,
+    }));
+    assert!(should_replace_session(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: None,
+        final_message: None,
+        error_message: Some(
+            "Codex app-server timed out waiting for thread/resume response 1".into(),
+        ),
+        turn_started: false,
+    }));
 }
 
 #[test]
