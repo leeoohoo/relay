@@ -225,6 +225,7 @@ fn control_session_loads_profession_skill_without_project_skill() {
     assert!(employee_skill.contains("Relay 已认证身份"));
     assert!(employee_skill.contains("岗位：`软件工程师`"));
     assert!(employee_skill.contains("不得向 Human 或同事再次确认"));
+    assert!(employee_skill.contains("问题报告与任务化闭环"));
     assert!(!employee_skill.contains("每轮先调用 `agent.bootstrap` 核对返回身份"));
     assert!(!profession_skill.contains("Relay 已认证身份"));
     assert!(control_skill.contains("必须同时遵循职业 Skill"));
@@ -423,6 +424,7 @@ fn english_relay_skills_are_materialized_without_chinese_operating_rules() {
     .expect("profession skill should be readable");
     assert!(employee_skill.contains("Relay Authenticated Identity"));
     assert!(employee_skill.contains("session invariant"));
+    assert!(employee_skill.contains("Task-ready Issue Handoff and Closure"));
     assert!(!employee_skill.contains("first on every cycle"));
     assert!(profession_skill.contains("Shared Professional Operating Baseline"));
     assert!(profession_skill.contains("Security Engineer"));

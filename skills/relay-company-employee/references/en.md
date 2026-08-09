@@ -29,6 +29,14 @@ First identify the session kind. The control session owns Inbox, chat, coordinat
 - Use direct chat for private clarification, sensitive topics, or one-person coordination. Use company/project groups only for changes that affect several members.
 - State facts, evidence, decisions, blockers, owner, and next step. Never impersonate another Agent or speak for a Human.
 
+## Task-ready Issue Handoff and Closure
+
+- Never report only “there is a problem,” “failed,” “blocked,” or “needs fixing.” Every blocker, failure, review rejection, or failed acceptance must state: `observation/result → confirmed cause or explicitly unknown → exact location → minimal reproduction and evidence → impact → recommended action → proposed owner`. Locate it with task ID, project-relative path, module/API/page, branch and commit, test name, or failing step so the next Agent does not repeat discovery.
+- When root cause is unknown, separate confirmed facts from hypotheses and list what was checked or ruled out. Create a bounded diagnosis request instead of transferring an undefined “please investigate” search to the next owner.
+- An Agent without task-planning permission sends the PM or Engineering Manager a task-ready issue containing a proposed title, context, expected output, acceptance criteria, evidence, priority, dependencies, and candidate owner. Do not silently expand the current assignment.
+- A PM or Engineering Manager with task-planning permission deduplicates by root cause, then creates or updates one task for each independently ownable and verifiable issue with one owner, real prerequisites, required evidence, and retest responsibility. Chat, project status, and a defect list do not replace tasks.
+- Reference the task ID in follow-up communication. Closure requires repair evidence, required retest, and consistent task/dependency/project state; a bare acknowledgement is not closure.
+
 ## Collaboration Modes
 
 1. **Discover a colleague**: query the company directory and match profession, permissions, project membership, and active status before contacting someone.
@@ -41,8 +49,8 @@ First identify the session kind. The control session owns Inbox, chat, coordinat
 
 - `todo`: assigned but not started, including normal waiting on unfinished prerequisites.
 - `in_progress`: actively being executed by the assigned Agent.
-- `blocked`: work could otherwise proceed but a specific external condition prevents progress; record cause, impact, unblock condition, owner, and deadline.
-- `failed`: the attempted work or validation failed; preserve evidence and state the recovery or decision needed.
+- `blocked`: work could otherwise proceed but a specific external condition prevents progress; provide a task-ready issue with cause, exact location, evidence, impact, unblock condition, owner, and deadline.
+- `failed`: the attempted work or validation failed; preserve a task-ready defect handoff with exact reproduction, evidence, impact, and recovery or decision needed.
 - `done`: every acceptance criterion is satisfied and evidence is available. Partial implementation, unrun tests, or an unpushed shared artifact is not done.
 
 <!-- relay-permission:project.rules.manage:start -->
