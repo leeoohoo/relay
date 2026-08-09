@@ -51,6 +51,52 @@ pub(super) async fn get_company_console(
     Ok(Json(serde_json::json!({ "company_console": company })))
 }
 
+pub(super) async fn get_company_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let summary = state.platform.get_company_summary(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "summary": summary })))
+}
+
+pub(super) async fn list_company_console_agents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let agents = state
+        .platform
+        .list_company_console_agents_for_human(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "agents": agents })))
+}
+
+pub(super) async fn list_company_console_conversations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let conversations = state
+        .platform
+        .list_company_console_conversations_for_human(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "conversations": conversations })))
+}
+
+pub(super) async fn list_company_console_projects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let projects = state
+        .platform
+        .list_company_console_projects_for_human(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "projects": projects })))
+}
+
 pub(super) async fn get_company_skill_catalog(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import {
+  companyConsoleRegionsForEvent,
+  fetchCompanyConsole,
+  fetchCompanyConsoleRegions,
+  type CompanyConsoleRegion,
+} from "../api/companyConsole";
 import type { CompanyRealtimeEvent } from "../api/types";
 import { AuthScreen } from "../components/AuthScreen";
 import { Sidebar } from "../components/Sidebar";
@@ -43,6 +49,7 @@ export function App() {
   const [dismissedApprovalIds, setDismissedApprovalIds] = useState<Set<string>>(() => new Set());
   const [realtimeEvent, setRealtimeEvent] = useState<CompanyRealtimeEvent | null>(null);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const pendingRealtimeRegionsRef = useRef<Set<CompanyConsoleRegion>>(new Set());
 
   useEffect(() => {
     api<RuntimeConfig>("/api/v1/runtime-config")
@@ -119,13 +126,19 @@ export function App() {
       if (event.event_type.startsWith("agent.runtime.approval_")) {
         void refreshApprovals().catch(() => undefined);
       }
+      for (const region of companyConsoleRegionsForEvent(event.event_type)) {
+        pendingRealtimeRegionsRef.current.add(region);
+      }
+      if (pendingRealtimeRegionsRef.current.size === 0) return;
       if (realtimeRefreshTimerRef.current !== null) {
         window.clearTimeout(realtimeRefreshTimerRef.current);
       }
       realtimeRefreshTimerRef.current = window.setTimeout(() => {
         realtimeRefreshTimerRef.current = null;
         if (selectedCompanyId && session?.token) {
-          void loadCompanyConsole(selectedCompanyId, session.token);
+          const regions = new Set(pendingRealtimeRegionsRef.current);
+          pendingRealtimeRegionsRef.current.clear();
+          void refreshCompanyRegions(selectedCompanyId, session.token, regions);
         }
       }, 100);
     },
@@ -152,12 +165,24 @@ export function App() {
   async function loadCompanyConsole(companyId: string, token = session?.token) {
     if (!token) return;
     try {
-      const response = await api<{ company_console: CompanyConsole }>(
-        `/api/v1/companies/${companyId}/console`,
-        {},
-        token,
-      );
-      setCompanyConsole(response.company_console);
+      const nextConsole = await fetchCompanyConsole(companyId, token);
+      setCompanyConsole(nextConsole);
+    } catch (requestError) {
+      showError(requestError);
+    }
+  }
+
+  async function refreshCompanyRegions(
+    companyId: string,
+    token: string,
+    regions: Iterable<CompanyConsoleRegion>,
+  ) {
+    try {
+      const patch = await fetchCompanyConsoleRegions(companyId, token, regions);
+      setCompanyConsole((current) => {
+        if (!current || current.company.id !== companyId) return current;
+        return { ...current, ...patch };
+      });
     } catch (requestError) {
       showError(requestError);
     }

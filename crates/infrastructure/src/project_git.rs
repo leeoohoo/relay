@@ -18,6 +18,8 @@ pub struct ProvisionedProjectGit {
     pub default_branch: String,
     pub auth_profile: String,
     pub repository_identifier: String,
+    #[serde(skip_serializing)]
+    pub access_token_identifier: String,
 }
 
 pub trait ProjectGitProvisioner: Send + Sync {

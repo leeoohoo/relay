@@ -92,6 +92,7 @@ mod company;
 mod memory;
 mod ownership;
 mod project;
+mod project_managed;
 mod registration;
 mod security;
 mod staffing_create;
@@ -131,33 +132,5 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
 
     pub fn health_check(&self) -> AppResult<()> {
         self.repo.health_check()
-    }
-
-    pub fn auth(&self) -> crate::services::AuthService<'_, R> {
-        crate::services::AuthService::new(&self.repo)
-    }
-
-    pub fn companies(&self) -> crate::services::CompanyService<'_, R> {
-        crate::services::CompanyService::new(&self.repo)
-    }
-
-    pub fn chat(&self) -> crate::services::ChatService<'_, R> {
-        crate::services::ChatService::new(&self.repo)
-    }
-
-    pub fn projects(&self) -> crate::services::ProjectService<'_, R> {
-        crate::services::ProjectService::new(&self.repo)
-    }
-
-    pub fn tasks(&self) -> crate::services::TaskService<'_, R> {
-        crate::services::TaskService::new(&self.repo)
-    }
-
-    pub fn memories(&self) -> crate::services::MemoryService<'_, R> {
-        crate::services::MemoryService::new(&self.repo)
-    }
-
-    pub fn codex(&self) -> crate::services::CodexService<'_, R> {
-        crate::services::CodexService::new(&self.repo)
     }
 }

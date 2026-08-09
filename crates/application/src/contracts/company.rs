@@ -308,6 +308,16 @@ pub struct CompanyConsoleView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanySummaryView {
+    pub company: Company,
+    pub human_membership: CompanyHumanMember,
+    pub org_units: Vec<OrgUnit>,
+    pub professions: Vec<CompanyProfessionSummary>,
+    pub project_types: Vec<CompanyProjectTypeSummary>,
+    pub governance_policy: CompanyGovernancePolicyView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanySkillCatalogView {
     pub professions: Vec<CompanyProfession>,
     pub project_types: Vec<CompanyProjectTypeDefinition>,

@@ -48,8 +48,8 @@ use crate::service::{
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
     CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
-    MemoryPlatformRepositoryPort, ProjectPlatformRepository, RegistrationCompletionBundle,
-    TaskPlatformRepository,
+    ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, ProjectPlatformRepository,
+    RegistrationCompletionBundle, TaskPlatformRepository,
 };
 
 #[derive(Default, Serialize, Deserialize)]

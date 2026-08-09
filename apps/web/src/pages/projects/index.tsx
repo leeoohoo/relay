@@ -48,7 +48,7 @@ export function ProjectsView(props: {
       await api(`/api/v1/companies/${props.consoleData.company.id}/projects/${project.project.id}/${paused ? "pause" : "resume"}`, { method: "POST" }, props.token);
       await props.onChanged();
       props.onNotice(paused
-        ? "项目已暂停：项目群、任务唤醒、资产维护和正在运行的项目 Agent 已停止。"
+        ? "项目已暂停：已停止新的项目消息、任务唤醒和资产维护；运行中的项目会话正在取消。"
         : "项目已恢复：项目群和 Agent 工作流重新启用。");
     } catch (error) {
       props.onError(error);

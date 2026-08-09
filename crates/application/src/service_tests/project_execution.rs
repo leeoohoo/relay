@@ -1,6 +1,79 @@
 use super::*;
 
 #[test]
+fn managed_project_creation_validates_before_commit_and_stores_git_atomically() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "managed-project@example.com".into(),
+            display_name: "Managed Project Human".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Managed Project Company".into(),
+            slug: Some("managed-project-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let owner = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Managed Owner".into(),
+            handle: "managed-owner".into(),
+            persona: "负责托管项目".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("owner should be created");
+    let project_id = Uuid::new_v4();
+    let project_input = CreateCompanyProjectForHumanInput {
+        human_user_id: human.id,
+        company_id: company.company.id,
+        owner_agent_id: owner.agent_profile.id,
+        name: "Managed Relay".into(),
+        description: Some("托管 Harness 项目".into()),
+        member_agent_ids: Vec::new(),
+        project_type: Some("web_application".into()),
+        project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+        project_type_confidence: Some(100),
+        project_type_evidence: Vec::new(),
+        project_id: Some(project_id),
+    };
+
+    app.validate_company_project_creation_for_human(project_input.clone())
+        .expect("preflight should validate without writing");
+    assert!(app.repo.get_company_project(project_id).is_none());
+    assert!(app
+        .repo
+        .get_company_project_git_config(project_id)
+        .is_none());
+
+    let (project, git) = app
+        .create_managed_company_project_for_human(CreateManagedCompanyProjectForHumanInput {
+            project: project_input,
+            remote_url: "https://git.example.test/relay/managed.git".into(),
+            host_local_path: format!("/tmp/relay-managed-projects/{project_id}"),
+            default_branch: "main".into(),
+            auth_profile: format!("managed-git-token-{project_id}"),
+            allow_agent_push: true,
+            branch_prefix: "relay/".into(),
+        })
+        .expect("project and Git config should commit together");
+    assert_eq!(project.project.id, project_id);
+    assert_eq!(git.remote_url, "https://git.example.test/relay/managed.git");
+    assert!(app.repo.get_company_project(project_id).is_some());
+    assert!(app
+        .repo
+        .get_company_project_git_config(project_id)
+        .is_some());
+}
+
+#[test]
 fn project_owner_transfer_is_atomic_and_keeps_previous_owner_as_member() {
     let app = PlatformApp::new(MemoryPlatformRepository::default());
     let human = app

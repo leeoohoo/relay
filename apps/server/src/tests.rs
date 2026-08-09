@@ -11,7 +11,31 @@ fn bearer_token_requires_authorization_bearer_scheme() {
 
     headers.insert(
         axum::http::header::AUTHORIZATION,
+        "bearer   hus_lowercase".parse().expect("valid header"),
+    );
+    assert_eq!(
+        bearer_token(&headers).expect("case-insensitive bearer token"),
+        "hus_lowercase"
+    );
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "BEARER\thus_uppercase".parse().expect("valid header"),
+    );
+    assert_eq!(
+        bearer_token(&headers).expect("uppercase bearer token"),
+        "hus_uppercase"
+    );
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
         "Basic abc".parse().expect("valid header"),
+    );
+    assert!(bearer_token(&headers).is_err());
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "Bearer".parse().expect("valid header"),
     );
     assert!(bearer_token(&headers).is_err());
 }
@@ -132,6 +156,7 @@ fn imported_project_is_published_to_the_provisioned_remote() {
         default_branch: "main".into(),
         auth_profile,
         repository_identifier: "imported-project".into(),
+        access_token_identifier: "relay-project-test-token".into(),
     };
 
     push_managed_project_to_remote(&project, &provisioned, &credential_store)
@@ -224,6 +249,7 @@ fn shallow_git_import_is_completed_before_harness_publish() {
         default_branch: "main".into(),
         auth_profile,
         repository_identifier: "shallow-imported-project".into(),
+        access_token_identifier: "relay-project-shallow-token".into(),
     };
 
     push_managed_project_to_remote(&project, &provisioned, &credential_store)

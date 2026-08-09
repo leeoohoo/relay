@@ -104,6 +104,86 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         human_user_id: Uuid,
         company_id: Uuid,
     ) -> AppResult<CompanyConsoleView> {
+        let (company, human_membership) =
+            self.company_console_identity(human_user_id, company_id)?;
+        let agents = self.company_console_agents(company_id)?;
+        let conversations = self.company_console_conversations(company_id, &agents)?;
+        let projects = self.company_console_projects(company_id)?;
+        Ok(CompanyConsoleView {
+            company,
+            human_membership,
+            org_units: self.repo.list_company_org_units(company_id),
+            agents,
+            conversations,
+            projects,
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
+            governance_policy: self.company_governance_policy_view(company_id),
+        })
+    }
+
+    pub fn get_company_summary(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<CompanySummaryView> {
+        let (company, human_membership) =
+            self.company_console_identity(human_user_id, company_id)?;
+        Ok(CompanySummaryView {
+            company,
+            human_membership,
+            org_units: self.repo.list_company_org_units(company_id),
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
+            governance_policy: self.company_governance_policy_view(company_id),
+        })
+    }
+
+    pub fn list_company_console_agents_for_human(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyConsoleAgentView>> {
+        self.company_console_identity(human_user_id, company_id)?;
+        self.company_console_agents(company_id)
+    }
+
+    pub fn list_company_console_conversations_for_human(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyConversationView>> {
+        self.company_console_identity(human_user_id, company_id)?;
+        let agents = self.company_console_agents(company_id)?;
+        self.company_console_conversations(company_id, &agents)
+    }
+
+    pub fn list_company_console_projects_for_human(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyProjectView>> {
+        self.company_console_identity(human_user_id, company_id)?;
+        self.company_console_projects(company_id)
+    }
+
+    fn company_console_identity(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<(Company, CompanyHumanMember)> {
         let company = self
             .repo
             .get_company_result(company_id)?
@@ -115,9 +195,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .ok_or_else(|| {
                 AppError::Unauthorized("human user is not an active company member".into())
             })?;
-        let org_units = self.repo.list_company_org_units(company_id);
-        let agents = self
-            .repo
+        Ok((company, human_membership))
+    }
+
+    fn company_console_agents(&self, company_id: Uuid) -> AppResult<Vec<CompanyConsoleAgentView>> {
+        self.repo
             .list_company_agent_memberships(company_id)
             .into_iter()
             .map(|membership| {
@@ -136,9 +218,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     connection,
                 })
             })
-            .collect::<AppResult<Vec<_>>>()?;
+            .collect::<AppResult<Vec<_>>>()
+    }
+
+    fn company_console_conversations(
+        &self,
+        company_id: Uuid,
+        agents: &[CompanyConsoleAgentView],
+    ) -> AppResult<Vec<CompanyConversationView>> {
         let mut conversations_by_id = HashMap::new();
-        for agent in &agents {
+        for agent in agents {
             for preview in self.repo.list_agent_conversations(agent.agent_profile.id) {
                 let Some(context) = self.repo.get_conversation_context_result(preview.id)? else {
                     continue;
@@ -194,29 +283,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .cmp(&left.preview.updated_at)
                 .then_with(|| left.preview.id.cmp(&right.preview.id))
         });
-        let projects = self
-            .repo
+        Ok(conversations)
+    }
+
+    fn company_console_projects(&self, company_id: Uuid) -> AppResult<Vec<CompanyProjectView>> {
+        self.repo
             .list_company_projects_result(company_id)?
             .into_iter()
             .map(|project| self.company_project_view(project))
-            .collect::<AppResult<Vec<_>>>()?;
-        Ok(CompanyConsoleView {
-            company,
-            human_membership,
-            org_units,
-            agents,
-            conversations,
-            projects,
-            professions: company_profession_catalog()
-                .into_iter()
-                .map(CompanyProfessionSummary::from)
-                .collect(),
-            project_types: company_project_type_catalog()
-                .into_iter()
-                .map(CompanyProjectTypeSummary::from)
-                .collect(),
-            governance_policy: self.company_governance_policy_view(company_id),
-        })
+            .collect::<AppResult<Vec<_>>>()
     }
 
     pub fn get_company_skill_catalog(

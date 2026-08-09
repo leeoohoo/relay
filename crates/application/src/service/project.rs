@@ -9,6 +9,14 @@ pub trait ProjectPlatformRepository: Send + Sync {
             "company projects are not supported by this repository".into(),
         ))
     }
+    fn complete_managed_company_project_creation(
+        &self,
+        _bundle: ManagedCompanyProjectCreationBundle,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "managed company projects are not supported by this repository".into(),
+        ))
+    }
     fn get_company_project(&self, _project_id: Uuid) -> Option<CompanyProject> {
         None
     }

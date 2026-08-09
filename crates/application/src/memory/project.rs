@@ -8,51 +8,31 @@ impl ProjectPlatformRepository for MemoryPlatformRepository {
         bundle: CompanyProjectCreationBundle,
     ) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
-        if guard.company_projects.contains_key(&bundle.project.id) {
-            return Err(ai_chat_shared::AppError::Conflict(
-                "company project already exists".into(),
-            ));
-        }
-        if bundle.conversation_members.is_empty() {
+        insert_company_project_creation(&mut guard, bundle)
+    }
+
+    fn complete_managed_company_project_creation(
+        &self,
+        bundle: ManagedCompanyProjectCreationBundle,
+    ) -> AppResult<()> {
+        if bundle.git_config.project_id != bundle.project_creation.project.id {
             return Err(ai_chat_shared::AppError::Validation(
-                "project conversation members required".into(),
+                "managed Git configuration must belong to the created project".into(),
             ));
         }
-        let conversation_id = bundle.project.project_group_conversation_id;
-        if bundle
-            .conversation_members
-            .iter()
-            .any(|member| member.preview.id != conversation_id)
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if guard
+            .company_project_git_configs
+            .contains_key(&bundle.git_config.project_id)
         {
-            return Err(ai_chat_shared::AppError::Validation(
-                "project conversation previews must share one id".into(),
+            return Err(ai_chat_shared::AppError::Conflict(
+                "company project Git configuration already exists".into(),
             ));
         }
-        for conversation_member in bundle.conversation_members {
-            guard
-                .conversations
-                .entry(conversation_member.agent_id)
-                .or_default()
-                .push(conversation_member.preview);
-        }
-        guard.conversation_contexts.insert(
-            conversation_id,
-            ConversationContext {
-                conversation_id,
-                company_id: Some(bundle.project.company_id),
-                project_id: Some(bundle.project.id),
-                context_type: CONVERSATION_CONTEXT_PROJECT_GROUP.into(),
-                visibility: "members".into(),
-            },
-        );
-        for member in bundle.members {
-            guard
-                .company_project_members
-                .insert((member.project_id, member.agent_profile_id), member);
-        }
+        insert_company_project_creation(&mut guard, bundle.project_creation)?;
         guard
-            .company_projects
-            .insert(bundle.project.id, bundle.project);
+            .company_project_git_configs
+            .insert(bundle.git_config.project_id, bundle.git_config);
         Ok(())
     }
 
@@ -383,4 +363,56 @@ impl ProjectPlatformRepository for MemoryPlatformRepository {
         }
         Ok(())
     }
+}
+
+fn insert_company_project_creation(
+    guard: &mut super::MemoryState,
+    bundle: CompanyProjectCreationBundle,
+) -> AppResult<()> {
+    if guard.company_projects.contains_key(&bundle.project.id) {
+        return Err(ai_chat_shared::AppError::Conflict(
+            "company project already exists".into(),
+        ));
+    }
+    if bundle.conversation_members.is_empty() {
+        return Err(ai_chat_shared::AppError::Validation(
+            "project conversation members required".into(),
+        ));
+    }
+    let conversation_id = bundle.project.project_group_conversation_id;
+    if bundle
+        .conversation_members
+        .iter()
+        .any(|member| member.preview.id != conversation_id)
+    {
+        return Err(ai_chat_shared::AppError::Validation(
+            "project conversation previews must share one id".into(),
+        ));
+    }
+    for conversation_member in bundle.conversation_members {
+        guard
+            .conversations
+            .entry(conversation_member.agent_id)
+            .or_default()
+            .push(conversation_member.preview);
+    }
+    guard.conversation_contexts.insert(
+        conversation_id,
+        ConversationContext {
+            conversation_id,
+            company_id: Some(bundle.project.company_id),
+            project_id: Some(bundle.project.id),
+            context_type: CONVERSATION_CONTEXT_PROJECT_GROUP.into(),
+            visibility: "members".into(),
+        },
+    );
+    for member in bundle.members {
+        guard
+            .company_project_members
+            .insert((member.project_id, member.agent_profile_id), member);
+    }
+    guard
+        .company_projects
+        .insert(bundle.project.id, bundle.project);
+    Ok(())
 }

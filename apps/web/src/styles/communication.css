@@ -693,7 +693,9 @@
 .project-context-tabs button > span { border-radius: 999px; padding: 2px 5px; color: #99dfe9; background: rgba(77,226,255,.09); font-size: 7px; }
 .project-context-drawer-body {
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 10px;
 }
 .project-context-drawer-body > .project-repository-browser {
@@ -703,8 +705,19 @@
   margin-top: 0;
 }
 .project-context-drawer-body .project-repository-browser-grid {
+  height: 100%;
   min-height: 0;
   grid-template-columns: minmax(185px, 34%) minmax(0, 1fr);
+}
+.project-context-drawer-body .project-repository-browser-tree,
+.project-context-drawer-body .project-repository-browser-preview {
+  min-height: 0;
+  overflow: hidden;
+}
+.project-context-drawer-body .repository-entry-list,
+.project-context-drawer-body .repository-code-frame,
+.project-context-drawer-body .repository-svg-preview {
+  overscroll-behavior: contain;
 }
 .project-context-drawer-body .repository-preview-placeholder,
 .project-context-drawer-body .repository-file-unavailable { min-height: 0; }

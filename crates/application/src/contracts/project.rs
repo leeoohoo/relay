@@ -64,6 +64,12 @@ pub struct CompanyProjectCreationBundle {
 }
 
 #[derive(Debug, Clone)]
+pub struct ManagedCompanyProjectCreationBundle {
+    pub project_creation: CompanyProjectCreationBundle,
+    pub git_config: ai_chat_domain::company::CompanyProjectGitConfig,
+}
+
+#[derive(Debug, Clone)]
 pub struct CompanyProjectMemberAddBundle {
     pub member: CompanyProjectMember,
     pub conversation_preview: CompanyConversationMemberPreview,
@@ -98,6 +104,17 @@ pub struct CreateCompanyProjectForHumanInput {
     pub project_type_confidence: Option<i32>,
     pub project_type_evidence: Vec<String>,
     pub project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateManagedCompanyProjectForHumanInput {
+    pub project: CreateCompanyProjectForHumanInput,
+    pub remote_url: String,
+    pub host_local_path: String,
+    pub default_branch: String,
+    pub auth_profile: String,
+    pub allow_agent_push: bool,
+    pub branch_prefix: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

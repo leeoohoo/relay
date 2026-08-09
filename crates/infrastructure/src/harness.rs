@@ -27,6 +27,7 @@ use crate::project_git::{
     ProvisionedProjectGit,
 };
 
+mod project;
 mod repository;
 
 pub use repository::{
@@ -281,6 +282,27 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             AppError::Validation("HARNESS_BASE_URL is required for Git provisioning".into())
         })?;
         let repository_identifier = generated_repository_identifier(project_name, project_id);
+        let public_base =
+            reqwest::Url::parse(account.harness_base_url.as_str()).map_err(|error| {
+                AppError::Validation(format!("invalid Harness public URL: {error}"))
+            })?;
+        let remote_url = public_base
+            .join(&format!(
+                "git/{}/{}.git",
+                account.space_identifier, repository_identifier
+            ))
+            .map_err(|error| AppError::Validation(format!("invalid Harness Git URL: {error}")))?
+            .to_string();
+        let internal_base = reqwest::Url::parse(api_base_url).map_err(|error| {
+            AppError::Validation(format!("invalid Harness internal URL: {error}"))
+        })?;
+        let push_url = internal_base
+            .join(&format!(
+                "git/{}/{}.git",
+                account.space_identifier, repository_identifier
+            ))
+            .map_err(|error| AppError::Validation(format!("invalid Harness push URL: {error}")))?
+            .to_string();
         let create = HarnessCreateRepositoryRequest {
             parent_ref: account.space_identifier.as_str(),
             identifier: repository_identifier.as_str(),
@@ -321,36 +343,45 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         };
         let project_token = self
             .create_project_access_token(api_base_url, access_token.as_str(), project_id)
-            .await
-            .map_err(|error| {
-                AppError::Internal(format!("create Harness project token: {error}"))
-            })?;
+            .await;
+        let project_token = match project_token {
+            Ok(token) => token,
+            Err(error) => {
+                let original = AppError::Internal(format!("create Harness project token: {error}"));
+                let cleanup_error = self
+                    .cleanup_project_git_resources(
+                        human_user_id,
+                        project_id,
+                        repository_identifier.as_str(),
+                        None,
+                        git_credentials,
+                    )
+                    .await
+                    .err();
+                return Err(with_cleanup_error(original, cleanup_error));
+            }
+        };
         let auth_profile = git_credentials.store_managed_git_token(
             project_id,
             account.harness_uid.as_str(),
-            project_token.as_str(),
-        )?;
-        let public_base =
-            reqwest::Url::parse(account.harness_base_url.as_str()).map_err(|error| {
-                AppError::Validation(format!("invalid Harness public URL: {error}"))
-            })?;
-        let remote_url = public_base
-            .join(&format!(
-                "git/{}/{}.git",
-                account.space_identifier, repository_identifier
-            ))
-            .map_err(|error| AppError::Validation(format!("invalid Harness Git URL: {error}")))?
-            .to_string();
-        let internal_base = reqwest::Url::parse(api_base_url).map_err(|error| {
-            AppError::Validation(format!("invalid Harness internal URL: {error}"))
-        })?;
-        let push_url = internal_base
-            .join(&format!(
-                "git/{}/{}.git",
-                account.space_identifier, repository_identifier
-            ))
-            .map_err(|error| AppError::Validation(format!("invalid Harness push URL: {error}")))?
-            .to_string();
+            project_token.access_token.as_str(),
+        );
+        let auth_profile = match auth_profile {
+            Ok(profile) => profile,
+            Err(error) => {
+                let cleanup_error = self
+                    .cleanup_project_git_resources(
+                        human_user_id,
+                        project_id,
+                        repository_identifier.as_str(),
+                        Some(project_token.identifier.as_str()),
+                        git_credentials,
+                    )
+                    .await
+                    .err();
+                return Err(with_cleanup_error(error, cleanup_error));
+            }
+        };
         Ok(ProvisionedProjectGit {
             remote_url,
             push_url: Some(push_url),
@@ -361,97 +392,8 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             },
             auth_profile,
             repository_identifier,
+            access_token_identifier: project_token.identifier,
         })
-    }
-
-    pub async fn refresh_project_git_credentials(
-        &self,
-        human_user_id: Uuid,
-        project_id: Uuid,
-        git_credentials: &GitCredentialStore,
-    ) -> AppResult<String> {
-        if !self.is_enabled() {
-            return Err(AppError::Validation(
-                "Harness is disabled; managed Git credentials cannot be refreshed".into(),
-            ));
-        }
-        let mut account = self.active_account(human_user_id)?;
-        let api_base_url = self.config.api_base_url.as_deref().ok_or_else(|| {
-            AppError::Validation("HARNESS_BASE_URL is required for Git provisioning".into())
-        })?;
-        let mut access_token = self.account_access_token(human_user_id)?;
-        let project_token = match self
-            .create_project_access_token(api_base_url, access_token.as_str(), project_id)
-            .await
-        {
-            Ok(token) => token,
-            Err(error) if error.is_unauthorized() => {
-                self.credentials.remove_access_token(human_user_id)?;
-                let user = self
-                    .repo
-                    .get_human_user_result(human_user_id)?
-                    .ok_or_else(|| AppError::NotFound("Human user not found".into()))?;
-                account = self.ensure_active_account(&user).await?;
-                access_token = self.account_access_token(human_user_id)?;
-                self.create_project_access_token(api_base_url, access_token.as_str(), project_id)
-                    .await
-                    .map_err(|retry_error| {
-                        AppError::Internal(format!(
-                            "refresh Harness project token after account recovery: {retry_error}"
-                        ))
-                    })?
-            }
-            Err(error) => {
-                return Err(AppError::Internal(format!(
-                    "refresh Harness project token: {error}"
-                )))
-            }
-        };
-        git_credentials.store_managed_git_token(
-            project_id,
-            account.harness_uid.as_str(),
-            project_token.as_str(),
-        )
-    }
-
-    fn active_account(&self, human_user_id: Uuid) -> AppResult<HumanHarnessAccount> {
-        self.repo
-            .get_human_harness_account_result(human_user_id)?
-            .filter(|account| account.status == HUMAN_HARNESS_STATUS_ACTIVE)
-            .ok_or_else(|| {
-                AppError::Validation("当前用户的 Harness 账户尚未就绪，无法刷新项目凭证".into())
-            })
-    }
-
-    fn account_access_token(&self, human_user_id: Uuid) -> AppResult<String> {
-        self.credentials
-            .read_access_token(human_user_id)?
-            .ok_or_else(|| AppError::Validation("Harness access token is unavailable".into()))
-    }
-
-    async fn create_project_access_token(
-        &self,
-        api_base_url: &str,
-        access_token: &str,
-        project_id: Uuid,
-    ) -> Result<String, HarnessRequestError> {
-        let token_identifier = format!(
-            "relay-project-{}-{}",
-            short_identifier(project_id),
-            short_identifier(Uuid::new_v4())
-        );
-        let token_request = HarnessCreateAccessTokenRequest {
-            identifier: token_identifier.as_str(),
-        };
-        let response = self
-            .request_json::<HarnessTokenResponse, _>(
-                Method::POST,
-                format!("{api_base_url}/api/v1/user/tokens").as_str(),
-                Some(access_token),
-                Some(&token_request),
-            )
-            .await?;
-        non_empty_token(response.access_token)
     }
 
     async fn provision_inner(
@@ -662,6 +604,34 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             .await
             .map_err(HarnessRequestError::transport)
     }
+
+    async fn request_without_response(
+        &self,
+        method: Method,
+        endpoint: &str,
+        bearer_token: Option<&str>,
+    ) -> Result<(), HarnessRequestError> {
+        let mut request = self.client.request(method, endpoint);
+        if let Some(token) = bearer_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(HarnessRequestError::transport)?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let message = response
+            .text()
+            .await
+            .unwrap_or_else(|error| error.to_string());
+        Err(HarnessRequestError {
+            status: Some(status),
+            message: truncate_error(message.as_str()),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -735,6 +705,11 @@ struct HarnessTokenResponse {
     access_token: String,
 }
 
+struct HarnessCreatedToken {
+    identifier: String,
+    access_token: String,
+}
+
 #[derive(Debug)]
 struct HarnessRequestError {
     status: Option<StatusCode>,
@@ -747,6 +722,10 @@ impl HarnessRequestError {
             status: None,
             message: error.to_string(),
         }
+    }
+
+    fn is_not_found(&self) -> bool {
+        self.status == Some(StatusCode::NOT_FOUND)
     }
 
     fn is_already_exists(&self) -> bool {
@@ -951,6 +930,15 @@ fn set_mode(_path: &Path, _mode: u32) -> AppResult<()> {
 
 fn credential_error(error: std::io::Error) -> AppError {
     AppError::Internal(format!("Harness credential filesystem error: {error}"))
+}
+
+fn with_cleanup_error(original: AppError, cleanup_error: Option<AppError>) -> AppError {
+    match cleanup_error {
+        Some(cleanup_error) => AppError::Internal(format!(
+            "{original}; automatic cleanup also failed: {cleanup_error}"
+        )),
+        None => original,
+    }
 }
 
 #[cfg(test)]

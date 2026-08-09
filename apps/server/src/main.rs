@@ -43,8 +43,9 @@ use rmcp::transport::streamable_http_server::{
 
 use ai_chat_application::{
     ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
-    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput,
-    DeleteAgentMemoryForHumanInput, DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
+    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
+    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput, DeleteAgentMemoryForHumanInput,
+    DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
     GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
@@ -59,7 +60,6 @@ use ai_chat_application::{
     UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
     UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
     UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
-    UpsertCompanyProjectGitForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -386,6 +386,14 @@ async fn main() -> anyhow::Result<()> {
             get(get_company_console),
         )
         .route(
+            "/api/v1/companies/{company_id}/summary",
+            get(get_company_summary),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/conversations",
+            get(list_company_console_conversations),
+        )
+        .route(
             "/api/v1/companies/{company_id}/skill-catalog",
             get(get_company_skill_catalog),
         )
@@ -403,7 +411,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/projects",
-            post(create_company_project_for_human),
+            get(list_company_console_projects).post(create_company_project_for_human),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/import-folder",
@@ -437,7 +445,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/agents",
-            post(create_company_agent),
+            get(list_company_console_agents).post(create_company_agent),
         )
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/permissions",

@@ -85,6 +85,9 @@ jobs:
       - name: Repository Result boundary
         run: ./scripts/check_repository_result_usage.sh
 
+      - name: Architecture boundaries
+        run: ./scripts/check_architecture_boundaries.sh
+
       - name: Rust dependency audit
         run: cargo audit --deny warnings
 

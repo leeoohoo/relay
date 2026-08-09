@@ -16,8 +16,8 @@ use ai_chat_application::{
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
     CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
-    MemoryPlatformRepositoryPort, MessagePageView, ProjectPlatformRepository,
-    RegistrationCompletionBundle, TaskPlatformRepository,
+    ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, MessagePageView,
+    ProjectPlatformRepository, RegistrationCompletionBundle, TaskPlatformRepository,
 };
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,

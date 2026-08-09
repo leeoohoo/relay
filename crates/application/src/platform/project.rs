@@ -43,6 +43,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         &self,
         input: CreateCompanyProjectForHumanInput,
     ) -> AppResult<CompanyProjectView> {
+        let project_creation = self.prepare_company_project_for_human(input)?;
+        self.complete_company_project_creation(project_creation, None)
+            .map(|(project, _)| project)
+    }
+
+    pub(super) fn prepare_company_project_for_human(
+        &self,
+        input: CreateCompanyProjectForHumanInput,
+    ) -> AppResult<CompanyProjectCreationBundle> {
         self.ensure_company_human_manager(input.company_id, input.human_user_id)?;
         self.ensure_agent_can_act(input.owner_agent_id)?;
         self.ensure_active_company_conversation_member(input.company_id, input.owner_agent_id)?;
@@ -71,7 +80,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "unsupported project_type_source".into(),
             ));
         }
-        self.create_company_project_record(
+        self.prepare_company_project_record(
             input.owner_agent_id,
             input.company_id,
             input.name,
@@ -106,6 +115,36 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         project_type_evidence: Vec<String>,
         requested_project_id: Option<Uuid>,
     ) -> AppResult<CompanyProjectView> {
+        let project_creation = self.prepare_company_project_record(
+            owner_agent_id,
+            company_id,
+            raw_name,
+            description,
+            requested_member_agent_ids,
+            project_type,
+            project_type_source,
+            project_type_confidence,
+            project_type_evidence,
+            requested_project_id,
+        )?;
+        self.complete_company_project_creation(project_creation, None)
+            .map(|(project, _)| project)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_company_project_record(
+        &self,
+        owner_agent_id: Uuid,
+        company_id: Uuid,
+        raw_name: String,
+        description: String,
+        requested_member_agent_ids: Vec<Uuid>,
+        project_type: String,
+        project_type_source: String,
+        project_type_confidence: i32,
+        project_type_evidence: Vec<String>,
+        requested_project_id: Option<Uuid>,
+    ) -> AppResult<CompanyProjectCreationBundle> {
         let governance = self.effective_company_governance_policy_settings(company_id);
         let active_project_count = self
             .repo
@@ -197,36 +236,60 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 added_by_agent_id: owner_agent_id,
             })
             .collect::<Vec<_>>();
-        self.repo
-            .complete_company_project_creation(CompanyProjectCreationBundle {
-                project: project.clone(),
-                members,
-                conversation_members: member_agent_ids
-                    .iter()
-                    .copied()
-                    .map(|agent_id| CompanyConversationMemberPreview {
-                        agent_id,
-                        preview: preview.clone(),
-                    })
-                    .collect(),
-            })?;
+        Ok(CompanyProjectCreationBundle {
+            project,
+            members,
+            conversation_members: member_agent_ids
+                .iter()
+                .copied()
+                .map(|agent_id| CompanyConversationMemberPreview {
+                    agent_id,
+                    preview: preview.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    pub(super) fn complete_company_project_creation(
+        &self,
+        project_creation: CompanyProjectCreationBundle,
+        git_config: Option<CompanyProjectGitConfig>,
+    ) -> AppResult<(CompanyProjectView, Option<CompanyProjectGitConfig>)> {
+        let project = project_creation.project.clone();
+        let member_agent_ids = project_creation
+            .members
+            .iter()
+            .map(|member| member.agent_profile_id)
+            .collect::<Vec<_>>();
+        if let Some(git_config) = git_config.as_ref() {
+            self.repo.complete_managed_company_project_creation(
+                ManagedCompanyProjectCreationBundle {
+                    project_creation,
+                    git_config: git_config.clone(),
+                },
+            )?;
+        } else {
+            self.repo
+                .complete_company_project_creation(project_creation)?;
+        }
         for agent_id in member_agent_ids {
-            if agent_id != owner_agent_id {
+            if agent_id != project.owner_agent_id {
+                let name = project.name.as_str();
                 let _ = self.enqueue_agent_event(
                     agent_id,
                     "company.project.member_added",
                     json!({
-                        "company_id": company_id,
-                        "project_id": project_id,
+                        "company_id": project.company_id,
+                        "project_id": project.id,
                         "project_name": name,
-                        "conversation_id": conversation_id,
-                        "added_by_agent_id": owner_agent_id,
+                        "conversation_id": project.project_group_conversation_id,
+                        "added_by_agent_id": project.owner_agent_id,
                     }),
                     35,
                 );
             }
         }
-        self.company_project_view(project)
+        Ok((self.company_project_view(project)?, git_config))
     }
 
     pub fn get_company_project(

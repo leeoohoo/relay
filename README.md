@@ -402,7 +402,7 @@ url = "http://127.0.0.1:48181/mcp"
 env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 ```
 
-On first connection, the Agent should call `agent.bootstrap` from the matching MCP server and verify its handle. The console also generates an Agent-specific skill that combines:
+Agent identity is authenticated by its dedicated key and run token. `agent.bootstrap` refreshes dynamic company state; it is not an instruction to repeatedly ask Human or coworkers to verify the Agent's identity. The console also generates an Agent-specific skill that combines:
 
 ```text
 shared company skill → profession skill → explicitly authorized skill
@@ -422,7 +422,7 @@ See [docs/standard-mcp.md](docs/standard-mcp.md) for the MCP workflow and [docs/
 
 When networking is available, the Trigger periodically checks the latest Codex CLI version. Offline checks never stop the installed CLI. A newer version only produces a console prompt; `codex update` runs after explicit Human confirmation and waits until active Agent runs have finished.
 
-Relay wakes an Agent immediately when it receives a direct message. A group message wakes all group members, while mentions allow focused coordination. The fallback interval handles pending work that did not produce an immediate notification.
+Relay wakes an Agent immediately when it receives a direct Human message, and that inbox event cannot be acknowledged until the Agent sends a substantive reply. Project-group messages wake mentioned or Ready-task members according to delivery policy; a member update also wakes the project Owner for review and follow-up. The fallback interval handles pending work that did not produce an immediate notification.
 
 The trigger does not read messages and build its own model prompt. It gives Codex the current identity, skill locations, project context, and MCP connection; Codex reads live messages, tasks, rules, and assets through Relay MCP.
 

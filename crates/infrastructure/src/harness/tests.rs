@@ -8,7 +8,7 @@ use ai_chat_application::{AuthPlatformRepository, MemoryPlatformRepository};
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 
@@ -511,6 +511,215 @@ async fn refreshes_project_git_credentials_for_the_repository_owner() {
     let token = fs::read_to_string(&environment["RELAY_GIT_TOKEN_FILE"]).unwrap();
     assert_eq!(username, identity.uid);
     assert_eq!(token, "fresh-project-token-1234567890");
+
+    server.abort();
+    let _ = fs::remove_dir_all(credentials_root);
+    let _ = fs::remove_dir_all(git_credentials_root);
+}
+
+#[tokio::test]
+async fn failed_project_token_creation_deletes_the_new_repository() {
+    let repository_delete_calls = Arc::new(AtomicUsize::new(0));
+    let delete_counter = repository_delete_calls.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/repos",
+            post(|| async { Json(serde_json::json!({"default_branch": "main"})) }),
+        )
+        .route(
+            "/api/v1/user/tokens",
+            post(|| async {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({"message": "token service unavailable"})),
+                )
+            }),
+        )
+        .route(
+            "/api/v1/repos/{*repository}",
+            delete(move || {
+                delete_counter.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::NO_CONTENT }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let credentials_root = std::env::temp_dir().join(format!(
+        "relay-harness-project-rollback-{}",
+        Uuid::new_v4().simple()
+    ));
+    let git_credentials_root = std::env::temp_dir().join(format!(
+        "relay-git-project-rollback-{}",
+        Uuid::new_v4().simple()
+    ));
+    let repo = MemoryPlatformRepository::default();
+    let user = HumanUser {
+        id: Uuid::new_v4(),
+        email: "rollback@example.test".into(),
+        display_name: "Rollback Human".into(),
+        created_at: Utc::now(),
+    };
+    repo.insert_human_user(user.clone()).unwrap();
+    let identity = HarnessIdentity::for_user(&user, "u-");
+    let now = Utc::now();
+    repo.upsert_human_harness_account(HumanHarnessAccount {
+        human_user_id: user.id,
+        provider_mode: "self_hosted".into(),
+        harness_base_url: format!("http://{address}"),
+        harness_uid: identity.uid,
+        harness_email: identity.email,
+        space_identifier: identity.space_identifier,
+        status: HUMAN_HARNESS_STATUS_ACTIVE.into(),
+        attempt_count: 1,
+        last_error: None,
+        last_attempt_at: Some(now),
+        provisioned_at: Some(now),
+        created_at: now,
+        updated_at: now,
+    })
+    .unwrap();
+    let provisioner = HarnessProvisioner {
+        repo,
+        config: HarnessProvisioningConfig {
+            mode: HarnessMode::SelfHosted,
+            api_base_url: Some(format!("http://{address}")),
+            public_base_url: Some(format!("http://{address}")),
+            space_prefix: "u-".into(),
+            admin_email: None,
+            admin_password: None,
+        },
+        credentials: HarnessCredentialStore::at(credentials_root.clone()).unwrap(),
+        client: reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap(),
+        user_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
+    provisioner
+        .credentials
+        .store_access_token(user.id, "account-token")
+        .unwrap();
+    let git_credentials = GitCredentialStore::at(git_credentials_root.clone()).unwrap();
+    let project_id = Uuid::new_v4();
+
+    let error = provisioner
+        .provision_project_git(user.id, project_id, "Rollback", "", &git_credentials)
+        .await
+        .expect_err("project token failure must abort provisioning");
+    assert!(error.to_string().contains("project token"));
+    assert_eq!(repository_delete_calls.load(Ordering::SeqCst), 1);
+    assert!(!git_credentials.has_managed_git_token(project_id));
+
+    server.abort();
+    let _ = fs::remove_dir_all(credentials_root);
+    let _ = fs::remove_dir_all(git_credentials_root);
+}
+
+#[tokio::test]
+async fn project_cleanup_revokes_token_repository_and_local_credentials() {
+    let token_delete_calls = Arc::new(AtomicUsize::new(0));
+    let repository_delete_calls = Arc::new(AtomicUsize::new(0));
+    let token_counter = token_delete_calls.clone();
+    let repository_counter = repository_delete_calls.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/user/tokens/{identifier}",
+            delete(move || {
+                token_counter.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::NO_CONTENT }
+            }),
+        )
+        .route(
+            "/api/v1/repos/{*repository}",
+            delete(move || {
+                repository_counter.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::NO_CONTENT }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let credentials_root = std::env::temp_dir().join(format!(
+        "relay-harness-explicit-cleanup-{}",
+        Uuid::new_v4().simple()
+    ));
+    let git_credentials_root = std::env::temp_dir().join(format!(
+        "relay-git-explicit-cleanup-{}",
+        Uuid::new_v4().simple()
+    ));
+    let repo = MemoryPlatformRepository::default();
+    let user = HumanUser {
+        id: Uuid::new_v4(),
+        email: "cleanup@example.test".into(),
+        display_name: "Cleanup Human".into(),
+        created_at: Utc::now(),
+    };
+    repo.insert_human_user(user.clone()).unwrap();
+    let identity = HarnessIdentity::for_user(&user, "u-");
+    let now = Utc::now();
+    repo.upsert_human_harness_account(HumanHarnessAccount {
+        human_user_id: user.id,
+        provider_mode: "self_hosted".into(),
+        harness_base_url: format!("http://{address}"),
+        harness_uid: identity.uid,
+        harness_email: identity.email,
+        space_identifier: identity.space_identifier,
+        status: HUMAN_HARNESS_STATUS_ACTIVE.into(),
+        attempt_count: 1,
+        last_error: None,
+        last_attempt_at: Some(now),
+        provisioned_at: Some(now),
+        created_at: now,
+        updated_at: now,
+    })
+    .unwrap();
+    let provisioner = HarnessProvisioner {
+        repo,
+        config: HarnessProvisioningConfig {
+            mode: HarnessMode::SelfHosted,
+            api_base_url: Some(format!("http://{address}")),
+            public_base_url: Some(format!("http://{address}")),
+            space_prefix: "u-".into(),
+            admin_email: None,
+            admin_password: None,
+        },
+        credentials: HarnessCredentialStore::at(credentials_root.clone()).unwrap(),
+        client: reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap(),
+        user_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
+    provisioner
+        .credentials
+        .store_access_token(user.id, "account-token")
+        .unwrap();
+    let git_credentials = GitCredentialStore::at(git_credentials_root.clone()).unwrap();
+    let project_id = Uuid::new_v4();
+    let auth_profile = git_credentials
+        .store_managed_git_token(
+            project_id,
+            "relay-cleanup",
+            "cleanup-project-token-1234567890",
+        )
+        .unwrap();
+    let provisioned = ProvisionedProjectGit {
+        remote_url: format!("http://{address}/git/demo/repository.git"),
+        push_url: None,
+        default_branch: "main".into(),
+        auth_profile,
+        repository_identifier: "repository".into(),
+        access_token_identifier: "relay-project-cleanup-token".into(),
+    };
+
+    provisioner
+        .cleanup_provisioned_project_git(user.id, project_id, &provisioned, &git_credentials)
+        .await
+        .unwrap();
+    assert_eq!(token_delete_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(repository_delete_calls.load(Ordering::SeqCst), 1);
+    assert!(!git_credentials.has_managed_git_token(project_id));
 
     server.abort();
     let _ = fs::remove_dir_all(credentials_root);

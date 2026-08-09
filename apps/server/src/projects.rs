@@ -7,6 +7,25 @@ pub(super) async fn create_company_project_for_human(
     Json(input): Json<CreateCompanyProjectRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let human = authenticate_human_request(&state, &headers)?;
+    let project_id = Uuid::new_v4();
+    state.platform.validate_company_project_creation_for_human(
+        CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            owner_agent_id: input.owner_agent_id,
+            name: input.name.clone(),
+            description: input.description.clone(),
+            member_agent_ids: input.member_agent_ids.clone(),
+            project_type: input.project_type.clone(),
+            project_type_source: input
+                .project_type
+                .as_ref()
+                .map(|_| PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: None,
+            project_type_evidence: Vec::new(),
+            project_id: Some(project_id),
+        },
+    )?;
     let policy = state
         .platform
         .get_company_governance_policy_for_human(human.id, company_id)?;
@@ -21,7 +40,6 @@ pub(super) async fn create_company_project_for_human(
         ))
     })?;
 
-    let project_id = Uuid::new_v4();
     let destination = workspace_root.join(managed_project_directory_name(&input.name, project_id));
     let description = input.description.clone().unwrap_or_default();
 
@@ -99,10 +117,9 @@ pub(super) async fn create_company_project_for_human(
             return Err(error.into());
         }
     };
-    let project_result =
-        state
-            .platform
-            .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+    let project_result = state.platform.create_managed_company_project_for_human(
+        CreateManagedCompanyProjectForHumanInput {
+            project: CreateCompanyProjectForHumanInput {
                 human_user_id: human.id,
                 company_id,
                 owner_agent_id: input.owner_agent_id,
@@ -128,31 +145,33 @@ pub(super) async fn create_company_project_for_human(
                     type_evidence.into_iter().take(24).collect()
                 },
                 project_id: Some(project_id),
-            });
-    let project = match project_result {
-        Ok(project) => project,
+            },
+            remote_url: provisioned.remote_url.clone(),
+            host_local_path: destination.to_string_lossy().into_owned(),
+            default_branch: provisioned.default_branch.clone(),
+            auth_profile: provisioned.auth_profile.clone(),
+            allow_agent_push: true,
+            branch_prefix: "relay/".into(),
+        },
+    );
+    let (project, git) = match project_result {
+        Ok(result) => result,
         Err(error) => {
-            let _ = fs::remove_dir_all(&destination);
-            return Err(error.into());
+            let compensated = compensate_failed_project_creation(
+                &state,
+                &human,
+                project_id,
+                &destination,
+                &provisioned,
+                error,
+            )
+            .await;
+            return Err(compensated.into());
         }
     };
-
-    let git = Some(state.platform.upsert_company_project_git_for_human(
-        UpsertCompanyProjectGitForHumanInput {
-            human_user_id: human.id,
-            company_id,
-            project_id,
-            remote_url: provisioned.remote_url,
-            host_local_path: Some(destination.to_string_lossy().into_owned()),
-            default_branch: Some(provisioned.default_branch),
-            auth_profile: Some(provisioned.auth_profile),
-            allow_agent_push: Some(true),
-            branch_prefix: Some("relay/".into()),
-        },
-    )?);
     Ok(Json(serde_json::json!({
         "project": project,
-        "git": git,
+        "git": Some(git),
         "managed_local_path": destination,
     })))
 }
@@ -192,6 +211,26 @@ pub(super) async fn import_company_project_folder_for_human(
         .into());
     }
 
+    let project_id = Uuid::new_v4();
+    state.platform.validate_company_project_creation_for_human(
+        CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            owner_agent_id: metadata.owner_agent_id,
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            member_agent_ids: metadata.member_agent_ids.clone(),
+            project_type: metadata.project_type.clone(),
+            project_type_source: metadata
+                .project_type
+                .as_ref()
+                .map(|_| PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: None,
+            project_type_evidence: Vec::new(),
+            project_id: Some(project_id),
+        },
+    )?;
+
     let mut normalized_paths = Vec::with_capacity(metadata.file_paths.len());
     let mut unique_paths = HashSet::new();
     for raw in &metadata.file_paths {
@@ -220,7 +259,6 @@ pub(super) async fn import_company_project_folder_for_human(
             workspace_root.display()
         ))
     })?;
-    let project_id = Uuid::new_v4();
     let destination =
         workspace_root.join(managed_project_directory_name(&metadata.name, project_id));
     let staging = workspace_root.join(format!(".relay-upload-{project_id}"));
@@ -354,10 +392,9 @@ pub(super) async fn import_company_project_folder_for_human(
             return Err(error.into());
         }
     };
-    let project_result =
-        state
-            .platform
-            .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+    let project_result = state.platform.create_managed_company_project_for_human(
+        CreateManagedCompanyProjectForHumanInput {
+            project: CreateCompanyProjectForHumanInput {
                 human_user_id: human.id,
                 company_id,
                 owner_agent_id: metadata.owner_agent_id,
@@ -381,27 +418,30 @@ pub(super) async fn import_company_project_folder_for_human(
                     type_evidence.into_iter().take(24).collect()
                 },
                 project_id: Some(project_id),
-            });
-    let project = match project_result {
-        Ok(project) => project,
+            },
+            remote_url: provisioned_git.remote_url.clone(),
+            host_local_path: destination.to_string_lossy().into_owned(),
+            default_branch: provisioned_git.default_branch.clone(),
+            auth_profile: provisioned_git.auth_profile.clone(),
+            allow_agent_push: true,
+            branch_prefix: "relay/".into(),
+        },
+    );
+    let (project, git) = match project_result {
+        Ok(result) => result,
         Err(error) => {
-            let _ = fs::remove_dir_all(&destination);
-            return Err(error.into());
+            let compensated = compensate_failed_project_creation(
+                &state,
+                &human,
+                project_id,
+                &destination,
+                &provisioned_git,
+                error,
+            )
+            .await;
+            return Err(compensated.into());
         }
     };
-    let git = state.platform.upsert_company_project_git_for_human(
-        UpsertCompanyProjectGitForHumanInput {
-            human_user_id: human.id,
-            company_id,
-            project_id,
-            remote_url: provisioned_git.remote_url,
-            host_local_path: Some(destination.to_string_lossy().into_owned()),
-            default_branch: Some(provisioned_git.default_branch),
-            auth_profile: Some(provisioned_git.auth_profile),
-            allow_agent_push: Some(true),
-            branch_prefix: Some("relay/".into()),
-        },
-    )?;
     Ok(Json(serde_json::json!({
         "project": project,
         "git": git,
@@ -434,12 +474,70 @@ async fn provision_imported_project_git(
     let provisioned_for_push = provisioned.clone();
     let credential_store = state.git_credential_store.clone();
     let local_path = local_path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
+    let publish_result = tokio::task::spawn_blocking(move || {
         push_managed_project_to_remote(&local_path, &provisioned_for_push, &credential_store)
     })
     .await
-    .map_err(|error| AppError::Internal(format!("Harness Git publish task failed: {error}")))??;
+    .map_err(|error| AppError::Internal(format!("Harness Git publish task failed: {error}")))?;
+    if let Err(error) = publish_result {
+        let cleanup_error = state
+            .harness_provisioner
+            .cleanup_provisioned_project_git(
+                human.id,
+                project_id,
+                &provisioned,
+                &state.git_credential_store,
+            )
+            .await
+            .err();
+        return Err(project_error_with_cleanup(error, cleanup_error));
+    }
     Ok(provisioned)
+}
+
+async fn compensate_failed_project_creation(
+    state: &AppState,
+    human: &HumanUser,
+    project_id: Uuid,
+    destination: &FsPath,
+    provisioned: &ProvisionedProjectGit,
+    original: AppError,
+) -> AppError {
+    let mut cleanup_failures = Vec::new();
+    match fs::remove_dir_all(destination) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => cleanup_failures.push(format!("remove managed directory: {error}")),
+    }
+    if let Err(error) = state
+        .harness_provisioner
+        .cleanup_provisioned_project_git(
+            human.id,
+            project_id,
+            provisioned,
+            &state.git_credential_store,
+        )
+        .await
+    {
+        cleanup_failures.push(error.to_string());
+    }
+    if cleanup_failures.is_empty() {
+        original
+    } else {
+        AppError::Internal(format!(
+            "{original}; automatic project cleanup failed: {}",
+            cleanup_failures.join("; ")
+        ))
+    }
+}
+
+fn project_error_with_cleanup(original: AppError, cleanup_error: Option<AppError>) -> AppError {
+    match cleanup_error {
+        Some(cleanup_error) => AppError::Internal(format!(
+            "{original}; automatic project cleanup failed: {cleanup_error}"
+        )),
+        None => original,
+    }
 }
 
 pub(super) async fn get_company_project_git(

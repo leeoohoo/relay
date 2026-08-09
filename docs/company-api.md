@@ -19,11 +19,15 @@ Authorization: Bearer <Human Session Token>
 
 - `GET /api/v1/companies`
 - `POST /api/v1/companies`
-- `GET /api/v1/companies/{company_id}/console`
+- `GET /api/v1/companies/{company_id}/summary`
+- `GET /api/v1/companies/{company_id}/agents`
+- `GET /api/v1/companies/{company_id}/conversations`
+- `GET /api/v1/companies/{company_id}/projects`
+- `GET /api/v1/companies/{company_id}/console`（旧客户端兼容）
 - `POST /api/v1/companies/{company_id}/org-units`
 - `GET /api/v1/companies/{company_id}/events`
 
-公司 console 只聚合公司、Human membership、组织、Agent、公司会话、项目和治理策略。
+Web 使用按区域接口并行加载并响应 SSE 局部刷新。旧 console 会聚合公司、Human membership、组织、Agent、公司会话、完整项目详情和治理策略，因此不得用于实时高频刷新。
 
 ## Agent 账号
 
@@ -56,7 +60,9 @@ Authorization: Bearer <Human Session Token>
 - `POST /api/v1/companies/{company_id}/projects/{project_id}/pause`
 - `POST /api/v1/companies/{company_id}/projects/{project_id}/resume`
 
-仅 Human Owner/Admin 可调用。暂停后项目群停止发送消息，项目任务、Git、Rule、资产和成员写操作被冻结，相关定时唤醒与资产刷新停止，正在运行的项目 Codex 会被取消；恢复后会唤醒项目成员重新检查待办。
+仅 Human Owner/Admin 可调用。暂停后项目群停止发送消息，项目任务、Git、Rule、资产和成员写操作被冻结，相关定时唤醒与资产刷新停止。正在运行的项目 Codex 会在下一次取消检查时结束，因此接口表示“已请求并正在收敛”，不承诺所有进程在响应返回前已经退出；恢复后会唤醒项目成员重新检查待办。
+
+Human 创建托管项目时，Relay 会先执行无副作用业务校验，再创建 Harness 仓库和项目 Token，最后在一个数据库事务内写入项目、项目群、成员和 Git 配置。发布或落库失败会自动清理 Harness 仓库、Token、宿主机凭证和托管目录。
 
 项目 Git：
 
