@@ -401,6 +401,7 @@ impl CodexTriggerRunner {
             AppError::Validation("Codex app-server stderr pipe was not available".into())
         })?;
         let stderr_task = tokio::spawn(read_limited_text(stderr, MAX_STDERR_BYTES));
+        let thread_id_capture = Arc::new(Mutex::new(resume_thread_id.map(str::to_string)));
 
         let drive_result = tokio::select! {
             result = timeout(
@@ -412,6 +413,7 @@ impl CodexTriggerRunner {
                     resume_thread_id,
                     sandbox_mode,
                     approval_handler.as_ref(),
+                    &thread_id_capture,
                 ),
             ) => Some(result),
             _ = wait_for_cancellation(request.cancellation_handler.as_ref()) => None,
@@ -420,7 +422,7 @@ impl CodexTriggerRunner {
             Some(Ok(Ok(outcome))) => outcome,
             Some(Ok(Err(error))) => ProcessOutcome {
                 status: CodexRunStatus::Failed,
-                thread_id: resume_thread_id.map(str::to_string),
+                thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
                 exit_code: None,
                 final_message: None,
                 error_message: Some(truncate(&sanitize_error(&error.to_string()), 2_000)),
@@ -428,7 +430,7 @@ impl CodexTriggerRunner {
             },
             Some(Err(_)) => ProcessOutcome {
                 status: CodexRunStatus::TimedOut,
-                thread_id: resume_thread_id.map(str::to_string),
+                thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
                 exit_code: None,
                 final_message: None,
                 error_message: Some(format!(
@@ -439,7 +441,7 @@ impl CodexTriggerRunner {
             },
             None => ProcessOutcome {
                 status: CodexRunStatus::Cancelled,
-                thread_id: resume_thread_id.map(str::to_string),
+                thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
                 exit_code: None,
                 final_message: None,
                 error_message: Some("Codex run cancelled because the project was paused".into()),
@@ -562,4 +564,15 @@ impl CodexTriggerRunner {
             .filter_map(|line| first_section_name(&line[1..line.len() - 1], "mcp_servers."))
             .collect())
     }
+}
+
+fn captured_app_server_thread_id(
+    capture: &Arc<Mutex<Option<String>>>,
+    fallback: Option<&str>,
+) -> Option<String> {
+    capture
+        .lock()
+        .ok()
+        .and_then(|captured| captured.clone())
+        .or_else(|| fallback.map(str::to_string))
 }

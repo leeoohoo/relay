@@ -28,6 +28,7 @@ export function MessagesView(props: {
   const [showNewDirect, setShowNewDirect] = useState(false);
   const [showMemberDetails, setShowMemberDetails] = useState(false);
   const [projectPanelTab, setProjectPanelTab] = useState<ProjectContextTab | null>(null);
+  const [selectedProjectTaskId, setSelectedProjectTaskId] = useState<string | null>(null);
   const [targetAgentId, setTargetAgentId] = useState("");
   const [mentionedAgentIds, setMentionedAgentIds] = useState<string[]>([]);
   const [mentionAll, setMentionAll] = useState(false);
@@ -98,6 +99,7 @@ export function MessagesView(props: {
   useEffect(() => {
     setShowMemberDetails(false);
     setProjectPanelTab(null);
+    setSelectedProjectTaskId(null);
     setMentionedAgentIds([]);
     setMentionAll(false);
     setMentionQuery(null);
@@ -292,7 +294,14 @@ export function MessagesView(props: {
 
   function openProjectPanel(tab: ProjectContextTab) {
     setShowMemberDetails(false);
+    if (tab !== "tasks") setSelectedProjectTaskId(null);
     setProjectPanelTab(tab);
+  }
+
+  function openProjectTask(taskId: string) {
+    setShowMemberDetails(false);
+    setSelectedProjectTaskId(taskId);
+    setProjectPanelTab("tasks");
   }
 
   function toggleMemberDetails() {
@@ -397,6 +406,7 @@ export function MessagesView(props: {
             mode={selectedIsGroup ? "group" : "direct"}
             token={props.token}
             realtimeEvent={props.realtimeEvent}
+            onTaskOpen={selectedProject ? openProjectTask : undefined}
             onClose={() => setShowMemberDetails(false)}
           />
         ) : null}
@@ -407,7 +417,9 @@ export function MessagesView(props: {
             agents={props.consoleData.agents}
             token={props.token}
             activeTab={projectPanelTab}
+            selectedTaskId={selectedProjectTaskId}
             onTabChange={setProjectPanelTab}
+            onTaskSelect={setSelectedProjectTaskId}
             onClose={() => setProjectPanelTab(null)}
             onError={props.onError}
           />

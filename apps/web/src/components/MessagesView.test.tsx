@@ -240,9 +240,14 @@ describe("MessagesView group member runtime drawer", () => {
     expect(screen.getByText("拆分实现步骤")).toBeInTheDocument();
     expect(screen.getByText("修改库存页面")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭群成员" }));
-    await waitFor(() => expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument());
-    expect(container.querySelector(".message-console")).not.toHaveClass("members-open");
+    fireEvent.click(screen.getByRole("button", { name: /进行中实现库存工作台/ }));
+    expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /实现库存工作台/ })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭项目面板" }));
+    await waitFor(() => expect(screen.queryByLabelText("项目上下文")).not.toBeInTheDocument());
+    expect(container.querySelector(".message-console")).not.toHaveClass("project-context-open");
   });
 
   it("shows the same Agent runtime details in a direct conversation", async () => {

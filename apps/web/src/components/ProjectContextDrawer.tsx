@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CompanyAgent, CompanyProject, CompanyProjectTask } from "../types/platform";
 import { ProjectRepositoryBrowser } from "../pages/projects/repository";
 import { Pagination, usePagination } from "./Pagination";
@@ -12,7 +12,9 @@ export function ProjectContextDrawer(props: {
   agents: CompanyAgent[];
   token: string;
   activeTab: ProjectContextTab;
+  selectedTaskId?: string | null;
   onTabChange: (tab: ProjectContextTab) => void;
+  onTaskSelect?: (taskId: string | null) => void;
   onClose: () => void;
   onError: (error: unknown) => void;
 }) {
@@ -45,14 +47,14 @@ export function ProjectContextDrawer(props: {
             onError={props.onError}
           />
         ) : (
-          <ProjectTaskPanel project={props.project} agents={props.agents} />
+          <ProjectTaskPanel project={props.project} agents={props.agents} selectedTaskId={props.selectedTaskId} onTaskSelect={props.onTaskSelect} />
         )}
       </div>
     </aside>
   );
 }
 
-function ProjectTaskPanel(props: { project: CompanyProject; agents: CompanyAgent[] }) {
+function ProjectTaskPanel(props: { project: CompanyProject; agents: CompanyAgent[]; selectedTaskId?: string | null; onTaskSelect?: (taskId: string | null) => void }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
   const agentNames = useMemo(
@@ -74,6 +76,12 @@ function ProjectTaskPanel(props: { project: CompanyProject; agents: CompanyAgent
         || right.updated_at.localeCompare(left.updated_at));
   }, [agentNames, props.project.tasks, query, status]);
   const pagination = usePagination(tasks, 8, `${query}:${status}:${props.project.project.id}`);
+
+  useEffect(() => {
+    if (!props.selectedTaskId) return;
+    const index = tasks.findIndex((task) => task.id === props.selectedTaskId);
+    if (index >= 0) pagination.setPage(Math.floor(index / pagination.pageSize) + 1);
+  }, [props.selectedTaskId, tasks, pagination.pageSize]);
 
   return (
     <section className="project-context-tasks" aria-label="项目任务列表">
@@ -105,7 +113,19 @@ function ProjectTaskPanel(props: { project: CompanyProject; agents: CompanyAgent
           const unresolved = dependencies.filter((dependency) => !["done", "cancelled"].includes(dependency.status));
           const assignee = task.assignee_agent_id ? agentNames.get(task.assignee_agent_id) ?? "未知 Agent" : "未分配";
           return (
-            <article className={`project-context-task ${task.status}`} key={task.id}>
+            <article
+              className={`project-context-task ${task.status} ${props.selectedTaskId === task.id ? "selected" : ""}`}
+              key={task.id}
+              role="button"
+              tabIndex={0}
+              aria-pressed={props.selectedTaskId === task.id}
+              onClick={() => props.onTaskSelect?.(props.selectedTaskId === task.id ? null : task.id)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                props.onTaskSelect?.(props.selectedTaskId === task.id ? null : task.id);
+              }}
+            >
               <div className="project-context-task-head">
                 <span className={`task-state ${unresolved.length ? "blocked" : task.status}`}>{unresolved.length ? "等待前置" : taskStatusLabel(task.status)}</span>
                 <span className={`project-context-task-priority ${task.priority}`}>{taskPriorityLabel(task.priority)}</span>

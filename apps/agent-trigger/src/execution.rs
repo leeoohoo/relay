@@ -570,6 +570,15 @@ async fn run_codex_stage(
     let managed_mcp_requires_approval = managed_mcp_servers
         .iter()
         .any(|server| server.requires_human_approval());
+    let elapsed_seconds = now_utc()
+        .signed_duration_since(run.started_at)
+        .num_seconds()
+        .max(0) as u64;
+    let configured_run_seconds = u64::try_from(trigger.max_run_seconds)
+        .map_err(|_| AppError::Validation("Codex max_run_seconds must be positive".into()))?;
+    let remaining_run_seconds = configured_run_seconds
+        .saturating_sub(elapsed_seconds)
+        .max(1);
     let mut result = codex_runner
         .run(CodexRunRequest {
             cwd: workspace.path.clone(),
@@ -589,7 +598,7 @@ async fn run_codex_stage(
             feature_hooks: settings.feature_hooks,
             feature_goals: settings.feature_goals,
             feature_shell_tool: settings.feature_shell_tool,
-            max_run_seconds: trigger.max_run_seconds as u64,
+            max_run_seconds: remaining_run_seconds,
             prompt,
             existing_thread_id,
             run_token: run_token.into(),

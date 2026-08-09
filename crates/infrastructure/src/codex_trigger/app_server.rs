@@ -3,6 +3,7 @@ use super::*;
 const APP_SERVER_INITIALIZE_TIMEOUT_SECS: u64 = 20;
 const APP_SERVER_THREAD_TIMEOUT_SECS: u64 = 30;
 const APP_SERVER_TURN_START_TIMEOUT_SECS: u64 = 45;
+const MANAGED_BROWSER_TOOL_TIMEOUT_GRACE_SECS: u64 = 15;
 
 pub(super) async fn drive_app_server<W, R>(
     writer: &mut W,
@@ -11,6 +12,7 @@ pub(super) async fn drive_app_server<W, R>(
     resume_thread_id: Option<&str>,
     sandbox_mode: &str,
     approval_handler: &dyn CodexApprovalHandler,
+    thread_id_capture: &Arc<Mutex<Option<String>>>,
 ) -> AppResult<ProcessOutcome>
 where
     W: AsyncWrite + Unpin,
@@ -110,6 +112,9 @@ where
         .map(str::to_string)
         .or_else(|| resume_thread_id.map(str::to_string))
         .ok_or_else(|| AppError::Validation("Codex app-server returned no thread ID".into()))?;
+    if let Ok(mut captured) = thread_id_capture.lock() {
+        *captured = Some(thread_id.clone());
+    }
     report_progress(
         request.progress_handler.as_ref(),
         "session",
@@ -146,9 +151,34 @@ where
     let mut final_message = None;
     let mut error_message = None;
     let mut active_mcp_items = HashMap::<String, Value>::new();
+    let mut active_mcp_item_started_at = HashMap::<String, Instant>::new();
+    let managed_browser_tool_timeout = managed_browser_tool_timeout(request);
     loop {
         let next = if turn_started {
-            next_json_rpc(&mut reader).await?
+            if let Some((item_id, tool, remaining)) = active_managed_browser_timeout(
+                &active_mcp_items,
+                &active_mcp_item_started_at,
+                managed_browser_tool_timeout,
+            ) {
+                match timeout(remaining, next_json_rpc(&mut reader)).await {
+                    Ok(next) => next?,
+                    Err(_) => {
+                        return Ok(ProcessOutcome {
+                            status: CodexRunStatus::TimedOut,
+                            thread_id: Some(thread_id),
+                            exit_code: None,
+                            final_message,
+                            error_message: Some(format!(
+                                "浏览器工具 {tool}（{item_id}）在 {} 秒内没有产生后续事件，Relay 将保留当前会话并自动继续",
+                                managed_browser_tool_timeout.as_secs()
+                            )),
+                            turn_started: true,
+                        });
+                    }
+                }
+            } else {
+                next_json_rpc(&mut reader).await?
+            }
         } else {
             timeout(
                 Duration::from_secs(APP_SERVER_TURN_START_TIMEOUT_SECS),
@@ -198,6 +228,7 @@ where
                     if item.get("type").and_then(Value::as_str) == Some("mcpToolCall") {
                         if let Some(item_id) = item.get("id").and_then(Value::as_str) {
                             active_mcp_items.insert(item_id.to_string(), item.clone());
+                            active_mcp_item_started_at.insert(item_id.to_string(), Instant::now());
                         }
                     }
                     if let Some((phase, summary)) = summarize_codex_item(item, false) {
@@ -214,6 +245,7 @@ where
                 if let Some(item) = value.pointer("/params/item") {
                     if let Some(item_id) = item.get("id").and_then(Value::as_str) {
                         active_mcp_items.remove(item_id);
+                        active_mcp_item_started_at.remove(item_id);
                     }
                     if let Some(message) = extract_agent_message(item) {
                         final_message = Some(message);
@@ -319,6 +351,38 @@ where
             .or_else(|| Some("Codex app-server closed before turn/completed".into())),
         turn_started,
     })
+}
+
+fn managed_browser_tool_timeout(request: &CodexRunRequest) -> Duration {
+    let configured = request
+        .managed_mcp_servers
+        .iter()
+        .find(|server| server.name == MANAGED_BROWSER_MCP_NAME)
+        .and_then(|server| server.tool_timeout_sec)
+        .unwrap_or(180);
+    Duration::from_secs(configured.saturating_add(MANAGED_BROWSER_TOOL_TIMEOUT_GRACE_SECS))
+}
+
+pub(super) fn active_managed_browser_timeout(
+    active_items: &HashMap<String, Value>,
+    started_at: &HashMap<String, Instant>,
+    stall_timeout: Duration,
+) -> Option<(String, String, Duration)> {
+    let now = Instant::now();
+    active_items
+        .iter()
+        .filter(|(_, item)| is_managed_browser_item(item))
+        .filter_map(|(item_id, item)| {
+            let started_at = started_at.get(item_id)?;
+            let tool = item
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let elapsed = now.saturating_duration_since(*started_at);
+            Some((item_id.clone(), tool, stall_timeout.saturating_sub(elapsed)))
+        })
+        .min_by_key(|(_, _, remaining)| *remaining)
 }
 
 pub(super) fn app_server_approval_policy(request: &CodexRunRequest) -> Value {

@@ -207,8 +207,12 @@ export function ApprovalsView(props: {
   onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onError: (error: unknown) => void;
 }) {
-  const [filter, setFilter] = useState<"pending" | "all">("pending");
-  const visible = filter === "pending" ? props.approvals.filter((approval) => approval.status === "pending") : props.approvals;
+  const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
+  const visible = props.approvals.filter((approval) => {
+    if (filter === "all") return true;
+    if (filter === "approved") return ["approved", "executed"].includes(approval.status);
+    return approval.status === filter;
+  });
   const approvalPagination = usePagination(visible, 8, filter);
   const pendingCount = props.approvals.filter((approval) => approval.status === "pending").length;
   const completedCount = props.approvals.filter((approval) => ["approved", "executed"].includes(approval.status)).length;
@@ -217,10 +221,10 @@ export function ApprovalsView(props: {
   return (
     <div className="content-stack">
       <section className="metric-row approval-metrics">
-        <Metric label="待处理" value={String(pendingCount)} detail="Codex 会保持当前 turn 等待" />
-        <Metric label="已通过" value={String(completedCount)} detail="批准后继续原进程" />
-        <Metric label="已拒绝" value={String(rejectedCount)} detail="Codex 收到 decline 后继续判断" />
-        <Metric label="审批来源" value="Codex + Agent" detail="统一公司级审批入口" />
+        <Metric label="待处理" value={String(pendingCount)} detail="Codex 会保持当前 turn 等待" active={filter === "pending"} onClick={() => setFilter("pending")} />
+        <Metric label="已通过" value={String(completedCount)} detail="批准后继续原进程" active={filter === "approved"} onClick={() => setFilter("approved")} />
+        <Metric label="已拒绝" value={String(rejectedCount)} detail="Codex 收到 decline 后继续判断" active={filter === "rejected"} onClick={() => setFilter("rejected")} />
+        <Metric label="审批来源" value="Codex + Agent" detail="查看全部审批记录" active={filter === "all"} onClick={() => setFilter("all")} />
       </section>
       <section className="section-card approval-center-card">
         <div className="section-heading">
@@ -239,6 +243,7 @@ export function ApprovalCard(props: {
   onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onError: (error: unknown) => void;
 }) {
+  const [expanded, setExpanded] = useState(props.approval.status === "pending");
   const agentName = props.agents.find((agent) => agent.agent_profile.id === props.approval.requested_by_agent_id)?.agent_profile.display_name ?? "Unknown Agent";
   const detail = approvalRequestDetail(props.approval);
   const alwaysAllowTarget = props.approval.execution_result.approval_mode === "always"
@@ -246,18 +251,19 @@ export function ApprovalCard(props: {
     ? props.approval.execution_result.approval_target
     : null;
   return (
-    <article className={`approval-card ${props.approval.status}`}>
-      <div className="approval-card-head">
+    <article className={`approval-card ${props.approval.status} ${expanded ? "expanded" : "collapsed"}`}>
+      <button type="button" className="approval-card-head" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
         <span className="approval-icon"><Icon name={props.approval.approval_source === "codex" ? "terminal" : "shield"} /></span>
         <div><strong>{approvalToolLabel(props.approval.tool_name)}</strong><small>{agentName} · {props.approval.approval_source === "codex" ? "Codex 运行审批" : "Agent 高影响动作"} · {formatTime(props.approval.created_at)}</small></div>
         <span className={`approval-status ${props.approval.status}`}>{approvalStatusLabel(props.approval.status)}</span>
-      </div>
-      <div className="approval-card-body">
+        <Icon name={expanded ? "chevron-up" : "chevron-down"} />
+      </button>
+      {expanded ? <div className="approval-card-body">
         {props.approval.reason ? <p>{props.approval.reason}</p> : null}
         {detail ? <pre>{detail}</pre> : null}
         <div className="approval-meta"><span>风险：{approvalRiskLabel(props.approval.risk_level)}</span><span>有效期至 {formatTime(props.approval.expires_at)}</span>{alwaysAllowTarget ? <span><b>始终允许</b> · {alwaysAllowTarget}</span> : null}{props.approval.review_note ? <span>备注：{props.approval.review_note}</span> : null}</div>
-      </div>
-      {props.approval.status === "pending" ? <ApprovalReviewActions approval={props.approval} onReview={props.onReview} onError={props.onError} /> : null}
+      </div> : null}
+      {expanded && props.approval.status === "pending" ? <ApprovalReviewActions approval={props.approval} onReview={props.onReview} onError={props.onError} /> : null}
     </article>
   );
 }

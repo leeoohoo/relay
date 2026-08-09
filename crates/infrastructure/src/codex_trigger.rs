@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     process::Command,
-    time::{sleep, timeout},
+    time::{sleep, timeout, Instant},
 };
 use uuid::Uuid;
 

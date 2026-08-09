@@ -432,3 +432,27 @@ fn managed_browser_follow_up_approval_survives_missing_item_started_event() {
         .expect("approval requests")
         .is_empty());
 }
+
+#[test]
+fn active_managed_browser_call_keeps_one_absolute_stall_deadline() {
+    let item = json!({
+        "id": "browser-stall",
+        "type": "mcpToolCall",
+        "server": MANAGED_BROWSER_MCP_NAME,
+        "tool": "new_page",
+        "arguments": { "url": "http://localhost:13000/" }
+    });
+    let active = HashMap::from([("browser-stall".into(), item)]);
+    let started = HashMap::from([(
+        "browser-stall".into(),
+        Instant::now() - Duration::from_secs(190),
+    )]);
+
+    let (item_id, tool, remaining) =
+        active_managed_browser_timeout(&active, &started, Duration::from_secs(195))
+            .expect("active browser timeout");
+
+    assert_eq!(item_id, "browser-stall");
+    assert_eq!(tool, "new_page");
+    assert!(remaining <= Duration::from_secs(5));
+}

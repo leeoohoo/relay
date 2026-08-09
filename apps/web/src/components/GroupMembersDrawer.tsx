@@ -20,6 +20,7 @@ export function GroupMembersDrawer(props: {
   mode: "group" | "direct";
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
+  onTaskOpen?: (taskId: string) => void;
   onClose: () => void;
 }) {
   const agentIdsKey = props.agents.map((agent) => agent.agent_profile.id).join(",");
@@ -93,6 +94,7 @@ export function GroupMembersDrawer(props: {
               agent={agent}
               runtime={runtimeByAgent[agent.agent_profile.id] ?? emptyRuntime(true)}
               tasks={assignedTasks(props.project, agent.agent_profile.id)}
+              onTaskOpen={props.onTaskOpen}
             />
           ))}
           {!props.agents.length ? <div className="conversation-member-empty">当前会话没有可展示的 Agent 成员。</div> : null}
@@ -103,7 +105,7 @@ export function GroupMembersDrawer(props: {
   );
 }
 
-function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState; tasks: CompanyProjectTask[] }) {
+function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState; tasks: CompanyProjectTask[]; onTaskOpen?: (taskId: string) => void }) {
   const operationalStatus = runtimeStatus(props.agent, props.runtime);
   const runningRun = props.runtime.trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const latestRun = runningRun ?? props.runtime.trigger?.recent_runs[0] ?? null;
@@ -134,7 +136,7 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
         {props.tasks.length ? (
           <section className="runtime-task-section">
             <h4>项目任务</h4>
-            {props.tasks.slice(0, 3).map((task) => <div className="runtime-task" key={task.id}><span className={`task-state ${task.status}`}>{taskStatusLabel(task.status)}</span><strong>{task.title}</strong></div>)}
+            {props.tasks.slice(0, 3).map((task) => <button type="button" className="runtime-task" key={task.id} onClick={() => props.onTaskOpen?.(task.id)}><span className={`task-state ${task.status}`}>{taskStatusLabel(task.status)}</span><strong>{task.title}</strong><Icon name="chevron-right" /></button>)}
           </section>
         ) : null}
 

@@ -42,7 +42,12 @@ export function SkillCopyBlock({ documents, step = "3" }: { documents: RelaySkil
 
 export function EmptyCompany(props: { onCreate: () => void }) { return <div className="center-state"><span className="brand-mark"><Icon name="network" /></span><span className="eyebrow">START HERE</span><h1>先创建一家公司</h1><p>公司会成为外部 Agent 的身份与通信边界。创建后再添加组织和 Agent 账号。</p><button className="button primary" onClick={props.onCreate}><Icon name="plus" /> 创建公司</button></div>; }
 export function LoadingState() { return <div className="center-state"><span className="loader" /><h2>正在读取公司目录</h2></div>; }
-export function Metric(props: { label: string; value: string; detail: string }) { return <div className="metric"><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></div>; }
+export function Metric(props: { label: string; value: string; detail: string; onClick?: () => void; active?: boolean }) {
+  const content = <><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></>;
+  return props.onClick
+    ? <button type="button" className={`metric interactive ${props.active ? "active" : ""}`} aria-pressed={props.active} onClick={props.onClick}>{content}</button>
+    : <div className="metric">{content}</div>;
+}
 export function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
 export function codexSessionTurnLabel(session: CodexSession) {
   const status = typeof session.checkpoint_json.last_turn_status === "string"

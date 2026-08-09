@@ -459,10 +459,21 @@
 }
 .runtime-task {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) 11px;
   align-items: center;
   gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
+.runtime-task:hover { border-color: rgba(77, 226, 255, .16); background: rgba(77, 226, 255, .045); }
+.runtime-task:focus-visible { outline: 1px solid var(--relay-cyan); outline-offset: 1px; }
+.runtime-task > svg { width: 10px; height: 10px; color: #607987; }
 .runtime-task strong {
   overflow: hidden;
   color: #bbc9d2;
@@ -779,7 +790,13 @@
   border-radius: 9px;
   padding: 9px 10px;
   background: rgba(13, 20, 29, .82);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, transform .15s ease;
 }
+.project-context-task:hover { border-color: rgba(77,226,255,.22); background: rgba(16,27,38,.96); transform: translateY(-1px); }
+.project-context-task:focus-visible { outline: 1px solid var(--relay-cyan); outline-offset: 1px; }
+.project-context-task.selected { border-color: rgba(77,226,255,.48); background: rgba(18,34,45,.98); box-shadow: inset 0 0 0 1px rgba(77,226,255,.08); }
+.project-context-task.selected > p { display: block; overflow: visible; -webkit-line-clamp: unset; }
 .project-context-task.in_progress { border-left: 2px solid rgba(168,255,96,.72); }
 .project-context-task.blocked,
 .project-context-task.failed { border-left: 2px solid rgba(255,112,120,.72); }
