@@ -16,7 +16,7 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
         ),
         action_tool::<AgentWorkSessionToolInput>(
             "agent.work_session",
-            "List this Agent's control/project Codex sessions, inspect a session checkpoint, or dispatch structured work to a project-bound worker session. Use dispatch only when project execution is necessary; the Relay backend resolves the actual thread from agent_id plus project_id.",
+            "List this Agent's control/project Codex sessions, inspect a session checkpoint, or dispatch structured work to a project-bound worker session. Use dispatch only when project execution is necessary; the Relay backend resolves the actual thread from agent_id plus project_id. Repeating dispatch with the same dedupe_key and work returns the existing Intent instead of failing or creating duplicate work.",
         ),
         read_only_tool::<AgentInboxWaitInput>(
             "agent.inbox.wait",

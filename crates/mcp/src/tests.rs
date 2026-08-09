@@ -1,11 +1,13 @@
 use super::tools::*;
 use super::*;
 use ai_chat_application::{
-    CreateCompanyAgentInput, CreateCompanyInput, DevLoginInput, MemoryPlatformRepository,
+    CreateCompanyAgentInput, CreateCompanyInput, CreateCompanyProjectForHumanInput, DevLoginInput,
+    MemoryPlatformRepository,
 };
 use ai_chat_domain::company::{
     COMPANY_AGENT_ROLE_MANAGER, COMPANY_AGENT_ROLE_MEMBER,
     COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE, COMPANY_PERMISSION_PROJECT_RULES_MANAGE,
+    PROJECT_TYPE_SOURCE_HUMAN,
 };
 
 #[test]
@@ -172,6 +174,85 @@ fn active_company_agents_receive_four_company_domain_tools() {
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));
     assert!(names.contains(&"company.events"));
+}
+
+#[test]
+fn repeated_work_session_dispatch_returns_the_existing_intent() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "mcp-work-session-dedup@example.com".into(),
+            display_name: "MCP Work Session Dedup".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "MCP Work Session Company".into(),
+            slug: Some("mcp-work-session-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let manager = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "MCP Work Session Manager".into(),
+            handle: "mcp-work-session-manager".into(),
+            persona: "负责派发工作".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("manager should be created");
+    let project = app
+        .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            owner_agent_id: manager.agent_profile.id,
+            name: "MCP Work Session Project".into(),
+            description: Some("验证重复派发".into()),
+            member_agent_ids: Vec::new(),
+            project_type: Some("web_application".into()),
+            project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: Some(100),
+            project_type_evidence: Vec::new(),
+            project_id: None,
+        })
+        .expect("project should be created");
+    let gateway = McpGateway::new(app, None);
+    let request = json!({
+        "action": "dispatch",
+        "company_id": company.company.id,
+        "project_id": project.project.id,
+        "objective": "完成同一个真实目标",
+        "acceptance_criteria": ["有可验证结果"],
+        "priority": "high",
+        "dedupe_key": "mcp-same-logical-work"
+    });
+
+    let first = gateway
+        .invoke(
+            Some(&manager.agent_key_plaintext),
+            "agent.work_session",
+            request.clone(),
+        )
+        .expect("first dispatch should succeed");
+    let repeated = gateway
+        .invoke(
+            Some(&manager.agent_key_plaintext),
+            "agent.work_session",
+            request,
+        )
+        .expect("repeated dispatch should return existing work");
+
+    assert_eq!(first.output["deduplicated"], false);
+    assert_eq!(repeated.output["deduplicated"], true);
+    assert_eq!(
+        first.output["intent"]["id"],
+        repeated.output["intent"]["id"]
+    );
 }
 
 #[test]

@@ -1,7 +1,8 @@
 use super::*;
 use ai_chat_domain::company::{
-    AgentCodexSession, AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
-    AGENT_CODEX_SESSION_STATUS_ACTIVE,
+    AgentCodexSession, AgentExecutionIntent, AGENT_CODEX_SESSION_KIND_CONTROL,
+    AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
+    AGENT_EXECUTION_INTENT_STATUS_PENDING, COMPANY_AGENT_ROLE_MANAGER,
 };
 
 fn scoped_session(
@@ -87,4 +88,92 @@ fn control_and_multiple_project_sessions_are_stored_independently() {
         second_worker.codex_thread_id
     );
     assert_eq!(app.list_agent_codex_sessions(agent_id, 10).len(), 3);
+}
+
+#[test]
+fn repeated_execution_intent_dedupe_key_returns_existing_work() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "intent-dedup@example.com".into(),
+            display_name: "Intent Dedup Human".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Intent Dedup Company".into(),
+            slug: Some("intent-dedup-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let agent = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Intent Dedup Manager".into(),
+            handle: "intent-dedup-manager".into(),
+            persona: "负责幂等派工".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("agent should be created");
+    let project = app
+        .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            owner_agent_id: agent.agent_profile.id,
+            name: "Intent Dedup Project".into(),
+            description: Some("验证重复派工".into()),
+            member_agent_ids: Vec::new(),
+            project_type: Some("web_application".into()),
+            project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: Some(100),
+            project_type_evidence: Vec::new(),
+            project_id: None,
+        })
+        .expect("project should be created");
+    let intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: company.company.id,
+        agent_profile_id: agent.agent_profile.id,
+        project_id: project.project.id,
+        worker_session_id: None,
+        source_event_ids: Vec::new(),
+        task_ids: Vec::new(),
+        action_type: "execute".into(),
+        objective: "完成同一个项目目标".into(),
+        acceptance_criteria: vec!["结果可验证".into()],
+        priority: "high".into(),
+        dedupe_key: "same-logical-work".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_PENDING.into(),
+        result_summary: String::new(),
+        error_message: None,
+        created_at: now_utc(),
+        claimed_at: None,
+        completed_at: None,
+    };
+
+    let created = app
+        .create_agent_execution_intent(intent.clone())
+        .expect("first dispatch should create work");
+    let mut retry = intent.clone();
+    retry.id = Uuid::new_v4();
+    retry.source_event_ids = vec![Uuid::new_v4()];
+    let replayed = app
+        .create_agent_execution_intent(retry)
+        .expect("same logical work should return the existing intent");
+    assert_eq!(replayed.id, created.id);
+
+    let mut different_work = intent;
+    different_work.id = Uuid::new_v4();
+    different_work.objective = "这是不同的项目目标".into();
+    assert!(matches!(
+        app.create_agent_execution_intent(different_work),
+        Err(AppError::Conflict(message))
+            if message.contains("already belongs to execution intent")
+                && message.contains("use a new dedupe_key")
+    ));
 }

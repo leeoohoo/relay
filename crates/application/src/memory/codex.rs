@@ -655,6 +655,19 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
         guard.agent_execution_intents.get(&intent_id).cloned()
     }
 
+    fn find_agent_execution_intent_by_dedupe_key(
+        &self,
+        agent_id: Uuid,
+        dedupe_key: &str,
+    ) -> Option<AgentExecutionIntent> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        guard
+            .agent_execution_intents
+            .values()
+            .find(|intent| intent.agent_profile_id == agent_id && intent.dedupe_key == dedupe_key)
+            .cloned()
+    }
+
     fn list_agent_execution_intents(
         &self,
         agent_id: Uuid,

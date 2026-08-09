@@ -757,6 +757,29 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         .map(map_agent_execution_intent)
     }
 
+    fn find_agent_execution_intent_by_dedupe_key(
+        &self,
+        agent_id: Uuid,
+        dedupe_key: &str,
+    ) -> Option<AgentExecutionIntent> {
+        self.with_client(|client| {
+            client.query_opt(
+                r#"
+                SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
+                       source_event_ids, task_ids, action_type, objective, acceptance_criteria,
+                       priority, dedupe_key, status, result_summary, error_message,
+                       created_at, claimed_at, completed_at
+                FROM agent_execution_intents
+                WHERE agent_profile_id = $1 AND dedupe_key = $2
+                "#,
+                &[&agent_id, &dedupe_key],
+            )
+        })
+        .ok()
+        .flatten()
+        .map(map_agent_execution_intent)
+    }
+
     fn list_agent_execution_intents(
         &self,
         agent_id: Uuid,

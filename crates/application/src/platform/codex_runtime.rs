@@ -429,8 +429,31 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             intent.project_id,
             intent.agent_profile_id,
         )?;
-        self.repo.insert_agent_execution_intent(intent.clone())?;
-        Ok(intent)
+        if let Some(existing) = self
+            .repo
+            .find_agent_execution_intent_by_dedupe_key(intent.agent_profile_id, &intent.dedupe_key)
+        {
+            return resolve_deduplicated_execution_intent(existing, &intent);
+        }
+        match self.repo.insert_agent_execution_intent(intent.clone()) {
+            Ok(()) => Ok(intent),
+            Err(AppError::Conflict(_)) => {
+                let existing = self
+                    .repo
+                    .find_agent_execution_intent_by_dedupe_key(
+                        intent.agent_profile_id,
+                        &intent.dedupe_key,
+                    )
+                    .ok_or_else(|| {
+                        AppError::Conflict(
+                            "execution intent could not be created because its dedupe key is already in use"
+                                .into(),
+                        )
+                    })?;
+                resolve_deduplicated_execution_intent(existing, &intent)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn get_agent_project_git_config(
@@ -510,6 +533,30 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.repo
             .latest_company_realtime_sequence_result(company_id)
     }
+}
+
+fn resolve_deduplicated_execution_intent(
+    existing: AgentExecutionIntent,
+    requested: &AgentExecutionIntent,
+) -> AppResult<AgentExecutionIntent> {
+    let same_work = existing.company_id == requested.company_id
+        && existing.project_id == requested.project_id
+        && same_uuid_members(&existing.task_ids, &requested.task_ids)
+        && existing.action_type == requested.action_type
+        && existing.objective == requested.objective
+        && existing.acceptance_criteria == requested.acceptance_criteria
+        && existing.priority == requested.priority;
+    if same_work {
+        return Ok(existing);
+    }
+    Err(AppError::Conflict(format!(
+        "dedupe_key '{}' already belongs to execution intent {} (status: {}); inspect that intent or use a new dedupe_key for different work",
+        requested.dedupe_key, existing.id, existing.status
+    )))
+}
+
+fn same_uuid_members(left: &[Uuid], right: &[Uuid]) -> bool {
+    left.iter().copied().collect::<HashSet<_>>() == right.iter().copied().collect::<HashSet<_>>()
 }
 
 fn sanitize_codex_session_for_human(mut session: AgentCodexSession) -> AgentCodexSession {

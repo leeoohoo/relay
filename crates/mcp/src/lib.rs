@@ -228,7 +228,9 @@ impl From<AgentMemorySourceRefToolInput> for AgentMemorySourceRef {
 struct AgentWorkSessionToolInput {
     #[serde(flatten)]
     operation: AgentWorkSessionOperation,
-    #[schemars(description = "Optional retry key for dispatch operations.")]
+    #[schemars(
+        description = "Optional retry key for dispatch operations. Reusing it with the same request returns the existing Intent instead of creating duplicate work."
+    )]
     idempotency_key: Option<String>,
 }
 
@@ -256,6 +258,9 @@ enum AgentWorkSessionOperation {
         #[serde(default)]
         acceptance_criteria: Vec<String>,
         priority: Option<String>,
+        #[schemars(
+            description = "Stable logical-work key. Repeating the same dispatch returns the existing Intent; use a new key when the objective, project, tasks, acceptance criteria, or priority changes."
+        )]
         dedupe_key: Option<String>,
     },
 }
