@@ -152,8 +152,35 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
-  it("opens the current project directory and task list from the chat header", async () => {
-    const onOpenProject = vi.fn();
+  it("opens the current project directory and task list without leaving chat", async () => {
+    const { container } = render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "项目任务" }));
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+    expect(container.querySelector(".message-console")).toHaveClass("project-context-open");
+    expect(screen.getByText("实现库存工作台")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /任务/ })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "项目目录" }));
+    expect(screen.getByRole("tab", { name: "目录" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Harness 仓库尚未初始化完成")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭项目面板" }));
+    expect(screen.queryByLabelText("项目上下文")).not.toBeInTheDocument();
+    expect(container.querySelector(".message-console")).not.toHaveClass("project-context-open");
+  });
+
+  it("uses one right-side context area for project content and member runtime", async () => {
     render(
       <MessagesView
         consoleData={consoleData}
@@ -161,17 +188,21 @@ describe("MessagesView group member runtime drawer", () => {
         token="token"
         realtimeEvent={null}
         onChanged={async () => undefined}
-        onOpenProject={onOpenProject}
         onError={() => undefined}
         onNotice={() => undefined}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "项目目录" }));
-    expect(onOpenProject).toHaveBeenLastCalledWith("project-1", "repository");
-
     fireEvent.click(screen.getByRole("button", { name: "项目任务" }));
-    expect(onOpenProject).toHaveBeenLastCalledWith("project-1", "tasks");
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
+    expect(screen.queryByLabelText("项目上下文")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("群成员与运行情况")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "项目目录" }));
+    expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
   });
 
   it("opens inside the chat layout and exposes the Agent execution process", async () => {

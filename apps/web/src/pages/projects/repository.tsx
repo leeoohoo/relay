@@ -18,6 +18,7 @@ export function ProjectRepositoryBrowser(props: {
   token: string;
   onError: (error: unknown) => void;
 }) {
+  const hasGit = Boolean(props.project.git);
   const [refsResponse, setRefsResponse] = useState<ProjectRepositoryRefsResponse | null>(null);
   const [selectedRef, setSelectedRef] = useState("");
   const [currentPath, setCurrentPath] = useState("");
@@ -59,6 +60,7 @@ export function ProjectRepositoryBrowser(props: {
   }
 
   useEffect(() => {
+    if (!hasGit) return;
     setRefsResponse(null);
     setSelectedRef("");
     setCurrentPath("");
@@ -68,10 +70,10 @@ export function ProjectRepositoryBrowser(props: {
     void loadRefs("");
     // Project identity is the reset boundary; loadRefs deliberately uses the fresh empty ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.companyId, props.project.project.id, props.token]);
+  }, [props.companyId, hasGit, props.project.project.id, props.token]);
 
   useEffect(() => {
-    if (!selectedRef) return;
+    if (!hasGit || !selectedRef) return;
     let active = true;
     setLoadingTree(true);
     setErrorMessage("");
@@ -99,7 +101,7 @@ export function ProjectRepositoryBrowser(props: {
         if (active) setLoadingTree(false);
       });
     return () => { active = false; };
-  }, [currentPath, page, props.companyId, props.project.project.id, props.token, selectedRef]);
+  }, [currentPath, page, props.companyId, hasGit, props.project.project.id, props.token, selectedRef]);
 
   function changeRef(reference: string) {
     setSelectedRef(reference);

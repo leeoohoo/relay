@@ -23,7 +23,7 @@ import { OrganizationAgentCenter } from "./app/agents";
 import { ChatCenter } from "./app/chat";
 import { SkillsView } from "./app/skills";
 import { CodexControlCenter } from "./codex/control-center";
-import { ProjectsView, type ProjectNavigationTarget } from "./projects";
+import { ProjectsView } from "./projects";
 
 const SESSION_KEY = "agent_company_session";
 export function App() {
@@ -33,7 +33,6 @@ export function App() {
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [companyConsole, setCompanyConsole] = useState<CompanyConsole | null>(null);
   const [view, setView] = useState<View>("agents");
-  const [projectNavigationTarget, setProjectNavigationTarget] = useState<ProjectNavigationTarget | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -188,12 +187,6 @@ export function App() {
 
   function changeView(nextView: View) {
     setView(nextView);
-    if (nextView === "projects") setProjectNavigationTarget(null);
-  }
-
-  function openProject(projectId: string, tab: "repository" | "tasks") {
-    setProjectNavigationTarget({ projectId, tab, requestId: Date.now() });
-    setView("projects");
   }
 
   async function refreshCompany() {
@@ -315,7 +308,6 @@ export function App() {
               <ProjectsView
                 consoleData={companyConsole}
                 token={session.token}
-                navigationTarget={projectNavigationTarget}
                 onChanged={refreshCompany}
                 onError={showError}
                 onNotice={setNotice}
@@ -339,7 +331,6 @@ export function App() {
                 approvals={approvals}
                 onReview={reviewApproval}
                 onChanged={refreshCompany}
-                onOpenProject={openProject}
                 onError={showError}
                 onNotice={setNotice}
               />

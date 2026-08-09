@@ -14,7 +14,6 @@ export function ChatCenter(props: {
   approvals: AgentToolApproval[];
   onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onChanged: () => Promise<void>;
-  onOpenProject: (projectId: string, tab: "repository" | "tasks") => void;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
 }) {
@@ -42,7 +41,6 @@ export function ChatCenter(props: {
             token={props.token}
             realtimeEvent={props.realtimeEvent}
             onChanged={props.onChanged}
-            onOpenProject={props.onOpenProject}
             onError={props.onError}
             onNotice={props.onNotice}
           />

@@ -16,16 +16,9 @@ import { TasksView } from "./tasks";
 
 export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions";
 
-export type ProjectNavigationTarget = {
-  projectId: string;
-  tab: ProjectDetailTab;
-  requestId: number;
-};
-
 export function ProjectsView(props: {
   consoleData: CompanyConsole;
   token: string;
-  navigationTarget?: ProjectNavigationTarget | null;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
@@ -48,11 +41,6 @@ export function ProjectsView(props: {
     setSelectedProjectId(projectId);
     setActiveTab(tab);
   }
-
-  useEffect(() => {
-    if (!props.navigationTarget) return;
-    openProject(props.navigationTarget.projectId, props.navigationTarget.tab);
-  }, [props.navigationTarget]);
 
   async function setProjectPaused(project: CompanyProject, paused: boolean) {
     setProjectActionBusy(true);

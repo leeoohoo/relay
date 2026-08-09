@@ -4,6 +4,7 @@ import type { CompanyRealtimeEvent } from "../api/types";
 import { MessageAttachments } from "./MessageAttachments";
 import { MessageHistoryControl } from "./MessageHistoryControl";
 import { GroupMembersDrawer } from "./GroupMembersDrawer";
+import { ProjectContextDrawer, type ProjectContextTab } from "./ProjectContextDrawer";
 import { Pagination, usePagination } from "./Pagination";
 import { Field, Icon } from "./ui";
 import { useConversationMessages } from "../hooks/useConversationMessages";
@@ -17,7 +18,6 @@ export function MessagesView(props: {
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
   onChanged: () => Promise<void>;
-  onOpenProject?: (projectId: string, tab: "repository" | "tasks") => void;
   onError: (error: unknown) => void;
   onNotice: (message: string) => void;
 }) {
@@ -27,6 +27,7 @@ export function MessagesView(props: {
   const [busy, setBusy] = useState(false);
   const [showNewDirect, setShowNewDirect] = useState(false);
   const [showMemberDetails, setShowMemberDetails] = useState(false);
+  const [projectPanelTab, setProjectPanelTab] = useState<ProjectContextTab | null>(null);
   const [targetAgentId, setTargetAgentId] = useState("");
   const [mentionedAgentIds, setMentionedAgentIds] = useState<string[]>([]);
   const [mentionAll, setMentionAll] = useState(false);
@@ -96,6 +97,7 @@ export function MessagesView(props: {
 
   useEffect(() => {
     setShowMemberDetails(false);
+    setProjectPanelTab(null);
     setMentionedAgentIds([]);
     setMentionAll(false);
     setMentionQuery(null);
@@ -288,9 +290,21 @@ export function MessagesView(props: {
     setDraft((current) => current.replace(new RegExp(`@(?:${tokens})\\s*`, "gu"), ""));
   }
 
+  function openProjectPanel(tab: ProjectContextTab) {
+    setShowMemberDetails(false);
+    setProjectPanelTab(tab);
+  }
+
+  function toggleMemberDetails() {
+    setShowMemberDetails((current) => {
+      if (!current) setProjectPanelTab(null);
+      return !current;
+    });
+  }
+
   return (
     <>
-      <section className={`message-console ${showMemberDetails && selected ? "members-open" : ""}`}>
+      <section className={`message-console ${showMemberDetails && selected ? "members-open" : ""} ${projectPanelTab && selectedProject ? "project-context-open" : ""}`}>
         <div className="conversation-list">
           <div className="conversation-list-head">
             <strong>会话</strong>
@@ -312,11 +326,11 @@ export function MessagesView(props: {
             <div className="message-head-actions">
               {selectedProject ? (
                 <div className="project-chat-shortcuts" aria-label="项目快捷入口">
-                  <button type="button" onClick={() => props.onOpenProject?.(selectedProject.project.id, "repository")}><Icon name="folder" /> 项目目录</button>
-                  <button type="button" onClick={() => props.onOpenProject?.(selectedProject.project.id, "tasks")}><Icon name="tasks" /> 项目任务</button>
+                  <button className={projectPanelTab === "repository" ? "active" : ""} type="button" aria-pressed={projectPanelTab === "repository"} onClick={() => openProjectPanel("repository")}><Icon name="folder" /> 项目目录</button>
+                  <button className={projectPanelTab === "tasks" ? "active" : ""} type="button" aria-pressed={projectPanelTab === "tasks"} onClick={() => openProjectPanel("tasks")}><Icon name="tasks" /> 项目任务</button>
                 </div>
               ) : null}
-              {selected && selectedConversationAgents.length ? <button className={`group-members-button ${showMemberDetails ? "active" : ""}`} type="button" aria-expanded={showMemberDetails} onClick={() => setShowMemberDetails((current) => !current)}><Icon name={selectedIsGroup ? "group" : "message"} /> {selectedIsGroup ? "群成员" : "运行详情"} <span>{selectedConversationAgents.length}</span></button> : null}
+              {selected && selectedConversationAgents.length ? <button className={`group-members-button ${showMemberDetails ? "active" : ""}`} type="button" aria-expanded={showMemberDetails} onClick={toggleMemberDetails}><Icon name={selectedIsGroup ? "group" : "message"} /> {selectedIsGroup ? "群成员" : "运行详情"} <span>{selectedConversationAgents.length}</span></button> : null}
               {selected ? <span className="pill neutral">{formatConversationContext(selected.context.context_type)}</span> : null}
               {selectedProjectPaused ? <span className="pill paused">项目已暂停</span> : null}
             </div>
@@ -384,6 +398,18 @@ export function MessagesView(props: {
             token={props.token}
             realtimeEvent={props.realtimeEvent}
             onClose={() => setShowMemberDetails(false)}
+          />
+        ) : null}
+        {projectPanelTab && selectedProject ? (
+          <ProjectContextDrawer
+            companyId={props.consoleData.company.id}
+            project={selectedProject}
+            agents={props.consoleData.agents}
+            token={props.token}
+            activeTab={projectPanelTab}
+            onTabChange={setProjectPanelTab}
+            onClose={() => setProjectPanelTab(null)}
+            onError={props.onError}
           />
         ) : null}
       </section>
