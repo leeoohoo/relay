@@ -47,17 +47,81 @@ impl CodexTriggerRunner {
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
     ) -> AppResult<ProcessOutcome> {
+        let runtime_temp = self.prepare_runtime_temp_directory()?;
         if request.approval_handler.is_some() {
-            self.run_app_server_once(request, resume_thread_id).await
+            self.run_app_server_once(request, resume_thread_id, &runtime_temp.path)
+                .await
         } else {
-            self.run_exec_once(request, resume_thread_id).await
+            self.run_exec_once(request, resume_thread_id, &runtime_temp.path)
+                .await
         }
+    }
+
+    pub(super) fn prepare_runtime_temp_directory(&self) -> AppResult<ManagedRuntimeTempDirectory> {
+        let path = self
+            .runtime_temp_root
+            .join(Uuid::new_v4().simple().to_string());
+        fs::create_dir_all(&path).map_err(|error| {
+            AppError::Internal(format!(
+                "cannot create isolated Codex runtime temp directory {}: {error}",
+                path.display()
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).map_err(|error| {
+                AppError::Internal(format!(
+                    "cannot secure Codex runtime temp directory {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        Ok(ManagedRuntimeTempDirectory { path })
+    }
+
+    pub(super) fn apply_runtime_temp_arguments(
+        &self,
+        command: &mut Command,
+        sandbox_mode: &str,
+        runtime_temp_path: &Path,
+    ) -> AppResult<()> {
+        let runtime_temp = runtime_temp_path.to_str().ok_or_else(|| {
+            AppError::Validation("Codex runtime temp path must be valid UTF-8".into())
+        })?;
+        if sandbox_mode == "workspace-write" {
+            command
+                .arg("--config")
+                .arg(format!(
+                    "sandbox_workspace_write.writable_roots=[{}]",
+                    toml_string(runtime_temp)
+                ))
+                .arg("--config")
+                .arg("sandbox_workspace_write.exclude_tmpdir_env_var=false");
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_runtime_temp_environment(
+        &self,
+        command: &mut Command,
+        runtime_temp_path: &Path,
+    ) -> AppResult<()> {
+        let runtime_temp = runtime_temp_path.to_str().ok_or_else(|| {
+            AppError::Validation("Codex runtime temp path must be valid UTF-8".into())
+        })?;
+        command
+            .env("TMPDIR", runtime_temp)
+            .env("TMP", runtime_temp)
+            .env("TEMP", runtime_temp);
+        Ok(())
     }
 
     async fn run_exec_once(
         &self,
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
+        runtime_temp_path: &Path,
     ) -> AppResult<ProcessOutcome> {
         let sandbox_mode = codex_sandbox_mode(&request.sandbox_mode)?;
         let mut command = Command::new(&self.executable);
@@ -76,6 +140,7 @@ impl CodexTriggerRunner {
         }
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
+        self.apply_runtime_temp_arguments(&mut command, sandbox_mode, runtime_temp_path)?;
         command
             .arg("--sandbox")
             .arg(sandbox_mode)
@@ -123,6 +188,7 @@ impl CodexTriggerRunner {
         for (key, value) in &request.environment {
             command.env(key, value);
         }
+        self.apply_runtime_temp_environment(&mut command, runtime_temp_path)?;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -247,6 +313,7 @@ impl CodexTriggerRunner {
         &self,
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
+        runtime_temp_path: &Path,
     ) -> AppResult<ProcessOutcome> {
         let sandbox_mode = codex_sandbox_mode(&request.sandbox_mode)?;
         let approval_handler = request.approval_handler.as_ref().ok_or_else(|| {
@@ -265,6 +332,7 @@ impl CodexTriggerRunner {
             .arg("approvals_reviewer=\"user\"");
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
+        self.apply_runtime_temp_arguments(&mut command, sandbox_mode, runtime_temp_path)?;
         command
             .arg("--config")
             .arg(format!(
@@ -308,6 +376,7 @@ impl CodexTriggerRunner {
         for (key, value) in &request.environment {
             command.env(key, value);
         }
+        self.apply_runtime_temp_environment(&mut command, runtime_temp_path)?;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;

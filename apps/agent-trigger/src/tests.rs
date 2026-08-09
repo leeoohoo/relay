@@ -347,6 +347,8 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(chinese.contains("必须使用 Relay 托管的 `chrome-devtools` MCP"));
     assert!(chinese.contains("`.relay/browser-artifacts/`"));
     assert!(chinese.contains("不得改用 Codex 桌面 Browser/Chrome"));
+    assert!(chinese.contains("Relay 托管的 `$TMPDIR`"));
+    assert!(chinese.contains("禁止直接使用 `/tmp`、`/private/tmp`"));
 
     let english = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "en");
     assert!(english.contains("Ignore `inbox_notice`"));
@@ -354,6 +356,11 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(english.contains("Relay-managed `chrome-devtools` MCP"));
     assert!(english.contains("`.relay/browser-artifacts/`"));
     assert!(english.contains("Do not use Codex desktop Browser/Chrome"));
+    assert!(english.contains("Relay-managed `$TMPDIR`"));
+    assert!(english.contains("Never address `/tmp`, `/private/tmp`"));
+
+    let control = session_skill_template(RELAY_SKILL_BUNDLE_CONTROL, "zh-CN");
+    assert!(control.contains("Relay 托管的 `$TMPDIR`"));
 }
 
 #[test]

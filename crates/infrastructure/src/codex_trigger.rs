@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fs,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -150,7 +151,18 @@ pub struct CodexTriggerRunner {
     auto_compact_token_limit: u64,
     managed_profile_homes_root: PathBuf,
     managed_cli_home: PathBuf,
+    runtime_temp_root: PathBuf,
     browser_mcp: BrowserMcpConfig,
+}
+
+struct ManagedRuntimeTempDirectory {
+    path: PathBuf,
+}
+
+impl Drop for ManagedRuntimeTempDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

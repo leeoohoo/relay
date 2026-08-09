@@ -40,6 +40,19 @@ impl CodexTriggerRunner {
             .expect("managed profile home has a parent")
             .to_path_buf();
         runner.managed_cli_home = control_store.managed_cli_home();
+        let runtime_state_root = std::env::var("AGENT_TRIGGER_STATE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(".relay-agent-trigger"));
+        runner.runtime_temp_root = if runtime_state_root.is_absolute() {
+            runtime_state_root.join("runtime-tmp")
+        } else {
+            std::env::current_dir()
+                .map_err(|error| {
+                    AppError::Internal(format!("cannot resolve Trigger state root: {error}"))
+                })?
+                .join(runtime_state_root)
+                .join("runtime-tmp")
+        };
         runner.browser_mcp = BrowserMcpConfig::from_env()?;
         let allowlist = std::env::var("AGENT_TRIGGER_CODEX_ENV_ALLOWLIST")
             .ok()
@@ -109,6 +122,10 @@ impl CodexTriggerRunner {
             managed_cli_home: PathBuf::from(".relay-agent-trigger")
                 .join("codex-cli")
                 .join("home"),
+            runtime_temp_root: std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".relay-agent-trigger")
+                .join("runtime-tmp"),
             browser_mcp: BrowserMcpConfig::disabled(),
         })
     }

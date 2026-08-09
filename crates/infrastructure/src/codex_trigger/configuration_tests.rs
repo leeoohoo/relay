@@ -89,3 +89,54 @@ fn managed_cli_settings_are_injected_as_cli_overrides() {
     assert!(args.contains(&"features.remote_plugin=false".into()));
     assert!(args.contains(&"features.shell_tool=true".into()));
 }
+
+#[test]
+fn workspace_runs_receive_an_isolated_writable_temp_root() {
+    let root = std::env::temp_dir().join(format!(
+        "relay-codex-runtime-temp-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    let mut runner = CodexTriggerRunner::new(
+        PathBuf::from("codex"),
+        Vec::new(),
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    runner.runtime_temp_root = root.clone();
+    let runtime_temp = runner
+        .prepare_runtime_temp_directory()
+        .expect("isolated runtime temp");
+    let mut command = Command::new("codex");
+    runner
+        .apply_runtime_temp_arguments(&mut command, "workspace-write", &runtime_temp.path)
+        .expect("runtime temp arguments");
+    runner
+        .apply_runtime_temp_environment(&mut command, &runtime_temp.path)
+        .expect("runtime temp environment");
+
+    let args = command
+        .as_std()
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(args.iter().any(|value| {
+        value.starts_with("sandbox_workspace_write.writable_roots=[")
+            && value.contains(&runtime_temp.path.to_string_lossy().to_string())
+    }));
+    for name in ["TMPDIR", "TMP", "TEMP"] {
+        let value = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value)
+            .expect("managed temp environment");
+        assert_eq!(value, runtime_temp.path.as_os_str());
+    }
+
+    let runtime_path = runtime_temp.path.clone();
+    drop(runtime_temp);
+    assert!(!runtime_path.exists());
+    let _ = std::fs::remove_dir_all(root);
+}
