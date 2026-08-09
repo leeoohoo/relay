@@ -20,6 +20,6 @@
 
 - Browser screenshot and snapshot persistence while retaining a read-only project mount.
 - Browser approval routing, approval continuation, inherited approval overrides, and profile recovery after restart.
-- Transient Codex app-server startup failures and unsupported managed profile arguments.
+- Transient Codex app-server startup failures, silent session-resume stalls, and unsupported managed profile arguments.
 - Shallow Harness imports that could not publish complete repository history.
 - Duplicate or stale Codex work-session entries and opaque MCP tool failure messages.
