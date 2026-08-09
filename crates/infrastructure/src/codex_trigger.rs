@@ -316,6 +316,8 @@ pub use model_catalog::collect_codex_models;
 #[cfg(test)]
 mod browser_tests;
 #[cfg(test)]
+mod configuration_tests;
+#[cfg(test)]
 mod plugin_tests;
 #[cfg(test)]
 mod tests;
