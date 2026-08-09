@@ -741,6 +741,12 @@ pub(super) async fn get_company_project_git(
                 project_id,
             })?;
     if let Some(git) = git.as_ref() {
+        if !state.harness_provisioner.is_enabled() {
+            return Err(AppError::Conflict(
+                "Relay 当前未启用 Harness 集成，请以 self_hosted 或 official 模式重新启动".into(),
+            )
+            .into());
+        }
         if !state
             .harness_provisioner
             .is_managed_repository(human.id, git.remote_url.as_str())?

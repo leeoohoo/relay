@@ -298,6 +298,49 @@ describe("MessagesView group member runtime drawer", () => {
     expect(container.querySelector(".message-console")).not.toHaveClass("project-context-open");
   });
 
+  it("shows an in-progress task as waiting to continue between Codex runs", async () => {
+    const betweenRunsTrigger: CodexTriggerView = {
+      ...trigger,
+      config: {
+        ...trigger.config,
+        lease_owner: null,
+        lease_expires_at: null,
+        wake_requested_at: null,
+        manual_run_requested_at: null,
+      },
+      recent_runs: [{
+        ...trigger.recent_runs[0],
+        status: "succeeded",
+        finished_at: "2026-08-07T03:05:00Z",
+        activity_phase: "completed",
+        activity_summary: "Codex 已完成本轮工作",
+      }],
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger: betweenRunsTrigger };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
+    expect(await screen.findByText("待继续")).toBeInTheDocument();
+    expect(screen.getByText("等待下一轮继续 · 实现库存工作台")).toBeInTheDocument();
+    expect(screen.queryByText("空闲")).not.toBeInTheDocument();
+  });
+
   it("shows the same Agent runtime details in a direct conversation", async () => {
     const { container } = render(
       <MessagesView

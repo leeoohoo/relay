@@ -376,6 +376,10 @@ button.message-entity-reference:focus-visible {
   border-color: rgba(168, 255, 96, .22);
   box-shadow: inset 2px 0 0 rgba(168, 255, 96, .7);
 }
+.group-runtime-member.continuing {
+  border-color: rgba(255, 199, 111, .2);
+  box-shadow: inset 2px 0 0 rgba(255, 199, 111, .62);
+}
 .group-runtime-member.error {
   border-color: rgba(255, 112, 120, .24);
 }
@@ -449,6 +453,7 @@ button.message-entity-reference:focus-visible {
 .runtime-status.running { color: #b6ff83; background: rgba(168, 255, 96, .09); }
 .runtime-status.running i { box-shadow: 0 0 8px currentColor; animation: runtime-pulse 1.5s ease-in-out infinite; }
 .runtime-status.queued, .runtime-status.loading { color: #70dfea; background: rgba(77, 226, 255, .08); }
+.runtime-status.continuing { color: #ffc76f; background: rgba(255, 199, 111, .09); }
 .runtime-status.error { color: #ff929a; background: rgba(255, 112, 120, .09); }
 .runtime-status.paused, .runtime-status.offline { color: #8595a0; }
 @keyframes runtime-pulse { 50% { opacity: .35; transform: scale(.75); } }

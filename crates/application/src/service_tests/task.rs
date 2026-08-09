@@ -255,6 +255,62 @@ fn human_managers_create_assign_and_update_project_tasks() {
     assert_eq!(ready_decision.active_task_count, 1);
     assert_eq!(ready_decision.waiting_task_count, 0);
 
+    for event in app
+        .list_agent_inbox_events(engineer.agent_profile.id, true, 50)
+        .expect("engineer ready inbox should load")
+    {
+        app.mark_agent_inbox_event_processed(MarkInboxEventProcessedInput {
+            actor_agent_id: engineer.agent_profile.id,
+            event_id: event.id,
+        })
+        .expect("ready events should be acknowledged before recovery check");
+    }
+    app.update_company_project_task_for_human(UpdateCompanyProjectTaskForHumanInput {
+        human_user_id: owner.id,
+        company_id: company.company.id,
+        project_id: project.project.id,
+        task_id: task.id,
+        title: None,
+        description: None,
+        status: Some(PROJECT_TASK_STATUS_IN_PROGRESS.into()),
+        priority: None,
+        assignee_agent_id: None,
+        clear_assignee: false,
+        due_at: None,
+        clear_due_at: false,
+        depends_on_task_ids: None,
+    })
+    .expect("ready task should enter progress");
+    let failed_intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: company.company.id,
+        agent_profile_id: engineer.agent_profile.id,
+        project_id: project.project.id,
+        worker_session_id: Some(Uuid::new_v4()),
+        source_event_ids: Vec::new(),
+        task_ids: vec![task.id],
+        action_type: "execute".into(),
+        objective: "恢复进行中的任务".into(),
+        acceptance_criteria: vec!["任务完成".into()],
+        priority: "high".into(),
+        dedupe_key: "recover-orphaned-in-progress-task".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_FAILED.into(),
+        result_summary: "已完成部分工作".into(),
+        error_message: Some("unexpected status 503 Service Unavailable: auth_unavailable".into()),
+        created_at: now,
+        claimed_at: Some(now),
+        completed_at: Some(now),
+    };
+    app.repo
+        .insert_agent_execution_intent(failed_intent)
+        .expect("failed intent should be stored");
+    let recovery_decision = app
+        .decide_agent_codex_work(&ready_trigger)
+        .expect("trigger should recover retryable orphaned work");
+    assert!(recovery_decision.should_run);
+    assert_eq!(recovery_decision.active_task_count, 1);
+    assert_eq!(recovery_decision.pending_execution_intent_count, 1);
+
     let updated = app
         .update_company_project_task_for_human(UpdateCompanyProjectTaskForHumanInput {
             human_user_id: owner.id,

@@ -106,7 +106,7 @@ export function GroupMembersDrawer(props: {
 }
 
 function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState; tasks: CompanyProjectTask[]; onTaskOpen?: (taskId: string) => void }) {
-  const operationalStatus = runtimeStatus(props.agent, props.runtime);
+  const operationalStatus = runtimeStatus(props.agent, props.runtime, props.tasks);
   const runningRun = props.runtime.trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const latestRun = runningRun ?? props.runtime.trigger?.recent_runs[0] ?? null;
   const currentTask = props.tasks.find((task) => task.status === "in_progress") ?? props.tasks[0] ?? null;
@@ -199,7 +199,7 @@ function emptyRuntime(loading: boolean): RuntimeState {
   return { loading, trigger: null, error: null };
 }
 
-function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState) {
+function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: CompanyProjectTask[]) {
   if (agent.membership.employment_status !== "active") return "paused";
   if (runtime.loading) return "loading";
   if (runtime.error) return "error";
@@ -208,6 +208,7 @@ function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState) {
   if (trigger.config.status !== "active") return trigger.config.status;
   if (trigger.recent_runs.some((run) => run.status === "running")) return "running";
   if (trigger.config.lease_owner || trigger.config.manual_run_requested_at || trigger.config.wake_requested_at) return "queued";
+  if (tasks.some((task) => task.status === "in_progress")) return "continuing";
   return "idle";
 }
 
@@ -215,6 +216,7 @@ function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task
   if (runtime.loading) return "正在同步运行数据";
   if (runtime.error) return "无法读取运行详情";
   if (operationalStatus === "queued") return "任务已进入执行队列";
+  if (operationalStatus === "continuing" && task) return `等待下一轮继续 · ${task.title}`;
   if (operationalStatus === "paused") return "Trigger 已暂停";
   if (operationalStatus === "error") return runtime.trigger?.config.last_error ?? "Trigger 运行异常";
   if (run?.status === "running") return run.activity_summary ?? "Codex 正在执行任务";
@@ -224,7 +226,7 @@ function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task
 }
 
 function runtimeStatusLabel(value: string) {
-  return ({ loading: "同步中", running: "运行中", queued: "排队中", idle: "空闲", paused: "已暂停", error: "异常", offline: "未连接" } as Record<string, string>)[value] ?? value;
+  return ({ loading: "同步中", running: "运行中", queued: "排队中", continuing: "待继续", idle: "空闲", paused: "已暂停", error: "异常", offline: "未连接" } as Record<string, string>)[value] ?? value;
 }
 
 function runStatusLabel(value: string) {

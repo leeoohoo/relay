@@ -284,6 +284,7 @@ pub(super) async fn execute_trigger(
 
     let mut worker_failure = None;
     let mut worker_retry_requested = false;
+    let mut worker_retry_counts_as_failure = false;
     let intents = platform.list_agent_execution_intents(
         trigger.agent_profile_id,
         Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
@@ -363,7 +364,40 @@ pub(super) async fn execute_trigger(
                 worker_failure = Some(result);
                 break;
             }
-            Ok((result, _)) => {
+            Ok((result, session)) => {
+                intent.worker_session_id = Some(session.id);
+                intent.result_summary = result
+                    .final_message
+                    .as_deref()
+                    .map(|message| truncate(message, 4_000))
+                    .unwrap_or_default();
+                let failure_message = result.error_message.clone().unwrap_or_default();
+                if result.status == CodexRunStatus::Failed
+                    && platform
+                        .requeue_agent_execution_intent_after_retryable_failure(
+                            intent.clone(),
+                            &failure_message,
+                        )?
+                        .is_some()
+                {
+                    run.project_id = session.project_id;
+                    run.codex_thread_id = Some(session.codex_thread_id);
+                    run.final_message_summary = result
+                        .final_message
+                        .as_deref()
+                        .map(|message| truncate(message, 2_000));
+                    record_run_activity(
+                        platform,
+                        run.id,
+                        "retrying",
+                        "项目工作会话遇到临时服务故障，已保留进度并将在 10 秒后重试",
+                        run.codex_thread_id.clone(),
+                    );
+                    worker_retry_requested = true;
+                    worker_retry_counts_as_failure = true;
+                    worker_failure = Some(result);
+                    break;
+                }
                 intent.status = if result.status == CodexRunStatus::Cancelled {
                     AGENT_EXECUTION_INTENT_STATUS_CANCELLED
                 } else {
@@ -378,12 +412,35 @@ pub(super) async fn execute_trigger(
                 break;
             }
             Err(error) => {
-                intent.status = AGENT_EXECUTION_INTENT_STATUS_FAILED.into();
-                intent.error_message = Some(sanitize_error(&error.to_string()));
-                intent.completed_at = Some(now_utc());
-                platform.update_agent_execution_intent(intent)?;
+                let failure_message = sanitize_error(&error.to_string());
+                let retry_requested = platform
+                    .requeue_agent_execution_intent_after_retryable_failure(
+                        intent.clone(),
+                        &failure_message,
+                    )?
+                    .is_some();
+                if !retry_requested {
+                    intent.status = AGENT_EXECUTION_INTENT_STATUS_FAILED.into();
+                    intent.error_message = Some(failure_message.clone());
+                    intent.completed_at = Some(now_utc());
+                    platform.update_agent_execution_intent(intent)?;
+                }
                 let _ = platform.revoke_agent_codex_run_tokens(run.id);
                 fail_run(platform, &mut run, None, error.to_string())?;
+                if retry_requested {
+                    record_run_activity(
+                        platform,
+                        run.id,
+                        "retrying",
+                        "项目工作会话遇到临时服务故障，将在 10 秒后重试",
+                        run.codex_thread_id.clone(),
+                    );
+                    return Ok(TriggerExecution {
+                        succeeded: false,
+                        error_message: Some(failure_message),
+                        retry_after_seconds: Some(10),
+                    });
+                }
                 return Err(error);
             }
         }
@@ -406,6 +463,9 @@ pub(super) async fn execute_trigger(
         .unwrap_or(CodexRunStatus::Succeeded);
     let (final_phase, final_summary) = match final_status {
         CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
+        CodexRunStatus::Failed if worker_retry_requested => {
+            ("retrying", "临时服务故障，已保留工作进度并即将重试")
+        }
         CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
         CodexRunStatus::TimedOut if worker_retry_requested => {
             ("continuing", "已保存当前进度，即将从同一项目会话继续")
@@ -421,8 +481,9 @@ pub(super) async fn execute_trigger(
         run.codex_thread_id.clone(),
     );
     Ok(TriggerExecution {
-        succeeded: worker_failure.is_none() || worker_retry_requested,
-        error_message: (!worker_retry_requested)
+        succeeded: worker_failure.is_none()
+            || (worker_retry_requested && !worker_retry_counts_as_failure),
+        error_message: (!worker_retry_requested || worker_retry_counts_as_failure)
             .then_some(run.error_message)
             .flatten(),
         retry_after_seconds: worker_retry_requested.then_some(10),
@@ -808,19 +869,6 @@ fn apply_codex_result_to_run(run: &mut AgentCodexTriggerRun, result: &CodexRunRe
         CodexRunStatus::Cancelled => AGENT_CODEX_RUN_STATUS_CANCELLED,
     }
     .into();
-}
-
-fn trigger_execution_from_result(result: &CodexRunResult) -> TriggerExecution {
-    TriggerExecution {
-        succeeded: matches!(
-            result.status,
-            CodexRunStatus::Succeeded | CodexRunStatus::Cancelled
-        ),
-        error_message: (result.status != CodexRunStatus::Cancelled)
-            .then_some(result.error_message.clone())
-            .flatten(),
-        retry_after_seconds: None,
-    }
 }
 
 #[allow(clippy::too_many_arguments)]

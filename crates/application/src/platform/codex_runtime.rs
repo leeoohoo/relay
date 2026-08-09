@@ -217,6 +217,28 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }
             }
         }
+        let in_progress_task_ids = active_tasks
+            .iter()
+            .filter(|task| task.status == PROJECT_TASK_STATUS_IN_PROGRESS)
+            .map(|task| task.id)
+            .collect::<HashSet<_>>();
+        if !in_progress_task_ids.is_empty() {
+            for intent in self.repo.list_agent_execution_intents(
+                config.agent_profile_id,
+                Some(AGENT_EXECUTION_INTENT_STATUS_FAILED),
+                100,
+            ) {
+                if intent
+                    .task_ids
+                    .iter()
+                    .any(|task_id| in_progress_task_ids.contains(task_id))
+                {
+                    let failure = intent.error_message.clone().unwrap_or_default();
+                    let _ = self
+                        .requeue_agent_execution_intent_after_retryable_failure(intent, &failure)?;
+                }
+            }
+        }
         let manual = config.manual_run_requested_at.is_some();
         let can_refresh_assets = membership
             .permissions
@@ -456,6 +478,29 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }
     }
 
+    pub fn requeue_agent_execution_intent_after_retryable_failure(
+        &self,
+        mut intent: AgentExecutionIntent,
+        failure_message: &str,
+    ) -> AppResult<Option<AgentExecutionIntent>> {
+        if !matches!(
+            intent.status.as_str(),
+            AGENT_EXECUTION_INTENT_STATUS_RUNNING | AGENT_EXECUTION_INTENT_STATUS_FAILED
+        ) || !is_retryable_codex_execution_failure(failure_message)
+        {
+            return Ok(None);
+        }
+        intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+        intent.claimed_at = None;
+        intent.completed_at = None;
+        intent.error_message = Some(format!(
+            "上次执行遇到临时服务故障，Relay 将自动重试：{}",
+            truncate_execution_failure(failure_message, 800)
+        ));
+        self.repo.update_agent_execution_intent(intent.clone())?;
+        Ok(Some(intent))
+    }
+
     pub fn get_agent_project_git_config(
         &self,
         agent_id: Uuid,
@@ -557,6 +602,40 @@ fn resolve_deduplicated_execution_intent(
 
 fn same_uuid_members(left: &[Uuid], right: &[Uuid]) -> bool {
     left.iter().copied().collect::<HashSet<_>>() == right.iter().copied().collect::<HashSet<_>>()
+}
+
+fn is_retryable_codex_execution_failure(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "auth_unavailable",
+        "no auth available",
+        "service unavailable",
+        "temporarily unavailable",
+        "too many requests",
+        "rate limit",
+        "bad gateway",
+        "gateway timeout",
+        "unexpected status 502",
+        "unexpected status 503",
+        "unexpected status 504",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection timed out",
+        "network is unreachable",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+fn truncate_execution_failure(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
 }
 
 fn sanitize_codex_session_for_human(mut session: AgentCodexSession) -> AgentCodexSession {

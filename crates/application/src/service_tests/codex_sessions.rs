@@ -2,7 +2,8 @@ use super::*;
 use ai_chat_domain::company::{
     AgentCodexSession, AgentExecutionIntent, AGENT_CODEX_SESSION_KIND_CONTROL,
     AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
-    AGENT_EXECUTION_INTENT_STATUS_PENDING, COMPANY_AGENT_ROLE_MANAGER,
+    AGENT_EXECUTION_INTENT_STATUS_FAILED, AGENT_EXECUTION_INTENT_STATUS_PENDING,
+    AGENT_EXECUTION_INTENT_STATUS_RUNNING, COMPANY_AGENT_ROLE_MANAGER,
 };
 
 fn scoped_session(
@@ -176,4 +177,106 @@ fn repeated_execution_intent_dedupe_key_returns_existing_work() {
             if message.contains("already belongs to execution intent")
                 && message.contains("use a new dedupe_key")
     ));
+}
+
+#[test]
+fn retryable_execution_failure_returns_the_intent_to_pending() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let now = now_utc();
+    let intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: Uuid::new_v4(),
+        agent_profile_id: Uuid::new_v4(),
+        project_id: Uuid::new_v4(),
+        worker_session_id: Some(Uuid::new_v4()),
+        source_event_ids: Vec::new(),
+        task_ids: vec![Uuid::new_v4()],
+        action_type: "execute".into(),
+        objective: "继续未完成的项目任务".into(),
+        acceptance_criteria: vec!["任务完成并验证".into()],
+        priority: "high".into(),
+        dedupe_key: "retry-temporary-codex-failure".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_RUNNING.into(),
+        result_summary: "已完成部分实现".into(),
+        error_message: None,
+        created_at: now,
+        claimed_at: Some(now),
+        completed_at: Some(now),
+    };
+    app.repo
+        .insert_agent_execution_intent(intent.clone())
+        .expect("intent should be stored");
+
+    let recovered = app
+        .requeue_agent_execution_intent_after_retryable_failure(
+            intent,
+            "unexpected status 503 Service Unavailable: auth_unavailable: no auth available",
+        )
+        .expect("temporary failure should be evaluated")
+        .expect("temporary failure should be retried");
+
+    assert_eq!(recovered.status, AGENT_EXECUTION_INTENT_STATUS_PENDING);
+    assert!(recovered.claimed_at.is_none());
+    assert!(recovered.completed_at.is_none());
+    assert_eq!(recovered.result_summary, "已完成部分实现");
+    assert!(recovered
+        .error_message
+        .as_deref()
+        .is_some_and(|message| message.contains("Relay 将自动重试")));
+    assert_eq!(
+        app.list_agent_execution_intents(
+            recovered.agent_profile_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+            10,
+        )
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn non_retryable_execution_failure_remains_terminal() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let now = now_utc();
+    let intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: Uuid::new_v4(),
+        agent_profile_id: Uuid::new_v4(),
+        project_id: Uuid::new_v4(),
+        worker_session_id: None,
+        source_event_ids: Vec::new(),
+        task_ids: Vec::new(),
+        action_type: "execute".into(),
+        objective: "执行无效请求".into(),
+        acceptance_criteria: Vec::new(),
+        priority: "normal".into(),
+        dedupe_key: "terminal-validation-failure".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_FAILED.into(),
+        result_summary: String::new(),
+        error_message: Some("validation failed".into()),
+        created_at: now,
+        claimed_at: Some(now),
+        completed_at: Some(now),
+    };
+    app.repo
+        .insert_agent_execution_intent(intent.clone())
+        .expect("intent should be stored");
+
+    let recovered = app
+        .requeue_agent_execution_intent_after_retryable_failure(
+            intent.clone(),
+            "validation failed: missing project",
+        )
+        .expect("terminal failure should be evaluated");
+
+    assert!(recovered.is_none());
+    assert_eq!(
+        app.list_agent_execution_intents(
+            intent.agent_profile_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_FAILED),
+            10,
+        )
+        .len(),
+        1
+    );
 }
