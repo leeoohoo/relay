@@ -89,6 +89,7 @@ mod chat_internal;
 mod codex_profiles;
 mod codex_runtime;
 mod company;
+mod company_paging;
 mod memory;
 mod ownership;
 mod project;

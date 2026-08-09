@@ -179,7 +179,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.company_console_projects(company_id)
     }
 
-    fn company_console_identity(
+    pub(super) fn company_console_identity(
         &self,
         human_user_id: Uuid,
         company_id: Uuid,
@@ -202,23 +202,44 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.repo
             .list_company_agent_memberships(company_id)
             .into_iter()
-            .map(|membership| {
-                let agent_profile = self
-                    .repo
-                    .get_agent_profile(membership.agent_profile_id)
-                    .ok_or_else(|| AppError::NotFound("company agent profile not found".into()))?;
-                let connection = self.company_agent_connection_view(&membership);
-                let profession = CompanyProfessionSummary::from(infer_company_profession(Some(
-                    &membership.job_title,
-                )));
-                Ok(CompanyConsoleAgentView {
-                    agent_profile,
-                    membership,
-                    profession,
-                    connection,
-                })
-            })
+            .map(|membership| self.company_console_agent(membership))
             .collect::<AppResult<Vec<_>>>()
+    }
+
+    pub(super) fn company_console_agent(
+        &self,
+        membership: CompanyAgentMembership,
+    ) -> AppResult<CompanyConsoleAgentView> {
+        let agent_profile = self
+            .repo
+            .get_agent_profile(membership.agent_profile_id)
+            .ok_or_else(|| AppError::NotFound("company agent profile not found".into()))?;
+        let connection = self.company_agent_connection_view(&membership);
+        let profession =
+            CompanyProfessionSummary::from(infer_company_profession(Some(&membership.job_title)));
+        Ok(CompanyConsoleAgentView {
+            agent_profile,
+            membership,
+            profession,
+            connection,
+        })
+    }
+
+    pub(super) fn company_conversation_view(
+        &self,
+        company_id: Uuid,
+        preview: ConversationPreview,
+    ) -> AppResult<CompanyConversationView> {
+        let context = self
+            .repo
+            .get_conversation_context_result(preview.id)?
+            .filter(|context| context.company_id == Some(company_id))
+            .ok_or_else(|| AppError::NotFound("company conversation context not found".into()))?;
+        Ok(CompanyConversationView {
+            member_agent_ids: self.repo.list_conversation_member_ids(preview.id),
+            preview,
+            context,
+        })
     }
 
     fn company_console_conversations(

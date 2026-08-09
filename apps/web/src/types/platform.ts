@@ -574,10 +574,20 @@ export type CompanyConsole = {
   projects: CompanyProject[];
   professions: CompanyProfessionSummary[];
   project_types: CompanyProjectTypeSummary[];
+  pagination: {
+    agents: CompanyConsolePageState;
+    conversations: CompanyConsolePageState;
+    projects: CompanyConsolePageState;
+  };
   governance_policy: {
     effective_settings: {
       managed_workspace_root: string | null;
       skill_language: RelaySkillLanguage;
     };
   };
+};
+
+export type CompanyConsolePageState = {
+  next_cursor: string | null;
+  has_more: boolean;
 };

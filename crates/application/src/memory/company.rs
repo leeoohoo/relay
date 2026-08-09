@@ -119,7 +119,12 @@ impl CompanyPlatformRepository for MemoryPlatformRepository {
             .filter(|membership| membership.company_id == company_id)
             .cloned()
             .collect::<Vec<_>>();
-        memberships.sort_by(|left, right| right.joined_at.cmp(&left.joined_at));
+        memberships.sort_by(|left, right| {
+            right
+                .joined_at
+                .cmp(&left.joined_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
         memberships
     }
 

@@ -23,6 +23,8 @@ Authorization: Bearer <Human Session Token>
 - `GET /api/v1/companies/{company_id}/agents`
 - `GET /api/v1/companies/{company_id}/conversations`
 - `GET /api/v1/companies/{company_id}/projects`
+
+三个列表接口接受 `limit` 与 `after`。响应除区域数组外还包含 `next_cursor` 和 `has_more`。默认分页大小分别为 Agent 20、会话 20、项目 12，Repository 层统一限制最大 100；游标必须属于当前公司。
 - `GET /api/v1/companies/{company_id}/console`（旧客户端兼容）
 - `POST /api/v1/companies/{company_id}/org-units`
 - `GET /api/v1/companies/{company_id}/events`

@@ -1,5 +1,7 @@
 use super::*;
 
+const PROJECT_PROVISIONING_LEASE_MINUTES: i64 = 120;
+
 pub(super) async fn create_company_project_for_human(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -101,6 +103,15 @@ pub(super) async fn create_company_project_for_human(
         .as_ref()
         .is_some_and(|value| !value.is_empty());
     let project_type = input.project_type.clone().unwrap_or(inferred_type);
+    let cleanup_job = begin_project_provisioning_cleanup(
+        &state,
+        &human,
+        company_id,
+        project_id,
+        &input.name,
+        &destination,
+    )
+    .await?;
     let provisioned = match provision_imported_project_git(
         &state,
         &human,
@@ -113,8 +124,10 @@ pub(super) async fn create_company_project_for_human(
     {
         Ok(git) => git,
         Err(error) => {
-            let _ = fs::remove_dir_all(&destination);
-            return Err(error.into());
+            let cleanup_error = remove_managed_project_directory(&destination);
+            let error = project_error_with_cleanup(error, cleanup_error);
+            let retry_error = release_project_provisioning_cleanup(&state, cleanup_job.id, &error);
+            return Err(project_error_with_cleanup(error, retry_error).into());
         }
     };
     let project_result = state.platform.create_managed_company_project_for_human(
@@ -146,6 +159,7 @@ pub(super) async fn create_company_project_for_human(
                 },
                 project_id: Some(project_id),
             },
+            cleanup_job_id: cleanup_job.id,
             remote_url: provisioned.remote_url.clone(),
             host_local_path: destination.to_string_lossy().into_owned(),
             default_branch: provisioned.default_branch.clone(),
@@ -166,7 +180,9 @@ pub(super) async fn create_company_project_for_human(
                 error,
             )
             .await;
-            return Err(compensated.into());
+            let retry_error =
+                release_project_provisioning_cleanup(&state, cleanup_job.id, &compensated);
+            return Err(project_error_with_cleanup(compensated, retry_error).into());
         }
     };
     Ok(Json(serde_json::json!({
@@ -376,6 +392,15 @@ pub(super) async fn import_company_project_folder_for_human(
         .as_ref()
         .is_some_and(|value| !value.is_empty());
     let project_type = metadata.project_type.clone().unwrap_or(inferred_type);
+    let cleanup_job = begin_project_provisioning_cleanup(
+        &state,
+        &human,
+        company_id,
+        project_id,
+        &metadata.name,
+        &destination,
+    )
+    .await?;
     let provisioned_git = match provision_imported_project_git(
         &state,
         &human,
@@ -388,8 +413,10 @@ pub(super) async fn import_company_project_folder_for_human(
     {
         Ok(git) => git,
         Err(error) => {
-            let _ = fs::remove_dir_all(&destination);
-            return Err(error.into());
+            let cleanup_error = remove_managed_project_directory(&destination);
+            let error = project_error_with_cleanup(error, cleanup_error);
+            let retry_error = release_project_provisioning_cleanup(&state, cleanup_job.id, &error);
+            return Err(project_error_with_cleanup(error, retry_error).into());
         }
     };
     let project_result = state.platform.create_managed_company_project_for_human(
@@ -419,6 +446,7 @@ pub(super) async fn import_company_project_folder_for_human(
                 },
                 project_id: Some(project_id),
             },
+            cleanup_job_id: cleanup_job.id,
             remote_url: provisioned_git.remote_url.clone(),
             host_local_path: destination.to_string_lossy().into_owned(),
             default_branch: provisioned_git.default_branch.clone(),
@@ -439,7 +467,9 @@ pub(super) async fn import_company_project_folder_for_human(
                 error,
             )
             .await;
-            return Err(compensated.into());
+            let retry_error =
+                release_project_provisioning_cleanup(&state, cleanup_job.id, &compensated);
+            return Err(project_error_with_cleanup(compensated, retry_error).into());
         }
     };
     Ok(Json(serde_json::json!({
@@ -495,6 +525,78 @@ async fn provision_imported_project_git(
     Ok(provisioned)
 }
 
+async fn begin_project_provisioning_cleanup(
+    state: &AppState,
+    human: &HumanUser,
+    company_id: Uuid,
+    project_id: Uuid,
+    project_name: &str,
+    destination: &FsPath,
+) -> AppResult<ProjectProvisioningCleanupJob> {
+    if let Err(error) = state.harness_provisioner.ensure_active_account(human).await {
+        return Err(project_error_with_cleanup(
+            error,
+            remove_managed_project_directory(destination),
+        ));
+    }
+    let now = now_utc();
+    let job = ProjectProvisioningCleanupJob {
+        id: Uuid::new_v4(),
+        human_user_id: human.id,
+        company_id,
+        project_id,
+        managed_local_path: destination.to_string_lossy().into_owned(),
+        repository_identifier: generated_repository_identifier(project_name, project_id),
+        access_token_identifier: initial_project_access_token_identifier(project_id),
+        status: "running".into(),
+        attempts: 0,
+        next_attempt_at: now,
+        lease_expires_at: Some(now + chrono::Duration::minutes(PROJECT_PROVISIONING_LEASE_MINUTES)),
+        last_error: None,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    if let Err(error) = state
+        .platform
+        .save_project_provisioning_cleanup_job(job.clone())
+    {
+        return Err(project_error_with_cleanup(
+            error,
+            remove_managed_project_directory(destination),
+        ));
+    }
+    Ok(job)
+}
+
+fn remove_managed_project_directory(destination: &FsPath) -> Option<AppError> {
+    match fs::remove_dir_all(destination) {
+        Ok(()) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(AppError::Internal(format!(
+            "failed to remove managed project directory {}: {error}",
+            destination.display()
+        ))),
+    }
+}
+
+fn release_project_provisioning_cleanup(
+    state: &AppState,
+    cleanup_job_id: Uuid,
+    original_error: &AppError,
+) -> Option<AppError> {
+    let now = now_utc();
+    let message = original_error
+        .to_string()
+        .chars()
+        .take(2_000)
+        .collect::<String>();
+    state
+        .platform
+        .retry_project_provisioning_cleanup_job(cleanup_job_id, message, now, now)
+        .err()
+}
+
 async fn compensate_failed_project_creation(
     state: &AppState,
     human: &HumanUser,
@@ -537,6 +639,90 @@ fn project_error_with_cleanup(original: AppError, cleanup_error: Option<AppError
             "{original}; automatic project cleanup failed: {cleanup_error}"
         )),
         None => original,
+    }
+}
+
+pub(super) fn spawn_project_provisioning_cleanup_worker(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(StdDuration::from_secs(15));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            loop {
+                let now = now_utc();
+                let lease_expires_at = now + chrono::Duration::minutes(5);
+                let job = match state
+                    .platform
+                    .claim_due_project_provisioning_cleanup_job(now, lease_expires_at)
+                {
+                    Ok(Some(job)) => job,
+                    Ok(None) => break,
+                    Err(error) => {
+                        tracing::error!(%error, "failed to claim project provisioning cleanup job");
+                        break;
+                    }
+                };
+                let result = cleanup_project_provisioning_job(&state, &job).await;
+                let finished_at = now_utc();
+                match result {
+                    Ok(()) => {
+                        if let Err(error) = state
+                            .platform
+                            .complete_project_provisioning_cleanup_job(job.id, finished_at)
+                        {
+                            tracing::error!(job_id = %job.id, %error, "failed to complete project provisioning cleanup job");
+                        }
+                    }
+                    Err(error) => {
+                        let exponent = job.attempts.clamp(1, 8) as u32;
+                        let retry_seconds = (15_i64 * 2_i64.pow(exponent)).min(3_600);
+                        let next_attempt_at =
+                            finished_at + chrono::Duration::seconds(retry_seconds);
+                        let message = error.to_string().chars().take(2_000).collect::<String>();
+                        if let Err(store_error) =
+                            state.platform.retry_project_provisioning_cleanup_job(
+                                job.id,
+                                message,
+                                next_attempt_at,
+                                finished_at,
+                            )
+                        {
+                            tracing::error!(job_id = %job.id, %store_error, "failed to reschedule project provisioning cleanup job");
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn cleanup_project_provisioning_job(
+    state: &AppState,
+    job: &ProjectProvisioningCleanupJob,
+) -> AppResult<()> {
+    let mut failures = Vec::new();
+    match fs::remove_dir_all(&job.managed_local_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => failures.push(format!("remove managed directory: {error}")),
+    }
+    if let Err(error) = state
+        .harness_provisioner
+        .cleanup_project_git_resources_by_identifier(
+            job.human_user_id,
+            job.project_id,
+            &job.repository_identifier,
+            &job.access_token_identifier,
+            &state.git_credential_store,
+        )
+        .await
+    {
+        failures.push(error.to_string());
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Internal(failures.join("; ")))
     }
 }
 

@@ -259,7 +259,12 @@ impl ChatPlatformRepository for MemoryPlatformRepository {
                 .or_insert_with(|| default_group.clone());
         }
         let mut conversations = conversations_by_id.into_values().collect::<Vec<_>>();
-        conversations.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        conversations.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
         conversations
     }
 

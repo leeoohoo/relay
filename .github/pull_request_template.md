@@ -15,6 +15,7 @@ Describe the user-visible outcome and verification performed.
 2. Does this add fields to a company-, project-, Agent- or session-level aggregate? Why can it not use an independent paginated or lazy query?
 3. Does this create an external side effect? Document idempotency, retry, compensation and credential handling.
 4. For every new list, document stable ordering, default/max limit and continuation cursor.
+5. Does this change a durable architectural decision? Add or supersede an ADR under `docs/adr/`.
 
 ## Verification
 

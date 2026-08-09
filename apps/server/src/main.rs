@@ -50,16 +50,17 @@ use ai_chat_application::{
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
     ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
-    OpenHumanCompanyDirectConversationInput, PlatformApp, PublishCompanyGovernancePolicyInput,
-    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
-    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
-    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
-    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
-    TransferCompanyProjectOwnerForHumanInput, UpdateAgentMemoryForHumanInput,
-    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
-    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
-    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
-    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
+    OpenHumanCompanyDirectConversationInput, PlatformApp, ProjectProvisioningCleanupJob,
+    PublishCompanyGovernancePolicyInput, RegisterHumanInput,
+    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
+    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
+    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
+    SetCompanyProjectPauseForHumanInput, TransferCompanyProjectOwnerForHumanInput,
+    UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
+    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
+    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
+    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
+    UpsertCompanyProjectAssetRefreshForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -80,7 +81,9 @@ use ai_chat_infrastructure::harness::{
     HarnessProjectGitProvisioner, HarnessProvisioner, HarnessRepositoryContent,
 };
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
-use ai_chat_infrastructure::project_git::ProvisionedProjectGit;
+use ai_chat_infrastructure::project_git::{
+    generated_repository_identifier, initial_project_access_token_identifier, ProvisionedProjectGit,
+};
 use ai_chat_infrastructure::realtime::spawn_postgres_realtime_listener;
 use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
@@ -337,6 +340,7 @@ async fn main() -> anyhow::Result<()> {
         codex_control_store,
         harness_provisioner,
     };
+    spawn_project_provisioning_cleanup_worker(app_state.clone());
 
     let app = Router::new()
         .route("/health", get(health))

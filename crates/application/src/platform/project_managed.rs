@@ -13,6 +13,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         input: CreateManagedCompanyProjectForHumanInput,
     ) -> AppResult<(CompanyProjectView, CompanyProjectGitAdminView)> {
         let human_user_id = input.project.human_user_id;
+        let cleanup_job_id = input.cleanup_job_id;
         let project_creation = self.prepare_company_project_for_human(input.project)?;
         let project_id = project_creation.project.id;
         let now = now_utc();
@@ -31,11 +32,50 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             None,
             now,
         )?;
-        let (project, git) =
-            self.complete_company_project_creation(project_creation, Some(git_config))?;
+        let (project, git) = self.complete_company_project_creation(
+            project_creation,
+            Some(git_config),
+            Some(cleanup_job_id),
+        )?;
         let git = git.ok_or_else(|| {
             AppError::Internal("managed project commit did not return its Git configuration".into())
         })?;
         Ok((project, company_project_git_admin_view(git)))
+    }
+
+    pub fn save_project_provisioning_cleanup_job(
+        &self,
+        job: ProjectProvisioningCleanupJob,
+    ) -> AppResult<()> {
+        self.repo.save_project_provisioning_cleanup_job(job)
+    }
+
+    pub fn claim_due_project_provisioning_cleanup_job(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        lease_expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<ProjectProvisioningCleanupJob>> {
+        self.repo
+            .claim_due_project_provisioning_cleanup_job(now, lease_expires_at)
+    }
+
+    pub fn retry_project_provisioning_cleanup_job(
+        &self,
+        job_id: Uuid,
+        error: String,
+        next_attempt_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        self.repo
+            .retry_project_provisioning_cleanup_job(job_id, error, next_attempt_at, updated_at)
+    }
+
+    pub fn complete_project_provisioning_cleanup_job(
+        &self,
+        job_id: Uuid,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        self.repo
+            .complete_project_provisioning_cleanup_job(job_id, completed_at)
     }
 }

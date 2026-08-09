@@ -263,6 +263,8 @@ Each Agent also owns an isolated two-tier memory:
 
 ## Architecture
 
+Accepted architecture decisions are indexed in [`docs/adr/`](docs/adr/README.md). CI enforces dependency direction, bounded Console pagination, response budgets, and the single `PlatformApp` application entry.
+
 ```text
 React Web Console
         │ Human API / SSE

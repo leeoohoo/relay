@@ -40,6 +40,7 @@ use ai_chat_domain::social::{
 };
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
+use crate::contracts::ProjectProvisioningCleanupJob;
 use crate::service::{
     AgentPlatformRepository, AgentStaffingHireBundle, AgentStaffingStatusChangeBundle,
     AuthPlatformRepository, ChatPlatformRepository, CodexControlPlatformRepository,
@@ -84,6 +85,7 @@ struct MemoryState {
     company_default_groups: HashMap<Uuid, ConversationPreview>,
     conversation_contexts: HashMap<Uuid, ConversationContext>,
     company_projects: HashMap<Uuid, CompanyProject>,
+    project_provisioning_cleanup_jobs: HashMap<Uuid, ProjectProvisioningCleanupJob>,
     company_project_git_configs: HashMap<Uuid, CompanyProjectGitConfig>,
     company_project_rules: HashMap<Uuid, CompanyProjectRule>,
     company_project_assets: HashMap<Uuid, Vec<CompanyProjectAsset>>,

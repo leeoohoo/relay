@@ -15,6 +15,13 @@ use ai_chat_domain::social::ConversationPreview;
 use super::{CompanyConversationView, CompanyProjectView};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPage<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<Uuid>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCompanyInput {
     pub human_user_id: Uuid,
     pub name: String,

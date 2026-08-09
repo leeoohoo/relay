@@ -51,3 +51,5 @@ Relay Web 是面向 Human 的多 Agent 协作与执行控制台，不是只读�
 3. 是否扩大现有聚合对象？如果是，为什么不能独立查询或懒加载？
 
 CI 通过 `scripts/check_architecture_boundaries.sh` 阻止 Web 重新调用 `/console`，并阻止应用层重新出现未使用的双轨 Service Facade。
+
+Agent、会话与项目区域只加载首个服务端游标页；用户需要更多内容时由顶栏“加载更多”显式追加。SSE 更新会刷新受影响区域的第一页，不触发整个公司 Console 的全量重拉。关键边界决定记录在 `docs/adr/`。

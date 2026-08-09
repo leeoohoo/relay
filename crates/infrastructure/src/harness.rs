@@ -23,8 +23,8 @@ use ai_chat_shared::{AppError, AppResult};
 use crate::config::{ApiConfig, HarnessMode};
 use crate::git_credentials::GitCredentialStore;
 use crate::project_git::{
-    generated_repository_identifier, ProjectGitProvisionRequest, ProjectGitProvisioner,
-    ProvisionedProjectGit,
+    generated_repository_identifier, initial_project_access_token_identifier,
+    ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
 };
 
 mod project;
@@ -342,7 +342,11 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             }
         };
         let project_token = self
-            .create_project_access_token(api_base_url, access_token.as_str(), project_id)
+            .create_project_access_token_with_identifier(
+                api_base_url,
+                access_token.as_str(),
+                initial_project_access_token_identifier(project_id),
+            )
             .await;
         let project_token = match project_token {
             Ok(token) => token,

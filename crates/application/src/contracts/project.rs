@@ -67,6 +67,26 @@ pub struct CompanyProjectCreationBundle {
 pub struct ManagedCompanyProjectCreationBundle {
     pub project_creation: CompanyProjectCreationBundle,
     pub git_config: ai_chat_domain::company::CompanyProjectGitConfig,
+    pub cleanup_job_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectProvisioningCleanupJob {
+    pub id: Uuid,
+    pub human_user_id: Uuid,
+    pub company_id: Uuid,
+    pub project_id: Uuid,
+    pub managed_local_path: String,
+    pub repository_identifier: String,
+    pub access_token_identifier: String,
+    pub status: String,
+    pub attempts: i32,
+    pub next_attempt_at: DateTime<Utc>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +129,7 @@ pub struct CreateCompanyProjectForHumanInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateManagedCompanyProjectForHumanInput {
     pub project: CreateCompanyProjectForHumanInput,
+    pub cleanup_job_id: Uuid,
     pub remote_url: String,
     pub host_local_path: String,
     pub default_branch: String,

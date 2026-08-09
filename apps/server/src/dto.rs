@@ -53,6 +53,12 @@ pub(super) struct CreateCompanyRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ConsolePageQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) after: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct CreateCompanyAgentRequest {
     pub(super) display_name: String,
     pub(super) handle: String,

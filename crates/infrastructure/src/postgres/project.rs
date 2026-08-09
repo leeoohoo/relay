@@ -1,4 +1,5 @@
 use super::mapping::*;
+use super::project_persistence::*;
 use super::*;
 
 impl ProjectPlatformRepository for PostgresPlatformRepository {
@@ -20,7 +21,151 @@ impl ProjectPlatformRepository for PostgresPlatformRepository {
         }
         self.with_transaction(|tx| {
             insert_company_project_creation(tx, &bundle.project_creation)?;
-            upsert_company_project_git_config(tx, &bundle.git_config)
+            upsert_company_project_git_config(tx, &bundle.git_config)?;
+            let updated = tx
+                .execute(
+                    r#"
+                    UPDATE project_provisioning_cleanup_jobs
+                    SET status = 'completed', completed_at = $2, updated_at = $2,
+                        lease_expires_at = NULL, last_error = NULL
+                    WHERE id = $1 AND status <> 'completed'
+                    "#,
+                    &[
+                        &bundle.cleanup_job_id,
+                        &bundle.project_creation.project.updated_at,
+                    ],
+                )
+                .map_err(map_postgres_error)?;
+            if updated != 1 {
+                return Err(AppError::NotFound(
+                    "project provisioning cleanup job not found".into(),
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    fn save_project_provisioning_cleanup_job(
+        &self,
+        job: ProjectProvisioningCleanupJob,
+    ) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                INSERT INTO project_provisioning_cleanup_jobs (
+                    id, human_user_id, company_id, project_id, managed_local_path,
+                    repository_identifier, access_token_identifier, status, attempts,
+                    next_attempt_at, lease_expires_at, last_error, created_at,
+                    updated_at, completed_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                "#,
+                &[
+                    &job.id,
+                    &job.human_user_id,
+                    &job.company_id,
+                    &job.project_id,
+                    &job.managed_local_path,
+                    &job.repository_identifier,
+                    &job.access_token_identifier,
+                    &job.status,
+                    &job.attempts,
+                    &job.next_attempt_at,
+                    &job.lease_expires_at,
+                    &job.last_error,
+                    &job.created_at,
+                    &job.updated_at,
+                    &job.completed_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn claim_due_project_provisioning_cleanup_job(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        lease_expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<ProjectProvisioningCleanupJob>> {
+        self.with_transaction(|tx| {
+            let row = tx
+                .query_opt(
+                    r#"
+                    SELECT id, human_user_id, company_id, project_id, managed_local_path,
+                           repository_identifier, access_token_identifier, status, attempts,
+                           next_attempt_at, lease_expires_at, last_error, created_at,
+                           updated_at, completed_at
+                    FROM project_provisioning_cleanup_jobs
+                    WHERE status <> 'completed'
+                      AND next_attempt_at <= $1
+                      AND (status <> 'running' OR lease_expires_at IS NULL OR lease_expires_at <= $1)
+                    ORDER BY next_attempt_at ASC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                    "#,
+                    &[&now],
+                )
+                .map_err(map_postgres_error)?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let job_id: Uuid = row.get("id");
+            tx.execute(
+                r#"
+                UPDATE project_provisioning_cleanup_jobs
+                SET status = 'running', attempts = attempts + 1,
+                    lease_expires_at = $2, updated_at = $1
+                WHERE id = $3
+                "#,
+                &[&now, &lease_expires_at, &job_id],
+            )
+            .map_err(map_postgres_error)?;
+            let mut job = map_project_provisioning_cleanup_job(row);
+            job.status = "running".into();
+            job.attempts += 1;
+            job.lease_expires_at = Some(lease_expires_at);
+            job.updated_at = now;
+            Ok(Some(job))
+        })
+    }
+
+    fn retry_project_provisioning_cleanup_job(
+        &self,
+        job_id: Uuid,
+        error: String,
+        next_attempt_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                UPDATE project_provisioning_cleanup_jobs
+                SET status = 'failed', last_error = $2, next_attempt_at = $3,
+                    lease_expires_at = NULL, updated_at = $4
+                WHERE id = $1
+                "#,
+                &[&job_id, &error, &next_attempt_at, &updated_at],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn complete_project_provisioning_cleanup_job(
+        &self,
+        job_id: Uuid,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        self.with_client(|client| {
+            client.execute(
+                r#"
+                UPDATE project_provisioning_cleanup_jobs
+                SET status = 'completed', completed_at = $2, updated_at = $2,
+                    lease_expires_at = NULL, last_error = NULL
+                WHERE id = $1
+                "#,
+                &[&job_id, &completed_at],
+            )?;
+            Ok(())
         })
     }
 
@@ -68,6 +213,66 @@ impl ProjectPlatformRepository for PostgresPlatformRepository {
             )
         })
         .map(|rows| rows.into_iter().map(map_company_project).collect())
+    }
+
+    fn list_company_project_page(
+        &self,
+        company_id: Uuid,
+        after_project_id: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<CursorPage<CompanyProject>> {
+        let cursor = match after_project_id {
+            Some(cursor_id) => self
+                .with_client(|client| {
+                    client.query_opt(
+                        "SELECT updated_at, id FROM company_projects WHERE company_id = $1 AND id = $2",
+                        &[&company_id, &cursor_id],
+                    )
+                })?
+                .map(|row| {
+                    (
+                        row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at"),
+                        row.get::<_, Uuid>("id"),
+                    )
+                })
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "project cursor does not belong to the selected company".into(),
+                    )
+                })?,
+            None => (chrono::DateTime::<chrono::Utc>::MAX_UTC, Uuid::max()),
+        };
+        let limit = limit.clamp(1, 100);
+        let query_limit = i64::try_from(limit + 1).unwrap_or(101);
+        let rows = self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, company_id, name, description, status, owner_agent_id,
+                       project_type, project_type_source, project_type_confidence,
+                       project_type_evidence, project_group_conversation_id,
+                       created_by_agent_id, updated_by_agent_id, due_at,
+                       created_at, updated_at, completed_at
+                FROM company_projects
+                WHERE company_id = $1 AND (updated_at, id) < ($2, $3)
+                ORDER BY updated_at DESC, id DESC
+                LIMIT $4
+                "#,
+                &[&company_id, &cursor.0, &cursor.1, &query_limit],
+            )
+        })?;
+        let mut items = rows
+            .into_iter()
+            .map(map_company_project)
+            .collect::<Vec<_>>();
+        let has_more = items.len() > limit;
+        if has_more {
+            items.pop();
+        }
+        Ok(CursorPage {
+            next_cursor: has_more.then(|| items.last().map(|item| item.id)).flatten(),
+            items,
+            has_more,
+        })
     }
 
     fn save_company_project_git_config(&self, config: CompanyProjectGitConfig) -> AppResult<()> {
@@ -634,178 +839,4 @@ impl ProjectPlatformRepository for PostgresPlatformRepository {
             Ok(())
         })
     }
-}
-
-fn insert_company_project_creation(
-    client: &mut impl GenericClient,
-    bundle: &CompanyProjectCreationBundle,
-) -> AppResult<()> {
-    if bundle.conversation_members.is_empty() || bundle.members.is_empty() {
-        return Err(AppError::Validation(
-            "company project members required".into(),
-        ));
-    }
-    let project_type_evidence = serde_json::to_value(&bundle.project.project_type_evidence)
-        .map_err(|error| {
-            AppError::Internal(format!(
-                "failed to serialize project type evidence: {error}"
-            ))
-        })?;
-    let preview = &bundle.conversation_members[0].preview;
-    let title = Some(preview.title.as_str());
-    client
-        .execute(
-            r#"
-            INSERT INTO conversations (
-                id, conversation_type, title, created_by_agent_id, status,
-                company_id, project_id, context_type, visibility,
-                last_message_at, created_at, updated_at
-            )
-            VALUES ($1, 'group', $2, $3, 'active', $4, NULL, 'project_group',
-                    'members', $5, $5, $5)
-            "#,
-            &[
-                &preview.id,
-                &title,
-                &bundle.project.created_by_agent_id,
-                &bundle.project.company_id,
-                &preview.updated_at,
-            ],
-        )
-        .map_err(map_postgres_error)?;
-    for conversation_member in &bundle.conversation_members {
-        let role = if conversation_member.agent_id == bundle.project.owner_agent_id {
-            "owner"
-        } else {
-            "member"
-        };
-        client
-            .execute(
-                r#"
-                INSERT INTO conversation_members (
-                    id, conversation_id, agent_profile_id, member_role, joined_at
-                )
-                VALUES ($1, $2, $3, $4, $5)
-                "#,
-                &[
-                    &Uuid::new_v4(),
-                    &preview.id,
-                    &conversation_member.agent_id,
-                    &role,
-                    &preview.updated_at,
-                ],
-            )
-            .map_err(map_postgres_error)?;
-    }
-    client
-        .execute(
-            r#"
-            INSERT INTO company_projects (
-                id, company_id, name, description, project_type, project_type_source,
-                project_type_confidence, project_type_evidence, status, owner_agent_id,
-                project_group_conversation_id, created_by_agent_id,
-                updated_by_agent_id, due_at, created_at, updated_at, completed_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-            "#,
-            &[
-                &bundle.project.id,
-                &bundle.project.company_id,
-                &bundle.project.name,
-                &bundle.project.description,
-                &bundle.project.project_type,
-                &bundle.project.project_type_source,
-                &bundle.project.project_type_confidence,
-                &project_type_evidence,
-                &bundle.project.status,
-                &bundle.project.owner_agent_id,
-                &bundle.project.project_group_conversation_id,
-                &bundle.project.created_by_agent_id,
-                &bundle.project.updated_by_agent_id,
-                &bundle.project.due_at,
-                &bundle.project.created_at,
-                &bundle.project.updated_at,
-                &bundle.project.completed_at,
-            ],
-        )
-        .map_err(map_postgres_error)?;
-    client
-        .execute(
-            "UPDATE conversations SET project_id = $1 WHERE id = $2",
-            &[&bundle.project.id, &preview.id],
-        )
-        .map_err(map_postgres_error)?;
-    for member in &bundle.members {
-        client
-            .execute(
-                r#"
-                INSERT INTO company_project_members (
-                    id, project_id, agent_profile_id, role, joined_at, left_at,
-                    added_by_agent_id
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                "#,
-                &[
-                    &member.id,
-                    &member.project_id,
-                    &member.agent_profile_id,
-                    &member.role,
-                    &member.joined_at,
-                    &member.left_at,
-                    &member.added_by_agent_id,
-                ],
-            )
-            .map_err(map_postgres_error)?;
-    }
-    Ok(())
-}
-
-fn upsert_company_project_git_config(
-    client: &mut impl GenericClient,
-    config: &CompanyProjectGitConfig,
-) -> AppResult<()> {
-    client
-        .execute(
-            r#"
-            INSERT INTO company_project_git_configs (
-                project_id, remote_url, default_branch, git_host, host_local_path,
-                auth_profile, allow_agent_push, branch_prefix, created_by_agent_id,
-                created_by_human_user_id, updated_by_agent_id,
-                updated_by_human_user_id, created_at, updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            ON CONFLICT (project_id) DO UPDATE
-            SET remote_url = EXCLUDED.remote_url,
-                default_branch = EXCLUDED.default_branch,
-                git_host = EXCLUDED.git_host,
-                host_local_path = EXCLUDED.host_local_path,
-                auth_profile = EXCLUDED.auth_profile,
-                allow_agent_push = EXCLUDED.allow_agent_push,
-                branch_prefix = EXCLUDED.branch_prefix,
-                created_by_agent_id = EXCLUDED.created_by_agent_id,
-                created_by_human_user_id = EXCLUDED.created_by_human_user_id,
-                updated_by_agent_id = EXCLUDED.updated_by_agent_id,
-                updated_by_human_user_id = EXCLUDED.updated_by_human_user_id,
-                created_at = EXCLUDED.created_at,
-                updated_at = EXCLUDED.updated_at
-            "#,
-            &[
-                &config.project_id,
-                &config.remote_url,
-                &config.default_branch,
-                &config.git_host,
-                &config.host_local_path,
-                &config.auth_profile,
-                &config.allow_agent_push,
-                &config.branch_prefix,
-                &config.created_by_agent_id,
-                &config.created_by_human_user_id,
-                &config.updated_by_agent_id,
-                &config.updated_by_human_user_id,
-                &config.created_at,
-                &config.updated_at,
-            ],
-        )
-        .map_err(map_postgres_error)?;
-    Ok(())
 }

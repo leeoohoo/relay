@@ -322,3 +322,20 @@ fn repository_browser_accepts_only_enumerated_harness_refs_and_safe_paths() {
     assert!(normalize_repository_path("../secret", false).is_err());
     assert!(normalize_repository_path("/absolute", false).is_err());
 }
+
+#[test]
+fn console_pages_enforce_a_bounded_response_size() {
+    let response = console_page_response(
+        "agents",
+        vec![serde_json::json!({ "id": Uuid::new_v4(), "name": "Agent" })],
+        None,
+        false,
+    )
+    .expect("small Console page should fit its budget");
+    assert_eq!(response["agents"].as_array().map(Vec::len), Some(1));
+
+    let oversized = "x".repeat(MAX_CONSOLE_PAGE_RESPONSE_BYTES + 1);
+    let error = console_page_response("projects", vec![oversized], None, false)
+        .expect_err("oversized Console page must be rejected");
+    assert!(error.to_string().contains("response budget"));
+}

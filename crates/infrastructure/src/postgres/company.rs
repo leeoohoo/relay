@@ -269,6 +269,66 @@ impl CompanyPlatformRepository for PostgresPlatformRepository {
         .collect()
     }
 
+    fn list_company_agent_membership_page(
+        &self,
+        company_id: Uuid,
+        after_membership_id: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<CursorPage<CompanyAgentMembership>> {
+        let cursor = match after_membership_id {
+            Some(cursor_id) => self
+                .with_client(|client| {
+                    client.query_opt(
+                        "SELECT joined_at, id FROM company_agent_memberships WHERE company_id = $1 AND id = $2",
+                        &[&company_id, &cursor_id],
+                    )
+                })?
+                .map(|row| {
+                    (
+                        row.get::<_, chrono::DateTime<chrono::Utc>>("joined_at"),
+                        row.get::<_, Uuid>("id"),
+                    )
+                })
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "Agent cursor does not belong to the selected company".into(),
+                    )
+                })?,
+            None => (chrono::DateTime::<chrono::Utc>::MAX_UTC, Uuid::max()),
+        };
+        let limit = limit.clamp(1, 100);
+        let query_limit = i64::try_from(limit + 1).unwrap_or(101);
+        let rows = self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, company_id, agent_profile_id, org_unit_id, job_title,
+                       role_key, reports_to_membership_id, permissions, responsibilities,
+                       skills, current_focus, employment_status, staffing_scope_org_unit_id,
+                       joined_at, terminated_at, created_by_human_user_id,
+                       created_by_agent_id, updated_at
+                FROM company_agent_memberships
+                WHERE company_id = $1 AND (joined_at, id) < ($2, $3)
+                ORDER BY joined_at DESC, id DESC
+                LIMIT $4
+                "#,
+                &[&company_id, &cursor.0, &cursor.1, &query_limit],
+            )
+        })?;
+        let mut items = rows
+            .into_iter()
+            .map(map_company_agent_membership)
+            .collect::<Vec<_>>();
+        let has_more = items.len() > limit;
+        if has_more {
+            items.pop();
+        }
+        Ok(CursorPage {
+            next_cursor: has_more.then(|| items.last().map(|item| item.id)).flatten(),
+            items,
+            has_more,
+        })
+    }
+
     fn update_company_agent_work_profile(
         &self,
         agent_id: Uuid,

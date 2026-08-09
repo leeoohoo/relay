@@ -96,6 +96,7 @@ body::before {
 }
 .page-header h1 { margin: 4px 0 3px; color: #f4f8fb; font-size: 28px; letter-spacing: -.035em; }
 .page-header p { color: var(--relay-muted); font-size: 12px; }
+.page-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .eyebrow { color: #607386; font-size: 9px; letter-spacing: .16em; }
 .content-stack { gap: 14px; max-width: 1680px; }
 

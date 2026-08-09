@@ -63,6 +63,11 @@ const trigger: CodexTriggerView = {
 };
 
 const consoleData: CompanyConsole = {
+  pagination: {
+    agents: { next_cursor: null, has_more: false },
+    conversations: { next_cursor: null, has_more: false },
+    projects: { next_cursor: null, has_more: false },
+  },
   company: { id: "company-1", name: "Relay", slug: "relay", description: "" },
   human_membership: { role: "owner", status: "active" },
   org_units: [],

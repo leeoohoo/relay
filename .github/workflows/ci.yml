@@ -76,6 +76,12 @@ jobs:
       - name: Migration failure recovery
         run: ./scripts/test_migration_atomicity.sh
 
+      - name: PostgreSQL project cleanup lifecycle
+        run: >-
+          cargo test -p ai-chat-infrastructure
+          postgres::postgres_tests::project_cleanup_jobs_enforce_postgres_leases_retries_and_completion
+          -- --ignored --exact --nocapture --test-threads=1
+
       - name: Rust format
         run: cargo fmt --all -- --check
 
@@ -87,6 +93,12 @@ jobs:
 
       - name: Architecture boundaries
         run: ./scripts/check_architecture_boundaries.sh
+
+      - name: Dependency boundaries
+        run: ./scripts/check_dependency_boundaries.sh
+
+      - name: Console pagination boundaries
+        run: ./scripts/check_console_pagination_boundaries.sh
 
       - name: Rust dependency audit
         run: cargo audit --deny warnings

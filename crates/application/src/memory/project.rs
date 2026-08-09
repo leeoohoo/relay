@@ -29,10 +29,122 @@ impl ProjectPlatformRepository for MemoryPlatformRepository {
                 "company project Git configuration already exists".into(),
             ));
         }
+        let completed_at = bundle.project_creation.project.updated_at;
         insert_company_project_creation(&mut guard, bundle.project_creation)?;
         guard
             .company_project_git_configs
             .insert(bundle.git_config.project_id, bundle.git_config);
+        let cleanup_job = guard
+            .project_provisioning_cleanup_jobs
+            .get_mut(&bundle.cleanup_job_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound(
+                    "project provisioning cleanup job not found".into(),
+                )
+            })?;
+        cleanup_job.status = "completed".into();
+        cleanup_job.completed_at = Some(completed_at);
+        cleanup_job.updated_at = completed_at;
+        cleanup_job.lease_expires_at = None;
+        Ok(())
+    }
+
+    fn save_project_provisioning_cleanup_job(
+        &self,
+        job: ProjectProvisioningCleanupJob,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if guard
+            .project_provisioning_cleanup_jobs
+            .values()
+            .any(|existing| existing.project_id == job.project_id && existing.status != "completed")
+        {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "project provisioning cleanup job already exists".into(),
+            ));
+        }
+        guard.project_provisioning_cleanup_jobs.insert(job.id, job);
+        Ok(())
+    }
+
+    fn claim_due_project_provisioning_cleanup_job(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        lease_expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<ProjectProvisioningCleanupJob>> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let next_id = guard
+            .project_provisioning_cleanup_jobs
+            .values()
+            .filter(|job| {
+                job.status != "completed"
+                    && job.next_attempt_at <= now
+                    && (job.status != "running"
+                        || job.lease_expires_at.is_none_or(|lease| lease <= now))
+            })
+            .min_by(|left, right| {
+                left.next_attempt_at
+                    .cmp(&right.next_attempt_at)
+                    .then_with(|| left.created_at.cmp(&right.created_at))
+            })
+            .map(|job| job.id);
+        let Some(job_id) = next_id else {
+            return Ok(None);
+        };
+        let job = guard
+            .project_provisioning_cleanup_jobs
+            .get_mut(&job_id)
+            .expect("selected cleanup job exists");
+        job.status = "running".into();
+        job.attempts += 1;
+        job.lease_expires_at = Some(lease_expires_at);
+        job.updated_at = now;
+        Ok(Some(job.clone()))
+    }
+
+    fn retry_project_provisioning_cleanup_job(
+        &self,
+        job_id: Uuid,
+        error: String,
+        next_attempt_at: chrono::DateTime<chrono::Utc>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let job = guard
+            .project_provisioning_cleanup_jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound(
+                    "project provisioning cleanup job not found".into(),
+                )
+            })?;
+        job.status = "failed".into();
+        job.last_error = Some(error);
+        job.next_attempt_at = next_attempt_at;
+        job.lease_expires_at = None;
+        job.updated_at = updated_at;
+        Ok(())
+    }
+
+    fn complete_project_provisioning_cleanup_job(
+        &self,
+        job_id: Uuid,
+        completed_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let job = guard
+            .project_provisioning_cleanup_jobs
+            .get_mut(&job_id)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::NotFound(
+                    "project provisioning cleanup job not found".into(),
+                )
+            })?;
+        job.status = "completed".into();
+        job.last_error = None;
+        job.completed_at = Some(completed_at);
+        job.lease_expires_at = None;
+        job.updated_at = completed_at;
         Ok(())
     }
 
@@ -49,7 +161,12 @@ impl ProjectPlatformRepository for MemoryPlatformRepository {
             .filter(|project| project.company_id == company_id)
             .cloned()
             .collect::<Vec<_>>();
-        projects.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        projects.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
         projects
     }
 

@@ -26,7 +26,7 @@ pub trait ProjectGitProvisioner: Send + Sync {
     fn provision(&self, request: ProjectGitProvisionRequest) -> AppResult<ProvisionedProjectGit>;
 }
 
-pub(crate) fn generated_repository_identifier(project_name: &str, project_id: Uuid) -> String {
+pub fn generated_repository_identifier(project_name: &str, project_id: Uuid) -> String {
     let mut slug = project_name
         .chars()
         .flat_map(char::to_lowercase)
@@ -46,4 +46,8 @@ pub(crate) fn generated_repository_identifier(project_name: &str, project_id: Uu
         slug = "project".into();
     }
     format!("{}-{}", slug, &project_id.simple().to_string()[..8])
+}
+
+pub fn initial_project_access_token_identifier(project_id: Uuid) -> String {
+    format!("relay-project-{}", &project_id.simple().to_string()[..12])
 }

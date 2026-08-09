@@ -1,6 +1,24 @@
 use super::*;
 
 impl<R: PlatformRepository> HarnessProvisioner<R> {
+    pub async fn cleanup_project_git_resources_by_identifier(
+        &self,
+        human_user_id: Uuid,
+        project_id: Uuid,
+        repository_identifier: &str,
+        access_token_identifier: &str,
+        git_credentials: &GitCredentialStore,
+    ) -> AppResult<()> {
+        self.cleanup_project_git_resources(
+            human_user_id,
+            project_id,
+            repository_identifier,
+            Some(access_token_identifier),
+            git_credentials,
+        )
+        .await
+    }
+
     pub async fn cleanup_provisioned_project_git(
         &self,
         human_user_id: Uuid,
@@ -166,6 +184,20 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             short_identifier(project_id),
             short_identifier(Uuid::new_v4())
         );
+        self.create_project_access_token_with_identifier(
+            api_base_url,
+            access_token,
+            token_identifier,
+        )
+        .await
+    }
+
+    pub(super) async fn create_project_access_token_with_identifier(
+        &self,
+        api_base_url: &str,
+        access_token: &str,
+        token_identifier: String,
+    ) -> Result<HarnessCreatedToken, HarnessRequestError> {
         let token_request = HarnessCreateAccessTokenRequest {
             identifier: token_identifier.as_str(),
         };

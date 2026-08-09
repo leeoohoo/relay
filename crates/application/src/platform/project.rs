@@ -44,7 +44,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         input: CreateCompanyProjectForHumanInput,
     ) -> AppResult<CompanyProjectView> {
         let project_creation = self.prepare_company_project_for_human(input)?;
-        self.complete_company_project_creation(project_creation, None)
+        self.complete_company_project_creation(project_creation, None, None)
             .map(|(project, _)| project)
     }
 
@@ -127,7 +127,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             project_type_evidence,
             requested_project_id,
         )?;
-        self.complete_company_project_creation(project_creation, None)
+        self.complete_company_project_creation(project_creation, None, None)
             .map(|(project, _)| project)
     }
 
@@ -254,6 +254,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         &self,
         project_creation: CompanyProjectCreationBundle,
         git_config: Option<CompanyProjectGitConfig>,
+        cleanup_job_id: Option<Uuid>,
     ) -> AppResult<(CompanyProjectView, Option<CompanyProjectGitConfig>)> {
         let project = project_creation.project.clone();
         let member_agent_ids = project_creation
@@ -262,10 +263,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .map(|member| member.agent_profile_id)
             .collect::<Vec<_>>();
         if let Some(git_config) = git_config.as_ref() {
+            let cleanup_job_id = cleanup_job_id.ok_or_else(|| {
+                AppError::Internal("managed project creation is missing its cleanup job".into())
+            })?;
             self.repo.complete_managed_company_project_creation(
                 ManagedCompanyProjectCreationBundle {
                     project_creation,
                     git_config: git_config.clone(),
+                    cleanup_job_id,
                 },
             )?;
         } else {

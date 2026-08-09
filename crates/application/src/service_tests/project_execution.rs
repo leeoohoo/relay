@@ -52,10 +52,31 @@ fn managed_project_creation_validates_before_commit_and_stores_git_atomically() 
         .repo
         .get_company_project_git_config(project_id)
         .is_none());
+    let cleanup_job_id = Uuid::new_v4();
+    let cleanup_now = now_utc();
+    app.save_project_provisioning_cleanup_job(ProjectProvisioningCleanupJob {
+        id: cleanup_job_id,
+        human_user_id: human.id,
+        company_id: company.company.id,
+        project_id,
+        managed_local_path: format!("/tmp/relay-managed-projects/{project_id}"),
+        repository_identifier: format!("managed-{project_id}"),
+        access_token_identifier: format!("relay-project-{project_id}"),
+        status: "pending".into(),
+        attempts: 0,
+        next_attempt_at: cleanup_now,
+        lease_expires_at: None,
+        last_error: None,
+        created_at: cleanup_now,
+        updated_at: cleanup_now,
+        completed_at: None,
+    })
+    .expect("cleanup job should be durable before external provisioning");
 
     let (project, git) = app
         .create_managed_company_project_for_human(CreateManagedCompanyProjectForHumanInput {
             project: project_input,
+            cleanup_job_id,
             remote_url: "https://git.example.test/relay/managed.git".into(),
             host_local_path: format!("/tmp/relay-managed-projects/{project_id}"),
             default_branch: "main".into(),
@@ -71,6 +92,94 @@ fn managed_project_creation_validates_before_commit_and_stores_git_atomically() 
         .repo
         .get_company_project_git_config(project_id)
         .is_some());
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            cleanup_now + chrono::Duration::minutes(1),
+            cleanup_now + chrono::Duration::minutes(6),
+        )
+        .expect("completed project should not leave a cleanup job")
+        .is_none());
+}
+
+#[test]
+fn project_provisioning_cleanup_jobs_retry_with_a_lease_and_finish_idempotently() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "cleanup-retry@example.com".into(),
+            display_name: "Cleanup Retry Human".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Cleanup Retry Company".into(),
+            slug: Some("cleanup-retry-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let now = now_utc();
+    let provisioning_lease = now + chrono::Duration::minutes(1);
+    let job_id = Uuid::new_v4();
+    app.save_project_provisioning_cleanup_job(ProjectProvisioningCleanupJob {
+        id: job_id,
+        human_user_id: human.id,
+        company_id: company.company.id,
+        project_id: Uuid::new_v4(),
+        managed_local_path: "/tmp/relay-cleanup-retry".into(),
+        repository_identifier: "cleanup-retry".into(),
+        access_token_identifier: "relay-project-cleanup-retry".into(),
+        status: "running".into(),
+        attempts: 0,
+        next_attempt_at: now,
+        lease_expires_at: Some(provisioning_lease),
+        last_error: None,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    })
+    .expect("cleanup job should be saved");
+
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(now, now + chrono::Duration::minutes(5))
+        .expect("active provisioning lease should be checked")
+        .is_none());
+    let claimed = app
+        .claim_due_project_provisioning_cleanup_job(
+            provisioning_lease,
+            provisioning_lease + chrono::Duration::minutes(5),
+        )
+        .expect("cleanup job should be claimable")
+        .expect("expired provisioning lease should be recoverable");
+    assert_eq!(claimed.id, job_id);
+    assert_eq!(claimed.attempts, 1);
+
+    let retry_at = provisioning_lease + chrono::Duration::minutes(2);
+    app.retry_project_provisioning_cleanup_job(job_id, "Harness unavailable".into(), retry_at, now)
+        .expect("cleanup job should be rescheduled");
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            now + chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(6),
+        )
+        .expect("early retry lookup should succeed")
+        .is_none());
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            retry_at,
+            retry_at + chrono::Duration::minutes(5),
+        )
+        .expect("retry should become due")
+        .is_some());
+    app.complete_project_provisioning_cleanup_job(job_id, retry_at)
+        .expect("cleanup job should complete");
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            retry_at + chrono::Duration::hours(1),
+            retry_at + chrono::Duration::hours(2),
+        )
+        .expect("completed cleanup should stay disarmed")
+        .is_none());
 }
 
 #[test]

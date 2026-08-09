@@ -14,10 +14,11 @@ use ai_chat_application::{
     CodexRuntimePlatformRepository, CompanyAgentActivationBundle, CompanyAgentCreationBundle,
     CompanyAgentMembershipUpdateBundle, CompanyConversationCreationBundle, CompanyCreationBundle,
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
-    CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
+    CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput, CursorPage,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
     ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, MessagePageView,
-    ProjectPlatformRepository, RegistrationCompletionBundle, TaskPlatformRepository,
+    ProjectPlatformRepository, ProjectProvisioningCleanupJob, RegistrationCompletionBundle,
+    TaskPlatformRepository,
 };
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,
@@ -52,7 +53,11 @@ mod governance;
 mod mapping;
 mod memory;
 mod project;
+mod project_persistence;
 mod task;
+
+#[cfg(test)]
+mod postgres_tests;
 
 use self::mapping::map_postgres_error;
 
