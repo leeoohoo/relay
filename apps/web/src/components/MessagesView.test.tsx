@@ -152,6 +152,28 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
+  it("opens the current project directory and task list from the chat header", async () => {
+    const onOpenProject = vi.fn();
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onOpenProject={onOpenProject}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "项目目录" }));
+    expect(onOpenProject).toHaveBeenLastCalledWith("project-1", "repository");
+
+    fireEvent.click(screen.getByRole("button", { name: "项目任务" }));
+    expect(onOpenProject).toHaveBeenLastCalledWith("project-1", "tasks");
+  });
+
   it("opens inside the chat layout and exposes the Agent execution process", async () => {
     const { container } = render(
       <MessagesView
@@ -176,7 +198,7 @@ describe("MessagesView group member runtime drawer", () => {
     const memberDetails = screen.getByText("前端 Agent").closest("details")!;
     fireEvent.click(memberDetails.querySelector("summary")!);
     expect(memberDetails).toHaveAttribute("open");
-    expect(screen.getByText("项目任务")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "项目任务" })).toBeInTheDocument();
     expect(screen.getByText("实现库存工作台")).toBeInTheDocument();
     expect(screen.getByText("当前执行过程")).toBeInTheDocument();
     expect(screen.getByText("拆分实现步骤")).toBeInTheDocument();

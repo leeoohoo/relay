@@ -17,6 +17,7 @@ export function MessagesView(props: {
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
   onChanged: () => Promise<void>;
+  onOpenProject?: (projectId: string, tab: "repository" | "tasks") => void;
   onError: (error: unknown) => void;
   onNotice: (message: string) => void;
 }) {
@@ -309,6 +310,12 @@ export function MessagesView(props: {
           <div className="message-head">
             <div><strong>{conversationDisplayTitle(selected, agentNames) || "选择一个会话"}</strong></div>
             <div className="message-head-actions">
+              {selectedProject ? (
+                <div className="project-chat-shortcuts" aria-label="项目快捷入口">
+                  <button type="button" onClick={() => props.onOpenProject?.(selectedProject.project.id, "repository")}><Icon name="folder" /> 项目目录</button>
+                  <button type="button" onClick={() => props.onOpenProject?.(selectedProject.project.id, "tasks")}><Icon name="tasks" /> 项目任务</button>
+                </div>
+              ) : null}
               {selected && selectedConversationAgents.length ? <button className={`group-members-button ${showMemberDetails ? "active" : ""}`} type="button" aria-expanded={showMemberDetails} onClick={() => setShowMemberDetails((current) => !current)}><Icon name={selectedIsGroup ? "group" : "message"} /> {selectedIsGroup ? "群成员" : "运行详情"} <span>{selectedConversationAgents.length}</span></button> : null}
               {selected ? <span className="pill neutral">{formatConversationContext(selected.context.context_type)}</span> : null}
               {selectedProjectPaused ? <span className="pill paused">项目已暂停</span> : null}

@@ -66,6 +66,10 @@
 .message-head-actions {
   gap: 6px;
 }
+.project-chat-shortcuts { display: inline-flex; align-items: center; gap: 5px; }
+.project-chat-shortcuts button { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; border: 1px solid var(--relay-line); border-radius: 8px; padding: 6px 9px; color: #9fb0bc; background: rgba(255,255,255,.03); font-size: 10px; font-weight: 720; white-space: nowrap; }
+.project-chat-shortcuts button:hover { color: #e6fbff; border-color: rgba(77,226,255,.3); background: rgba(77,226,255,.07); }
+.project-chat-shortcuts button svg { width: 13px; height: 13px; color: var(--relay-cyan); }
 .message-stream {
   gap: 15px;
   padding: 18px 20px 22px;
@@ -622,6 +626,8 @@
 @media (max-width: 760px) {
   .message-console { grid-template-columns: 1fr; }
   .message-console.members-open { grid-template-columns: 1fr; }
+  .message-head { align-items: flex-start; gap: 10px; }
+  .message-head-actions { flex-wrap: wrap; justify-content: flex-end; }
   .group-members-drawer { min-height: 520px; border-top: 1px solid var(--relay-line); border-left: 0; }
   .message-stream { padding: 14px 11px 18px; }
   .message-bubble { max-width: 94%; }

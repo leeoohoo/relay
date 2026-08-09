@@ -14,9 +14,18 @@ import { ProjectRuleCard } from "./rule";
 import { ProjectSessionsCard } from "./sessions";
 import { TasksView } from "./tasks";
 
+export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions";
+
+export type ProjectNavigationTarget = {
+  projectId: string;
+  tab: ProjectDetailTab;
+  requestId: number;
+};
+
 export function ProjectsView(props: {
   consoleData: CompanyConsole;
   token: string;
+  navigationTarget?: ProjectNavigationTarget | null;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
@@ -25,7 +34,7 @@ export function ProjectsView(props: {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showOwnerDialog, setShowOwnerDialog] = useState(false);
-  const [activeTab, setActiveTab] = useState<"git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions">("git");
+  const [activeTab, setActiveTab] = useState<ProjectDetailTab>("git");
   const [projectActionBusy, setProjectActionBusy] = useState(false);
   const selectedProject = props.consoleData.projects.find((project) => project.project.id === selectedProjectId) ?? null;
   const projectStats = {
@@ -35,10 +44,15 @@ export function ProjectsView(props: {
   };
   const projectPagination = usePagination(props.consoleData.projects, 8, props.consoleData.company.id);
 
-  function openProject(projectId: string, tab: "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions") {
+  function openProject(projectId: string, tab: ProjectDetailTab) {
     setSelectedProjectId(projectId);
     setActiveTab(tab);
   }
+
+  useEffect(() => {
+    if (!props.navigationTarget) return;
+    openProject(props.navigationTarget.projectId, props.navigationTarget.tab);
+  }, [props.navigationTarget]);
 
   async function setProjectPaused(project: CompanyProject, paused: boolean) {
     setProjectActionBusy(true);
