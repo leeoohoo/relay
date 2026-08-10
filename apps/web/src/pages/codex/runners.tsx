@@ -15,11 +15,19 @@ export function CodexRunnersView(props: {
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
 }) {
+  const profileCacheKey = `relay_codex_runner_profiles:${props.consoleData.company.id}`;
   const canManage = ["owner", "admin"].includes(props.consoleData.human_membership.role);
   const runnableAgents = props.consoleData.agents.filter((agent) => agent.membership.employment_status === "active");
   const configuredProjects = props.consoleData.projects.filter((project) => project.git);
-  const [profiles, setProfiles] = useState<CodexRunnerProfileView[]>([]);
+  const [profiles, setProfiles] = useState<CodexRunnerProfileView[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(profileCacheKey) ?? "[]") as CodexRunnerProfileView[];
+    } catch {
+      return [];
+    }
+  });
   const [profilesLoading, setProfilesLoading] = useState(true);
+  const [profilesStale, setProfilesStale] = useState(false);
   const [environment, setEnvironment] = useState<CodexEnvironmentView | null>(null);
   const [cliSettings, setCliSettings] = useState<CodexCompanyCliSettings | null>(null);
   const runnerPagination = usePagination(runnableAgents, 6, props.consoleData.company.id);
@@ -32,8 +40,11 @@ export function CodexRunnersView(props: {
         props.token,
       );
       setProfiles(response.profiles);
+      localStorage.setItem(profileCacheKey, JSON.stringify(response.profiles));
+      setProfilesStale(false);
     } catch (error) {
-      props.onError(error);
+      setProfilesStale(true);
+      if (!profiles.length) props.onError(error);
     } finally {
       setProfilesLoading(false);
     }
@@ -70,6 +81,12 @@ export function CodexRunnersView(props: {
   }
 
   useEffect(() => {
+    try {
+      setProfiles(JSON.parse(localStorage.getItem(profileCacheKey) ?? "[]") as CodexRunnerProfileView[]);
+    } catch {
+      setProfiles([]);
+    }
+    setProfilesStale(false);
     setProfilesLoading(true);
     void refreshProfiles();
     void loadEnvironment();
@@ -105,10 +122,13 @@ export function CodexRunnersView(props: {
         <Metric label="执行方式" value="Codex" detail="Relay 不直接调用模型 API" />
       </section>
 
+      {profilesStale ? <div className="inline-warning">运行配置暂时无法刷新，当前保留并展示上次成功读取的数据。</div> : null}
+
       <CodexRunnerProfilesPanel
         companyId={props.consoleData.company.id}
         profiles={profiles}
         loading={profilesLoading}
+        unavailable={profilesStale && !profiles.length}
         token={props.token}
         authProfiles={environment?.profiles ?? []}
         cliSettings={cliSettings}

@@ -18,11 +18,12 @@ use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
     company_profession_by_key, infer_company_profession, AgentExecutionIntent,
     AgentMemorySourceRef, AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_EXECUTION_INTENT_ACTION_EXECUTE,
-    AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_MEMORY_STATUS_ARCHIVED,
-    AGENT_MEMORY_STATUS_SUPERSEDED, COMPANY_PERMISSION_PROJECT_CREATE,
-    COMPANY_PERMISSION_PROJECT_MANAGE, COMPANY_PERMISSION_STAFF_HIRE,
-    COMPANY_PERMISSION_STAFF_SUSPEND, COMPANY_PERMISSION_STAFF_TERMINATE,
-    COMPANY_PERMISSION_TASK_ASSIGN, COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
+    AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_PENDING,
+    AGENT_MEMORY_STATUS_ARCHIVED, AGENT_MEMORY_STATUS_SUPERSEDED,
+    COMPANY_PERMISSION_PROJECT_CREATE, COMPANY_PERMISSION_PROJECT_MANAGE,
+    COMPANY_PERMISSION_STAFF_HIRE, COMPANY_PERMISSION_STAFF_SUSPEND,
+    COMPANY_PERMISSION_STAFF_TERMINATE, COMPANY_PERMISSION_TASK_ASSIGN,
+    COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
 };
 use ai_chat_infrastructure::project_git::{
     ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
@@ -262,6 +263,11 @@ enum AgentWorkSessionOperation {
             description = "Stable logical-work key. Repeating the same dispatch returns the existing Intent; use a new key when the objective, project, tasks, acceptance criteria, or priority changes."
         )]
         dedupe_key: Option<String>,
+        #[serde(default)]
+        #[schemars(
+            description = "Create a new generation for this project's worker session instead of resuming the active Codex thread. Use only when the existing session has stale permissions or unrecoverable internal state; Relay preserves the project, branch, tasks, and latest checkpoint summary."
+        )]
+        replace_session: bool,
     },
 }
 
@@ -508,6 +514,10 @@ enum CompanyTaskOperation {
         project_id: Uuid,
         task_id: Uuid,
         depends_on_task_id: Uuid,
+        #[schemars(
+            description = "Dependency condition: success (default), completion (including failed/rejected review), or failure."
+        )]
+        dependency_condition: Option<String>,
     },
     DependencyRemove {
         company_id: Uuid,
@@ -739,6 +749,7 @@ struct CompanyProjectTaskDependencyToolInput {
     project_id: Uuid,
     task_id: Uuid,
     depends_on_task_id: Uuid,
+    dependency_condition: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

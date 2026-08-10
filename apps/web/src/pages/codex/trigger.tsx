@@ -212,7 +212,8 @@ export function CodexTriggerPanel(props: {
                 <span><small>思考等级</small><strong>{codexReasoningEffortLabel(selectedProfile.reasoning_effort, language)}</strong></span>
                 <span><small>兜底检查</small><strong>{formatInterval(selectedProfile.interval_seconds)}</strong></span>
                 <span><small>Sandbox</small><strong>{selectedProfile.sandbox_mode === "inherit" ? "继承公司" : selectedProfile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
-                <span><small>审批</small><strong>{selectedProfile.approval_policy === "inherit" ? "继承公司" : selectedProfile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+                <span><small>运行审批</small><strong>{selectedProfile.approval_policy === "inherit" ? "继承公司" : selectedProfile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+                <span><small>网站访问</small><strong>独立审批</strong></span>
                 <span><small>运行上限</small><strong>{formatRunSeconds(selectedProfile.max_run_seconds, language)}</strong></span>
               </div>
             ) : null}

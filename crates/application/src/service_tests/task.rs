@@ -115,6 +115,10 @@ fn human_managers_create_assign_and_update_project_tasks() {
         .find(|dependency| dependency.task_id == task.id)
         .expect("human-created dependency should be stored");
     assert_eq!(dependency.depends_on_task_id, foundation.id);
+    assert_eq!(
+        dependency.dependency_condition,
+        PROJECT_TASK_DEPENDENCY_SUCCESS
+    );
     assert_eq!(dependency.created_by_human_user_id, Some(owner.id));
     assert!(dependency.created_by_agent_id.is_none());
     assert!(matches!(

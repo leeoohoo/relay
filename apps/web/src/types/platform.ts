@@ -216,6 +216,7 @@ export type CompanyProject = {
     project_id: string;
     task_id: string;
     depends_on_task_id: string;
+    dependency_condition: "success" | "completion" | "failure";
   }>;
   task_status_history: Array<{
     id: string;

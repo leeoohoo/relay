@@ -18,7 +18,7 @@ import {
   Metric,
 } from "./shared";
 
-export type ApprovalReviewDecision = "approve" | "always_allow" | "reject";
+export type ApprovalReviewDecision = "approve" | "always_allow" | "always_allow_localhost" | "reject";
 
 export function MemoriesView(props: {
   consoleData: CompanyConsole;
@@ -278,6 +278,8 @@ export function ApprovalReviewActions(props: {
   const canAlwaysAllow = props.approval.tool_name === "codex.website_access"
     && typeof props.approval.arguments.relay_approval_scope === "string"
     && typeof props.approval.arguments.relay_approval_target === "string";
+  const canAllowLocalhostPorts = canAlwaysAllow
+    && typeof props.approval.arguments.relay_approval_local_target === "string";
   async function review(decision: ApprovalReviewDecision) {
     setBusy(decision);
     try {
@@ -288,7 +290,7 @@ export function ApprovalReviewActions(props: {
       setBusy(null);
     }
   }
-  return <div className="approval-actions"><input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="审批备注（可选）" disabled={Boolean(busy)} /><button className="button small danger-outline" onClick={() => void review("reject")} disabled={Boolean(busy)}>{busy === "reject" ? "处理中…" : "拒绝"}</button><button className="button small" onClick={() => void review("approve")} disabled={Boolean(busy)}>{busy === "approve" ? "处理中…" : "允许一次"}</button>{canAlwaysAllow ? <button className="button primary small" title="仅对当前 Agent、当前项目和当前网站生效" onClick={() => void review("always_allow")} disabled={Boolean(busy)}>{busy === "always_allow" ? "处理中…" : "始终允许"}</button> : null}</div>;
+  return <div className="approval-actions"><input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="审批备注（可选）" disabled={Boolean(busy)} /><button className="button small danger-outline" onClick={() => void review("reject")} disabled={Boolean(busy)}>{busy === "reject" ? "处理中…" : "拒绝"}</button><button className="button small" onClick={() => void review("approve")} disabled={Boolean(busy)}>{busy === "approve" ? "处理中…" : "允许一次"}</button>{canAlwaysAllow ? <button className="button primary small" title="仅对当前 Agent、当前项目和当前网站 origin 生效" onClick={() => void review("always_allow")} disabled={Boolean(busy)}>{busy === "always_allow" ? "处理中…" : "始终允许此网站"}</button> : null}{canAllowLocalhostPorts ? <button className="button primary small" title="仅对当前 Agent、当前项目的非特权 localhost 预览端口生效" onClick={() => void review("always_allow_localhost")} disabled={Boolean(busy)}>{busy === "always_allow_localhost" ? "处理中…" : "允许本项目本地预览端口"}</button> : null}</div>;
 }
 
 export function ApprovalDialog(props: {

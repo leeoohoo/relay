@@ -596,6 +596,7 @@ pub(super) fn map_company_project_task_dependency(row: Row) -> CompanyProjectTas
         project_id: row.get("project_id"),
         task_id: row.get("task_id"),
         depends_on_task_id: row.get("depends_on_task_id"),
+        dependency_condition: row.get("dependency_condition"),
         created_by_agent_id: row.get("created_by_agent_id"),
         created_by_human_user_id: row.get("created_by_human_user_id"),
         created_at: row.get("created_at"),

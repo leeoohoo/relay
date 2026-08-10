@@ -1,4 +1,5 @@
 use super::*;
+use ai_chat_domain::company::AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST;
 
 impl GovernancePlatformRepository for MemoryPlatformRepository {
     fn publish_company_governance_policy_version(
@@ -202,7 +203,13 @@ impl GovernancePlatformRepository for MemoryPlatformRepository {
                         .execution_result
                         .get("approval_mode")
                         .and_then(Value::as_str)
-                        == Some(AGENT_TOOL_APPROVAL_MODE_ALWAYS)
+                        .is_some_and(|mode| {
+                            matches!(
+                                mode,
+                                AGENT_TOOL_APPROVAL_MODE_ALWAYS
+                                    | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+                            )
+                        })
                     && request
                         .execution_result
                         .get("approval_scope")

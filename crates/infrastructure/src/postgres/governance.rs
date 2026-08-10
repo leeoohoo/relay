@@ -333,7 +333,7 @@ impl GovernancePlatformRepository for PostgresPlatformRepository {
                   AND tool_name = $3
                   AND approval_source = 'codex'
                   AND status IN ('approved', 'executed')
-                  AND execution_result ->> 'approval_mode' = 'always'
+                  AND execution_result ->> 'approval_mode' IN ('always', 'always_localhost')
                   AND execution_result ->> 'approval_scope' = $4
                   AND execution_result ->> 'approval_target' = $5
                 ORDER BY reviewed_at DESC NULLS LAST

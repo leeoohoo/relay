@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import {
   companyConsoleRegionsForEvent,
   fetchCompanyConsole,
@@ -36,6 +36,7 @@ const SESSION_KEY = "agent_company_session";
 export function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [session, setSession] = useState<Session | null>(() => readSession());
+  const [lastSessionEmail, setLastSessionEmail] = useState(() => readSession()?.user.email ?? "");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [companyConsole, setCompanyConsole] = useState<CompanyConsole | null>(null);
@@ -69,8 +70,17 @@ export function App() {
         const next = { ...session, user };
         setSession(next);
         persistSession(next);
-      } catch {
-        if (active) signOut(false);
+      } catch (requestError) {
+        if (!active) return;
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          setLastSessionEmail(session.user.email);
+          setError("当前登录会话已过期，请重新登录");
+          signOut(false);
+          return;
+        }
+        setError(requestError instanceof Error
+          ? `会话暂时无法校验，已保留当前登录：${requestError.message}`
+          : "会话暂时无法校验，已保留当前登录");
       }
     };
     void heartbeat();
@@ -115,8 +125,10 @@ export function App() {
       }
     };
     void refresh();
+    const timer = window.setInterval(() => void refresh(), 5_000);
     return () => {
       active = false;
+      window.clearInterval(timer);
     };
   }, [session?.token, selectedCompanyId, companyConsole?.human_membership.role]);
 
@@ -258,6 +270,7 @@ export function App() {
 
   function completeAuth(next: Session) {
     setSession(next);
+    setLastSessionEmail(next.user.email);
     persistSession(next);
     setError("");
   }
@@ -296,12 +309,12 @@ export function App() {
     setApprovals(response.approvals);
   }
 
-  async function reviewApproval(approvalId: string, decision: "approve" | "always_allow" | "reject", reviewNote: string) {
+  async function reviewApproval(approvalId: string, decision: "approve" | "always_allow" | "always_allow_localhost" | "reject", reviewNote: string) {
     if (!session || !selectedCompanyId) return;
-    const endpointDecision = decision === "always_allow" ? "approve" : decision;
+    const endpointDecision = ["always_allow", "always_allow_localhost"].includes(decision) ? "approve" : decision;
     await api(
       `/api/v1/companies/${selectedCompanyId}/approvals/${approvalId}/${endpointDecision}`,
-      { method: "POST", body: JSON.stringify({ review_note: reviewNote || null, approval_mode: decision === "always_allow" ? "always" : "once" }) },
+      { method: "POST", body: JSON.stringify({ review_note: reviewNote || null, approval_mode: decision === "always_allow" ? "always" : decision === "always_allow_localhost" ? "always_localhost" : "once" }) },
       session.token,
     );
     setDismissedApprovalIds((current) => {
@@ -310,7 +323,7 @@ export function App() {
       return next;
     });
     await refreshApprovals();
-    setNotice(decision === "always_allow" ? "已始终允许当前 Agent 在此项目访问该网站" : decision === "approve" ? "审批已通过，等待中的 Codex 会继续执行" : "审批已拒绝，Codex 会收到拒绝结果并继续处理");
+    setNotice(decision === "always_allow_localhost" ? "已允许当前 Agent 在此项目访问非特权 localhost 预览端口" : decision === "always_allow" ? "已始终允许当前 Agent 在此项目访问该网站" : decision === "approve" ? "审批已通过，等待中的 Codex 会继续执行" : "审批已拒绝，Codex 会收到拒绝结果并继续处理");
   }
 
   const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
@@ -320,6 +333,7 @@ export function App() {
     return (
       <AuthScreen
         runtimeConfig={runtimeConfig}
+        initialEmail={lastSessionEmail}
         busy={busy}
         error={error}
         setBusy={setBusy}
@@ -420,6 +434,7 @@ export function App() {
                 token={session.token}
                 onChanged={refreshCompany}
                 onError={showError}
+                onClearError={() => setError("")}
                 onNotice={setNotice}
               />
             ) : null}

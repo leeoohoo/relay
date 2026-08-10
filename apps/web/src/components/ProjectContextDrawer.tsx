@@ -108,9 +108,13 @@ function ProjectTaskPanel(props: { project: CompanyProject; agents: CompanyAgent
         {pagination.pageItems.map((task) => {
           const dependencies = props.project.task_dependencies
             .filter((dependency) => dependency.task_id === task.id)
-            .map((dependency) => props.project.tasks.find((candidate) => candidate.id === dependency.depends_on_task_id))
-            .filter((dependency): dependency is CompanyProjectTask => Boolean(dependency));
-          const unresolved = dependencies.filter((dependency) => !["done", "cancelled"].includes(dependency.status));
+            .map((dependency) => ({ dependency, task: props.project.tasks.find((candidate) => candidate.id === dependency.depends_on_task_id) }))
+            .filter((item): item is { dependency: CompanyProject["task_dependencies"][number]; task: CompanyProjectTask } => Boolean(item.task));
+          const unresolved = dependencies.filter(({ dependency, task }) => {
+            if (dependency.dependency_condition === "completion") return !["done", "failed", "cancelled"].includes(task.status);
+            if (dependency.dependency_condition === "failure") return task.status !== "failed";
+            return !["done", "cancelled"].includes(task.status);
+          });
           const assignee = task.assignee_agent_id ? agentNames.get(task.assignee_agent_id) ?? "未知 Agent" : "未分配";
           return (
             <article
@@ -132,7 +136,7 @@ function ProjectTaskPanel(props: { project: CompanyProject; agents: CompanyAgent
               </div>
               <strong>{task.title}</strong>
               {task.description ? <p>{task.description}</p> : null}
-              {unresolved.length ? <div className="project-context-task-dependency"><Icon name="network" /> 等待：{unresolved.map((dependency) => dependency.title).join("、")}</div> : null}
+              {unresolved.length ? <div className="project-context-task-dependency"><Icon name="network" /> 等待：{unresolved.map((item) => item.task.title).join("、")}</div> : null}
               <footer>
                 <span><span className="agent-avatar tiny">{assignee.slice(0, 1)}</span>{assignee}</span>
                 <time>{task.due_at ? `截止 ${formatTaskDate(task.due_at)}` : `更新 ${formatTaskDate(task.updated_at)}`}</time>

@@ -87,6 +87,7 @@ pub struct ChangeCompanyProjectTaskDependencyInput {
     pub project_id: Uuid,
     pub task_id: Uuid,
     pub depends_on_task_id: Uuid,
+    pub dependency_condition: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

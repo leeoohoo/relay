@@ -253,6 +253,28 @@ fn repeated_work_session_dispatch_returns_the_existing_intent() {
         first.output["intent"]["id"],
         repeated.output["intent"]["id"]
     );
+
+    let replacement = gateway
+        .invoke(
+            Some(&manager.agent_key_plaintext),
+            "agent.work_session",
+            json!({
+                "action": "dispatch",
+                "company_id": company.company.id,
+                "project_id": project.project.id,
+                "objective": "从 checkpoint 建立新的工作会话代次",
+                "acceptance_criteria": ["不复用旧 Codex thread"],
+                "priority": "high",
+                "dedupe_key": "mcp-replace-work-session",
+                "replace_session": true
+            }),
+        )
+        .expect("replacement dispatch should succeed");
+    assert_eq!(replacement.output["replacement_requested"], true);
+    assert_eq!(
+        replacement.output["intent"]["action_type"],
+        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION
+    );
 }
 
 #[test]
@@ -592,6 +614,7 @@ fn assigned_agent_can_read_tasks_through_get_list_and_my_actions() {
         project_id: project.project.id,
         task_id: task.id,
         depends_on_task_id: prerequisite.id,
+        dependency_condition: None,
     })
     .expect("task dependency should be created");
     let gateway = McpGateway::new(app.clone(), None);

@@ -46,14 +46,29 @@ describe("ApprovalReviewActions", () => {
     render(<ApprovalReviewActions approval={approval()} onReview={onReview} onError={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: "允许一次" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "始终允许" }));
+    fireEvent.click(screen.getByRole("button", { name: "始终允许此网站" }));
 
     await waitFor(() => expect(onReview).toHaveBeenCalledWith("approval-1", "always_allow", ""));
   });
 
+  it("offers a project-scoped localhost port grant for local previews", async () => {
+    const onReview = vi.fn(async () => undefined);
+    const localApproval = approval();
+    localApproval.arguments = {
+      ...localApproval.arguments,
+      url: "http://127.0.0.1:4177/",
+      relay_approval_target: "http://127.0.0.1:4177",
+      relay_approval_local_target: "http://localhost:*",
+    };
+    render(<ApprovalReviewActions approval={localApproval} onReview={onReview} onError={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "允许本项目本地预览端口" }));
+    await waitFor(() => expect(onReview).toHaveBeenCalledWith("approval-1", "always_allow_localhost", ""));
+  });
+
   it("does not offer always allow for non-website approvals", () => {
     render(<ApprovalReviewActions approval={approval("codex.command_execution")} onReview={vi.fn()} onError={vi.fn()} />);
-    expect(screen.queryByRole("button", { name: "始终允许" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "始终允许此网站" })).not.toBeInTheDocument();
   });
 });
 

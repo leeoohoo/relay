@@ -8,6 +8,18 @@ function apiUrl(path: string) {
   return `${API_BASE_URL.replace(/\/$/u, "")}${path}`;
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 export async function api<T = unknown>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
@@ -16,7 +28,13 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}, tok
   if (token) headers.set("authorization", `Bearer ${token}`);
   const response = await fetch(apiUrl(path), { ...init, headers });
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.message ?? `请求失败 (${response.status})`);
+  if (!response.ok) {
+    throw new ApiError(
+      body?.message ?? `请求失败 (${response.status})`,
+      response.status,
+      typeof body?.code === "string" ? body.code : null,
+    );
+  }
   return body as T;
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use ai_chat_domain::company::is_agent_codex_wake_reason;
 
 impl CodexControlPlatformRepository for MemoryPlatformRepository {
     fn save_company_codex_runner_profile(
@@ -423,6 +424,11 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
         requested_at: chrono::DateTime<chrono::Utc>,
         reason: &str,
     ) -> AppResult<bool> {
+        if !is_agent_codex_wake_reason(reason) {
+            return Err(ai_chat_shared::AppError::Validation(format!(
+                "unsupported Codex trigger wake reason: {reason}"
+            )));
+        }
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
         let Some(config) = guard.agent_codex_trigger_configs.get_mut(&agent_id) else {
             return Ok(false);

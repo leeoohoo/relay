@@ -374,7 +374,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if status_changed
             && matches!(
                 task.status.as_str(),
-                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                PROJECT_TASK_STATUS_DONE
+                    | PROJECT_TASK_STATUS_FAILED
+                    | PROJECT_TASK_STATUS_CANCELLED
             )
         {
             self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
@@ -479,7 +481,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if status_changed
             && matches!(
                 task.status.as_str(),
-                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                PROJECT_TASK_STATUS_DONE
+                    | PROJECT_TASK_STATUS_FAILED
+                    | PROJECT_TASK_STATUS_CANCELLED
             )
         {
             self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
@@ -541,6 +545,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_company_project_task(input.depends_on_task_id)
             .filter(|dependency| dependency.project_id == project.id)
             .ok_or_else(|| AppError::NotFound("dependency project task not found".into()))?;
+        let dependency_condition =
+            normalize_project_task_dependency_condition(input.dependency_condition.as_deref())?;
         if matches!(
             task.status.as_str(),
             PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_FAILED | PROJECT_TASK_STATUS_CANCELLED
@@ -550,9 +556,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ));
         }
         if task.status == PROJECT_TASK_STATUS_IN_PROGRESS
-            && !matches!(
-                dependency_task.status.as_str(),
-                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+            && !ai_chat_domain::company::project_task_dependency_satisfied(
+                &dependency_condition,
+                &dependency_task.status,
             )
         {
             return Err(AppError::Conflict(
@@ -579,6 +585,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             project_id: project.id,
             task_id: input.task_id,
             depends_on_task_id: input.depends_on_task_id,
+            dependency_condition,
             created_by_agent_id: Some(input.actor_agent_id),
             created_by_human_user_id: None,
             created_at: now_utc(),
@@ -715,7 +722,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     task.status = status.to_string();
                     if matches!(
                         status,
-                        PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                        PROJECT_TASK_STATUS_DONE
+                            | PROJECT_TASK_STATUS_FAILED
+                            | PROJECT_TASK_STATUS_CANCELLED
                     ) {
                         dependency_unlock_task_ids.push(task.id);
                     }

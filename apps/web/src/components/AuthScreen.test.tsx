@@ -31,10 +31,15 @@ describe("AuthScreen", () => {
 
     expect(screen.getByLabelText("邮箱")).toHaveAttribute("autocomplete", "email");
     expect(screen.getByLabelText("密码")).toHaveAttribute("autocomplete", "current-password");
+    expect(screen.getByLabelText("邮箱")).toHaveValue("");
+    expect(screen.getByLabelText("密码")).toHaveValue("");
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
     expect(screen.getByLabelText("你的名字")).toHaveAttribute("autocomplete", "name");
     expect(screen.getByLabelText("密码")).toHaveAttribute("autocomplete", "new-password");
+    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "owner@example.com" } });
+    fireEvent.change(screen.getByLabelText("你的名字"), { target: { value: "Owner" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "password123" } });
     fireEvent.click(screen.getByRole("button", { name: "创建账号" }));
 
     await waitFor(() => expect(onAuthenticated).toHaveBeenCalledWith({

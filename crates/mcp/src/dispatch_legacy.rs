@@ -260,6 +260,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         project_id: input.project_id,
                         task_id: input.task_id,
                         depends_on_task_id: input.depends_on_task_id,
+                        dependency_condition: input.dependency_condition,
                     },
                 )?;
                 Ok(json!({ "dependency": dependency }))
@@ -273,6 +274,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         project_id: input.project_id,
                         task_id: input.task_id,
                         depends_on_task_id: input.depends_on_task_id,
+                        dependency_condition: None,
                     },
                 )?;
                 Ok(json!({

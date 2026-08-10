@@ -19,8 +19,10 @@ export function CreateProjectDialog(props: {
   const [memberAgentIds, setMemberAgentIds] = useState<string[]>(preferredOwner ? [preferredOwner.agent_profile.id] : []);
   const [projectType, setProjectType] = useState("");
   const [sourceKind, setSourceKind] = useState<"local_folder" | "git">("local_folder");
+  const [localImportMode, setLocalImportMode] = useState<"upload" | "path">("upload");
   const [selectedFolderName, setSelectedFolderName] = useState("");
   const [selectedFolderFiles, setSelectedFolderFiles] = useState<File[]>([]);
+  const [selectedFolderPath, setSelectedFolderPath] = useState("");
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [busy, setBusy] = useState(false);
@@ -56,8 +58,12 @@ export function CreateProjectDialog(props: {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (sourceKind === "local_folder" && !selectedFolderName) {
+    if (sourceKind === "local_folder" && localImportMode === "upload" && !selectedFolderName) {
       props.onError(new Error("请先选择要导入的本地文件夹。"));
+      return;
+    }
+    if (sourceKind === "local_folder" && localImportMode === "path" && !selectedFolderPath.trim()) {
+      props.onError(new Error("请输入 Trigger 主机可访问的绝对目录路径。"));
       return;
     }
     setBusy(true);
@@ -70,6 +76,20 @@ export function CreateProjectDialog(props: {
         project_type: projectType || null,
       };
       if (sourceKind === "local_folder") {
+        if (localImportMode === "path") {
+          await api(`/api/v1/companies/${props.consoleData.company.id}/projects`, {
+            method: "POST",
+            body: JSON.stringify({
+              ...commonInput,
+              source_kind: "local_folder",
+              source_local_path: selectedFolderPath.trim(),
+              git_remote_url: null,
+              default_branch: null,
+            }),
+          }, props.token);
+          await props.onCreated();
+          return;
+        }
         const excluded = new Set([".git", ".relay", ".relay-agent-trigger", "node_modules", "target"]);
         const uploadEntries = selectedFolderFiles.flatMap((file) => {
           const parts = file.webkitRelativePath.replace(/\\/gu, "/").split("/").filter(Boolean);
@@ -123,12 +143,18 @@ export function CreateProjectDialog(props: {
         </div>
         {sourceKind === "local_folder" ? (
           <>
-            <button className={`project-folder-picker ${selectedFolderName ? "selected" : ""}`} type="button" onClick={() => folderInputRef.current?.click()}>
-              <span className="project-folder-icon"><Icon name={selectedFolderName ? "check" : "folder"} /></span>
-              <div><strong>{selectedFolderName || "选择要导入的项目文件夹"}</strong><small>{selectedFolderName ? `已选择 ${selectedFolderFiles.length} 个文件；创建时会流式复制到组织托管空间。` : "Relay 会忽略 .git、.relay、node_modules 和 target，并复制到组织默认空间。"}</small></div>
-              <span className="project-folder-action">{selectedFolderName ? "重新选择" : "打开文件夹"}<Icon name="chevron-right" /></span>
-            </button>
-            <input ref={(element) => { folderInputRef.current = element; element?.setAttribute("webkitdirectory", ""); }} className="hidden-file-input" type="file" multiple onChange={(event) => { selectFolder(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+            <div className="segmented compact">
+              <button className={localImportMode === "upload" ? "active" : ""} type="button" onClick={() => setLocalImportMode("upload")}>浏览器选择</button>
+              <button className={localImportMode === "path" ? "active" : ""} type="button" onClick={() => setLocalImportMode("path")}>输入本机路径</button>
+            </div>
+            {localImportMode === "upload" ? <>
+              <button className={`project-folder-picker ${selectedFolderName ? "selected" : ""}`} type="button" onClick={() => folderInputRef.current?.click()}>
+                <span className="project-folder-icon"><Icon name={selectedFolderName ? "check" : "folder"} /></span>
+                <div><strong>{selectedFolderName || "选择要导入的项目文件夹"}</strong><small>{selectedFolderName ? `已选择 ${selectedFolderFiles.length} 个文件；创建时会流式复制到组织托管空间。` : "Relay 会忽略 .git、.relay、node_modules 和 target，并复制到组织默认空间。"}</small></div>
+                <span className="project-folder-action">{selectedFolderName ? "重新选择" : "打开文件夹"}<Icon name="chevron-right" /></span>
+              </button>
+              <input ref={(element) => { folderInputRef.current = element; element?.setAttribute("webkitdirectory", ""); }} className="hidden-file-input" type="file" multiple onChange={(event) => { selectFolder(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+            </> : <Field label="Trigger 主机项目目录"><input value={selectedFolderPath} onChange={(event) => { setSelectedFolderPath(event.target.value); if (!name.trim()) setName(event.target.value.split(/[\\/]/u).filter(Boolean).pop() ?? ""); }} placeholder="/Users/name/project 或容器已挂载路径" required /><small>仅允许组织部署时配置的目录范围；Relay 会复制内容，不会直接在原目录工作。</small></Field>}
           </>
         ) : (
           <div className="form-grid">
@@ -161,7 +187,7 @@ export function CreateProjectDialog(props: {
           })}</div>
         </div>
         {!activeAgents.length ? <div className="inline-error">请先创建并激活至少一个 Agent，项目需要一个 Agent 负责人。</div> : null}
-        <div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy || !ownerAgentId || !name.trim() || (sourceKind === "git" ? !gitRemoteUrl.trim() : !selectedFolderName)}>{busy ? "正在创建托管项目…" : "创建项目"}</button></div>
+        <div className="dialog-actions"><button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button><button className="button primary" disabled={busy || !ownerAgentId || !name.trim() || (sourceKind === "git" ? !gitRemoteUrl.trim() : localImportMode === "path" ? !selectedFolderPath.trim() : !selectedFolderName)}>{busy ? "正在创建托管项目…" : "创建项目"}</button></div>
       </form>
     </Dialog>
   );

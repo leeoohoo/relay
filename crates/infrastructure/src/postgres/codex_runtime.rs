@@ -1,5 +1,6 @@
 use super::mapping::*;
 use super::*;
+use ai_chat_domain::company::is_agent_codex_wake_reason;
 
 impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
     fn save_agent_codex_trigger_config(&self, config: AgentCodexTriggerConfig) -> AppResult<()> {
@@ -301,6 +302,11 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         requested_at: chrono::DateTime<chrono::Utc>,
         reason: &str,
     ) -> AppResult<bool> {
+        if !is_agent_codex_wake_reason(reason) {
+            return Err(AppError::Validation(format!(
+                "unsupported Codex trigger wake reason: {reason}"
+            )));
+        }
         self.with_client(|client| {
             client.execute(
                 r#"

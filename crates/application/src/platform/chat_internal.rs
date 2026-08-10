@@ -206,10 +206,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                                     .iter()
                                     .find(|candidate| candidate.id == dependency.depends_on_task_id)
                                     .is_some_and(|dependency_task| {
-                                        matches!(
-                                            dependency_task.status.as_str(),
-                                            PROJECT_TASK_STATUS_DONE
-                                                | PROJECT_TASK_STATUS_CANCELLED
+                                        ai_chat_domain::company::project_task_dependency_satisfied(
+                                            &dependency.dependency_condition,
+                                            &dependency_task.status,
                                         )
                                     })
                             })

@@ -11,8 +11,9 @@ use crate::validation::*;
 use crate::MemoryPlatformRepository;
 use ai_chat_domain::agent_identity::AGENT_COLLABORATION_PREFERENCE_LOW_COST_ONLY;
 use ai_chat_domain::company::{
-    AgentMemorySourceRef, PROJECT_TASK_PRIORITY_HIGH, PROJECT_TASK_PRIORITY_LOW,
-    PROJECT_TASK_PRIORITY_NORMAL, PROJECT_TASK_PRIORITY_URGENT,
+    AgentMemorySourceRef, PROJECT_TASK_DEPENDENCY_COMPLETION, PROJECT_TASK_DEPENDENCY_SUCCESS,
+    PROJECT_TASK_PRIORITY_HIGH, PROJECT_TASK_PRIORITY_LOW, PROJECT_TASK_PRIORITY_NORMAL,
+    PROJECT_TASK_PRIORITY_URGENT,
 };
 use ai_chat_shared::{hash_secret, now_utc};
 

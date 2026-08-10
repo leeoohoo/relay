@@ -1,4 +1,5 @@
 use super::*;
+use ai_chat_domain::company::AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED;
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     pub fn get_company_project_for_human_manager(
@@ -595,7 +596,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 let _ = self.repo.request_agent_codex_trigger_wake(
                     member.agent_profile_id,
                     now,
-                    "project_resumed",
+                    AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED,
                 );
             }
         }

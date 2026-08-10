@@ -50,6 +50,44 @@ fn website_always_allow_key_rejects_non_web_targets() {
 }
 
 #[test]
+fn website_localhost_grant_covers_only_non_privileged_loopback_ports() {
+    for url in [
+        "http://127.0.0.1:4177/",
+        "http://localhost:5173/",
+        "http://[::1]:8080/",
+    ] {
+        let mut arguments = serde_json::json!({ "url": url });
+        website_approval_grant_key(
+            &mut arguments,
+            AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+            Uuid::new_v4(),
+            Some(Uuid::new_v4()),
+        )
+        .expect("local website key");
+        assert_eq!(
+            arguments
+                .get(AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY)
+                .and_then(serde_json::Value::as_str),
+            Some("http://localhost:*")
+        );
+    }
+
+    for url in ["http://127.0.0.1:80/", "https://example.com:4177/"] {
+        let mut arguments = serde_json::json!({ "url": url });
+        website_approval_grant_key(
+            &mut arguments,
+            AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+            Uuid::new_v4(),
+            Some(Uuid::new_v4()),
+        )
+        .expect("website key");
+        assert!(arguments
+            .get(AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY)
+            .is_none());
+    }
+}
+
+#[test]
 fn managed_codex_installer_supports_macos_linux_and_windows() {
     for host_os in ["macos", "linux"] {
         let command = codex_installer_command(host_os).expect("POSIX installer");
@@ -323,6 +361,7 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         intent: &intent,
         workspace: &workspace,
         relay_skills: &skills,
+        previous_checkpoint: None,
     });
     assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
     assert!(worker_prompt.contains("直接用 company.project get 和 company.task get/list"));

@@ -124,4 +124,60 @@ fn website_access_can_be_persistently_allowed_for_one_agent_project_and_origin()
             "https://other.example.com",
         )
         .expect("non-matching grant lookup"));
+
+    let local_scope = format!("project:{}", Uuid::new_v4());
+    let local_target = "http://localhost:*";
+    let mut local_arguments = json!({
+        "tool": "new_page",
+        "url": "http://127.0.0.1:4177/",
+    });
+    let local_arguments_object = local_arguments
+        .as_object_mut()
+        .expect("local approval arguments");
+    local_arguments_object.insert(
+        AGENT_CODEX_APPROVAL_SCOPE_KEY.into(),
+        json!(local_scope.clone()),
+    );
+    local_arguments_object.insert(
+        AGENT_CODEX_APPROVAL_TARGET_KEY.into(),
+        json!("http://127.0.0.1:4177"),
+    );
+    local_arguments_object.insert(
+        AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY.into(),
+        json!(local_target),
+    );
+    let local_request = app
+        .create_codex_approval_request(CreateCodexApprovalRequestInput {
+            company_id: company.company.id,
+            codex_trigger_run_id: Uuid::new_v4(),
+            requested_by_agent_id: agent.agent_profile.id,
+            tool_name: AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS.into(),
+            risk_level: "medium".into(),
+            reason: "Open changing local preview ports".into(),
+            arguments: local_arguments,
+            expires_at: now_utc() + Duration::minutes(5),
+        })
+        .expect("local preview approval request");
+    let local_approved = app
+        .approve_agent_tool_approval(ReviewAgentToolApprovalInput {
+            human_user_id: owner.id,
+            company_id: company.company.id,
+            approval_request_id: local_request.id,
+            review_note: None,
+            approval_mode: Some(AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST.into()),
+        })
+        .expect("local preview ports should be persistently allowed");
+    assert_eq!(
+        local_approved.execution_result["approval_mode"],
+        AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+    );
+    assert!(app
+        .has_codex_always_allow_approval(
+            company.company.id,
+            agent.agent_profile.id,
+            AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+            &local_scope,
+            local_target,
+        )
+        .expect("local preview grant lookup"));
 }

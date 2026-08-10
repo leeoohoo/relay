@@ -446,7 +446,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .unwrap_or(AGENT_TOOL_APPROVAL_MODE_ONCE);
         if !matches!(
             approval_mode,
-            AGENT_TOOL_APPROVAL_MODE_ONCE | AGENT_TOOL_APPROVAL_MODE_ALWAYS
+            AGENT_TOOL_APPROVAL_MODE_ONCE
+                | AGENT_TOOL_APPROVAL_MODE_ALWAYS
+                | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
         ) {
             return Err(AppError::Validation("unsupported approval mode".into()));
         }
@@ -455,14 +457,19 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             input.approval_request_id,
         )?;
         if reviewable.approval_source == AGENT_TOOL_APPROVAL_SOURCE_CODEX {
-            if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS
-                && reviewable.tool_name != AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS
+            if matches!(
+                approval_mode,
+                AGENT_TOOL_APPROVAL_MODE_ALWAYS | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+            ) && reviewable.tool_name != AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS
             {
                 return Err(AppError::Validation(
                     "always allow is only supported for website access".into(),
                 ));
             }
-            let persistent_grant = if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS {
+            let persistent_grant = if matches!(
+                approval_mode,
+                AGENT_TOOL_APPROVAL_MODE_ALWAYS | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+            ) {
                 let approval_scope = reviewable
                     .arguments
                     .get(AGENT_CODEX_APPROVAL_SCOPE_KEY)
@@ -471,9 +478,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .ok_or_else(|| {
                         AppError::Validation("website approval is missing its project scope".into())
                     })?;
+                let target_key = if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST {
+                    AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY
+                } else {
+                    AGENT_CODEX_APPROVAL_TARGET_KEY
+                };
                 let approval_target = reviewable
                     .arguments
-                    .get(AGENT_CODEX_APPROVAL_TARGET_KEY)
+                    .get(target_key)
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
@@ -490,9 +502,23 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     })?;
                 let parsed_url = url::Url::parse(requested_url)
                     .map_err(|_| AppError::Validation("website approval URL is invalid".into()))?;
-                if !matches!(parsed_url.scheme(), "http" | "https")
-                    || parsed_url.origin().ascii_serialization() != approval_target
-                {
+                let valid_target = if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST {
+                    let host = parsed_url
+                        .host_str()
+                        .unwrap_or_default()
+                        .trim_start_matches('[')
+                        .trim_end_matches(']');
+                    let is_loopback = host.eq_ignore_ascii_case("localhost")
+                        || host
+                            .parse::<std::net::IpAddr>()
+                            .is_ok_and(|address| address.is_loopback());
+                    is_loopback
+                        && parsed_url.port().is_some_and(|port| port >= 1_024)
+                        && approval_target == format!("{}://localhost:*", parsed_url.scheme())
+                } else {
+                    parsed_url.origin().ascii_serialization() == approval_target
+                };
+                if !matches!(parsed_url.scheme(), "http" | "https") || !valid_target {
                     return Err(AppError::Validation(
                         "website approval target does not match its URL".into(),
                     ));
@@ -518,7 +544,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 })?;
             if let Some((approval_scope, approval_target)) = persistent_grant {
                 request.execution_result = json!({
-                    "approval_mode": AGENT_TOOL_APPROVAL_MODE_ALWAYS,
+                    "approval_mode": approval_mode,
                     "approval_scope": approval_scope,
                     "approval_target": approval_target,
                 });
@@ -528,7 +554,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
             return Ok(request);
         }
-        if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS {
+        if matches!(
+            approval_mode,
+            AGENT_TOOL_APPROVAL_MODE_ALWAYS | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+        ) {
             return Err(AppError::Validation(
                 "always allow is only supported for Codex website access".into(),
             ));

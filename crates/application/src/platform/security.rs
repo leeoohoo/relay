@@ -1,4 +1,5 @@
 use super::*;
+use ai_chat_domain::company::AGENT_CODEX_WAKE_REASON_MESSAGE;
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     pub fn record_agent_action(
@@ -304,7 +305,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 self.repo.request_agent_codex_trigger_wake(
                     recipient_agent_id,
                     message.created_at,
-                    "message",
+                    AGENT_CODEX_WAKE_REASON_MESSAGE,
                 )?;
             }
         }

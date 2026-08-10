@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.0.3
+
+### Added
+
+- Explicit replacement of damaged or stale project work sessions while preserving the project, branch, task, generation, and latest checkpoint context.
+- Task dependency conditions for success, completion, and failure paths, including rejected-review-to-rework workflows.
+- Project-scoped approval for non-privileged localhost preview ports, alongside exact-origin website approval.
+- Local project import by a Trigger-host absolute path in addition to the native directory picker.
+
+### Changed
+
+- Project Agent sessions now combine Trigger activity, current task state, session generation, and previous-turn summaries instead of presenting stale thread state as the current run.
+- Managed project workspaces expose a standard `.git` marker while Relay keeps private Git metadata separate; Codex child processes no longer inherit `GIT_DIR` or `GIT_WORK_TREE`.
+- Runner profiles retain the last successful response during rate limits and clearly distinguish run approval from website approval.
+- Authentication refresh failures preserve the active user unless the server explicitly returns `401 Unauthorized`.
+- Runtime Skills instruct repository-wide tools to exclude Relay-managed read-only Skill directories.
+
+### Fixed
+
+- Trigger wake reasons rejected by the PostgreSQL constraint during ready-task handoff, project resume, and intent recovery.
+- Website approval runs entering a waiting state before the approval request was successfully persisted.
+- Project work-session creation delays appearing as an idle or reusable historical session.
+- Historical session summaries exposing host usernames and absolute Relay workspace paths.
+- Stale import errors remaining visible after a project was successfully created.
+- Login forms shipping with development credentials and rate limits incorrectly returning users to another account.
+
 ## v1.0.2
 
 ### Added

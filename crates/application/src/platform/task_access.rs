@@ -1,4 +1,8 @@
 use super::*;
+use ai_chat_domain::company::{
+    project_task_dependency_satisfied, AGENT_CODEX_WAKE_REASON_TASK_READY,
+    PROJECT_TASK_DEPENDENCY_SUCCESS,
+};
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     pub(super) fn ensure_company_project_access(
@@ -131,6 +135,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 project_id,
                 task_id,
                 depends_on_task_id: *dependency_id,
+                dependency_condition: PROJECT_TASK_DEPENDENCY_SUCCESS.into(),
                 created_by_agent_id: Some(Uuid::nil()),
                 created_by_human_user_id: None,
                 created_at: now_utc(),
@@ -176,6 +181,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         project_id,
                         task_id,
                         depends_on_task_id: *dependency_id,
+                        dependency_condition: PROJECT_TASK_DEPENDENCY_SUCCESS.into(),
                         created_by_agent_id: None,
                         created_by_human_user_id: Some(human_user_id),
                         created_at: now_utc(),
@@ -193,9 +199,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .iter()
             .filter_map(|dependency_id| self.repo.get_company_project_task(*dependency_id))
             .filter(|dependency_task| {
-                !matches!(
-                    dependency_task.status.as_str(),
-                    PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                !project_task_dependency_satisfied(
+                    PROJECT_TASK_DEPENDENCY_SUCCESS,
+                    &dependency_task.status,
                 )
             })
             .map(|dependency_task| dependency_task.title)
@@ -223,14 +229,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter_map(|dependency| {
                 self.repo
                     .get_company_project_task(dependency.depends_on_task_id)
+                    .map(|dependency_task| (dependency, dependency_task))
             })
-            .filter(|dependency_task| {
-                !matches!(
-                    dependency_task.status.as_str(),
-                    PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+            .filter(|(dependency, dependency_task)| {
+                !project_task_dependency_satisfied(
+                    &dependency.dependency_condition,
+                    &dependency_task.status,
                 )
             })
-            .map(|dependency_task| dependency_task.title)
+            .map(|(_, dependency_task)| dependency_task.title)
             .collect::<Vec<_>>();
         if unresolved.is_empty() {
             Ok(())
@@ -275,9 +282,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     tasks_by_id
                         .get(&dependency.depends_on_task_id)
                         .is_none_or(|dependency_task| {
-                            !matches!(
-                                dependency_task.status.as_str(),
-                                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                            !project_task_dependency_satisfied(
+                                &dependency.dependency_condition,
+                                &dependency_task.status,
                             )
                         })
                 })
@@ -310,7 +317,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             self.repo.request_agent_codex_trigger_wake(
                 assignee_agent_id,
                 ready_at,
-                "task_ready",
+                AGENT_CODEX_WAKE_REASON_TASK_READY,
             )?;
             notified += 1;
         }

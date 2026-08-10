@@ -25,15 +25,16 @@ use ai_chat_domain::{
         company_profession_by_key, company_project_type_by_key, infer_company_profession,
         AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
         AgentExecutionIntent, AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation,
-        CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_POLICY_NEVER,
-        AGENT_CODEX_APPROVAL_SCOPE_KEY, AGENT_CODEX_APPROVAL_TARGET_KEY,
-        AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
-        AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
-        AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
-        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
-        AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
-        AGENT_CODEX_SESSION_STATUS_ACTIVE, AGENT_CODEX_SESSION_STATUS_ARCHIVED,
-        AGENT_CODEX_SETTING_INHERIT, AGENT_EXECUTION_INTENT_STATUS_CANCELLED,
+        CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY,
+        AGENT_CODEX_APPROVAL_POLICY_NEVER, AGENT_CODEX_APPROVAL_SCOPE_KEY,
+        AGENT_CODEX_APPROVAL_TARGET_KEY, AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS, AGENT_CODEX_RUN_STATUS_CANCELLED,
+        AGENT_CODEX_RUN_STATUS_FAILED, AGENT_CODEX_RUN_STATUS_RUNNING,
+        AGENT_CODEX_RUN_STATUS_SUCCEEDED, AGENT_CODEX_RUN_STATUS_TIMED_OUT,
+        AGENT_CODEX_SANDBOX_READ_ONLY, AGENT_CODEX_SESSION_KIND_CONTROL,
+        AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
+        AGENT_CODEX_SESSION_STATUS_ARCHIVED, AGENT_CODEX_SETTING_INHERIT,
+        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_CANCELLED,
         AGENT_EXECUTION_INTENT_STATUS_COMPLETED, AGENT_EXECUTION_INTENT_STATUS_FAILED,
         AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
         AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
@@ -225,7 +226,54 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
                 );
                 return Ok(CodexApprovalDecision::Accept);
             }
+            if let Some(local_target) = request
+                .arguments
+                .get(AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY)
+                .and_then(serde_json::Value::as_str)
+            {
+                if self.platform.has_codex_always_allow_approval(
+                    self.company_id,
+                    self.agent_id,
+                    &request.tool_name,
+                    &approval_scope,
+                    local_target,
+                )? {
+                    record_run_activity(
+                        &self.platform,
+                        self.run_id,
+                        "running",
+                        &format!("已按本地预览端口授权访问 {approval_target}"),
+                        None,
+                    );
+                    return Ok(CodexApprovalDecision::Accept);
+                }
+            }
         }
+        let approval =
+            match self
+                .platform
+                .create_codex_approval_request(CreateCodexApprovalRequestInput {
+                    company_id: self.company_id,
+                    codex_trigger_run_id: self.run_id,
+                    requested_by_agent_id: self.agent_id,
+                    tool_name: request.tool_name,
+                    risk_level: request.risk_level,
+                    reason: request.reason.clone(),
+                    arguments: request.arguments,
+                    expires_at: self.expires_at,
+                }) {
+                Ok(approval) => approval,
+                Err(error) => {
+                    record_run_activity(
+                        &self.platform,
+                        self.run_id,
+                        "approval_delivery_failed",
+                        "审批请求未能送达 Human，当前操作已停止，可重新唤醒后重试",
+                        None,
+                    );
+                    return Err(error);
+                }
+            };
         record_run_activity(
             &self.platform,
             self.run_id,
@@ -233,18 +281,6 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
             &format!("等待 Human 审批：{}", request.reason),
             None,
         );
-        let approval =
-            self.platform
-                .create_codex_approval_request(CreateCodexApprovalRequestInput {
-                    company_id: self.company_id,
-                    codex_trigger_run_id: self.run_id,
-                    requested_by_agent_id: self.agent_id,
-                    tool_name: request.tool_name,
-                    risk_level: request.risk_level,
-                    reason: request.reason,
-                    arguments: request.arguments,
-                    expires_at: self.expires_at,
-                })?;
         loop {
             let current = self
                 .platform
@@ -310,7 +346,26 @@ fn website_approval_grant_key(
         AGENT_CODEX_APPROVAL_TARGET_KEY.into(),
         serde_json::Value::String(approval_target.clone()),
     );
+    if let Some(local_target) = localhost_approval_target(&parsed) {
+        object.insert(
+            AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY.into(),
+            serde_json::Value::String(local_target),
+        );
+    }
     Some((approval_scope, approval_target))
+}
+
+fn localhost_approval_target(parsed: &reqwest::Url) -> Option<String> {
+    let host = parsed
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    let port = parsed.port()?;
+    (is_loopback && port >= 1_024).then(|| format!("{}://localhost:*", parsed.scheme()))
 }
 
 fn automatic_codex_approval_decision(

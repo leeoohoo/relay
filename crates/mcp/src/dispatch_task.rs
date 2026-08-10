@@ -103,15 +103,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                                 candidate.id == dependency.depends_on_task_id
                                             })
                                             .map(|dependency_task| {
-                                                let resolved = matches!(
-                                                    dependency_task.status.as_str(),
-                                                    "done" | "cancelled"
+                                                let resolved = ai_chat_domain::company::project_task_dependency_satisfied(
+                                                    &dependency.dependency_condition,
+                                                    &dependency_task.status,
                                                 );
                                                 json!({
                                                     "task_id": dependency_task.id,
                                                     "title": dependency_task.title,
                                                     "status": dependency_task.status,
                                                     "assignee_agent_id": dependency_task.assignee_agent_id,
+                                                    "condition": dependency.dependency_condition,
                                                     "resolved": resolved,
                                                 })
                                             })
@@ -236,6 +237,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         project_id,
                         task_id,
                         depends_on_task_id,
+                        dependency_condition,
                     } => {
                         let dependency = self.platform.add_company_project_task_dependency(
                             ChangeCompanyProjectTaskDependencyInput {
@@ -244,6 +246,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                 project_id,
                                 task_id,
                                 depends_on_task_id,
+                                dependency_condition,
                             },
                         )?;
                         Ok(json!({ "dependency": dependency }))
@@ -261,6 +264,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                 project_id,
                                 task_id,
                                 depends_on_task_id,
+                                dependency_condition: None,
                             },
                         )?;
                         Ok(json!({

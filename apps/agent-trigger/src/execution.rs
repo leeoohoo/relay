@@ -1,5 +1,9 @@
 use super::*;
 
+mod workspace;
+
+use workspace::prepare_project_workspace_with_credential_recovery;
+
 pub(super) async fn process_claimed_trigger(
     platform: &TriggerPlatform,
     harness: &TriggerHarnessProvisioner,
@@ -249,6 +253,7 @@ pub(super) async fn execute_trigger(
         &control_memories,
         &control_settings,
         &token.plaintext_token,
+        false,
     )
     .await;
     let control_result = match control_result {
@@ -275,6 +280,7 @@ pub(super) async fn execute_trigger(
         &control_skills,
         &control_memories,
         &control_result,
+        false,
     )?;
     run.codex_thread_id = Some(control_session.codex_thread_id.clone());
     run.final_message_summary = control_result
@@ -294,6 +300,8 @@ pub(super) async fn execute_trigger(
         intent.status = AGENT_EXECUTION_INTENT_STATUS_RUNNING.into();
         intent.claimed_at = Some(now_utc());
         platform.update_agent_execution_intent(intent.clone())?;
+        run.project_id = Some(intent.project_id);
+        platform.update_agent_codex_trigger_run(run.clone())?;
         record_run_activity(
             platform,
             run.id,
@@ -527,9 +535,11 @@ async fn execute_project_intent(
     )
     .await?;
     let scope_key = format!("project:{}", intent.project_id);
-    let worker_session_id = platform
-        .get_agent_codex_session(trigger.agent_profile_id, &scope_key)
-        .map(|session| session.id);
+    let replace_session = intent.action_type == AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION;
+    let existing_session = platform.get_agent_codex_session(trigger.agent_profile_id, &scope_key);
+    let worker_session_id = (!replace_session)
+        .then(|| existing_session.as_ref().map(|session| session.id))
+        .flatten();
     let memories = platform.agent_long_term_memories_for_project_session(
         trigger.agent_profile_id,
         trigger.company_id,
@@ -554,6 +564,13 @@ async fn execute_project_intent(
         intent,
         workspace: &workspace,
         relay_skills: &skills,
+        previous_checkpoint: replace_session
+            .then(|| {
+                existing_session
+                    .as_ref()
+                    .map(|session| session.summary_short.as_str())
+            })
+            .flatten(),
     });
     let result = run_codex_stage(
         platform,
@@ -568,6 +585,7 @@ async fn execute_project_intent(
         &memories,
         settings,
         run_token,
+        replace_session,
     )
     .await?;
     let session = if matches!(
@@ -584,6 +602,7 @@ async fn execute_project_intent(
             &skills,
             &memories,
             &result,
+            replace_session,
         )?
     } else {
         platform
@@ -607,10 +626,12 @@ async fn run_codex_stage(
     _memories: &[AgentMemory],
     settings: &EffectiveCodexCliSettings,
     run_token: &str,
+    replace_session: bool,
 ) -> AppResult<CodexRunResult> {
     let session_key = codex_session_key(workspace);
-    let existing_thread_id = platform
-        .get_agent_codex_session(trigger.agent_profile_id, scope_key)
+    let existing_thread_id = (!replace_session)
+        .then(|| platform.get_agent_codex_session(trigger.agent_profile_id, scope_key))
+        .flatten()
         .and_then(|session| {
             codex_session_key_matches(&session.workspace_key, &session_key)
                 .then_some(session.codex_thread_id)
@@ -716,13 +737,15 @@ fn persist_codex_stage_session(
     skills: &PreparedRelaySkills,
     memories: &[AgentMemory],
     result: &CodexRunResult,
+    replace_session: bool,
 ) -> AppResult<AgentCodexSession> {
     let thread_id = result.thread_id.clone().ok_or_else(|| {
         AppError::Validation("successful Codex run did not return a thread ID".into())
     })?;
     let existing = platform.get_agent_codex_session(agent_id, scope_key);
     let now = now_utc();
-    if result.replaced_failed_session {
+    let replace_session = replace_session || result.replaced_failed_session;
+    if replace_session {
         if let Some(mut archived) = existing.clone() {
             archived.status = AGENT_CODEX_SESSION_STATUS_ARCHIVED.into();
             archived.archived_at = Some(now);
@@ -730,9 +753,7 @@ fn persist_codex_stage_session(
             platform.save_agent_codex_session(archived)?;
         }
     }
-    let existing = (!result.replaced_failed_session)
-        .then_some(existing)
-        .flatten();
+    let existing = (!replace_session).then_some(existing).flatten();
     let latest_generation = platform
         .list_agent_codex_sessions(agent_id, 100)
         .into_iter()
@@ -869,65 +890,6 @@ fn apply_codex_result_to_run(run: &mut AgentCodexTriggerRun, result: &CodexRunRe
         CodexRunStatus::Cancelled => AGENT_CODEX_RUN_STATUS_CANCELLED,
     }
     .into();
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn prepare_project_workspace_with_credential_recovery(
-    harness: &TriggerHarnessProvisioner,
-    workspace_manager: &GitWorkspaceManager,
-    company_id: Uuid,
-    project_id: Uuid,
-    agent_id: Uuid,
-    fallback_human_user_id: Uuid,
-    agent_handle: &str,
-    git: &ai_chat_domain::company::CompanyProjectGitConfig,
-) -> AppResult<PreparedGitWorkspace> {
-    let prepare = || {
-        workspace_manager.prepare_project_workspace(
-            company_id,
-            project_id,
-            agent_id,
-            agent_handle,
-            git,
-        )
-    };
-    match prepare() {
-        Ok(workspace) => Ok(workspace),
-        Err(error) if should_refresh_managed_git_credentials(git, &error) => {
-            let human_user_id = git
-                .created_by_human_user_id
-                .unwrap_or(fallback_human_user_id);
-            tracing::warn!(
-                project_id = %project_id,
-                agent_id = %agent_id,
-                human_user_id = %human_user_id,
-                "managed Git credentials were rejected; refreshing the project token once"
-            );
-            harness
-                .refresh_project_git_credentials(
-                    human_user_id,
-                    project_id,
-                    workspace_manager.credential_store(),
-                )
-                .await?;
-            prepare().map_err(|retry_error| {
-                AppError::Validation(format!(
-                    "Git authentication still failed after refreshing the managed project credential: {retry_error}"
-                ))
-            })
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn should_refresh_managed_git_credentials(
-    git: &ai_chat_domain::company::CompanyProjectGitConfig,
-    error: &AppError,
-) -> bool {
-    git.auth_profile
-        .as_deref()
-        .is_some_and(is_managed_token_profile)
-        && is_git_authentication_error(error)
 }
 
 pub(super) fn protect_trigger_decision<T>(decision: impl FnOnce() -> AppResult<T>) -> AppResult<T> {

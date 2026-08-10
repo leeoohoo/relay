@@ -21,6 +21,7 @@ export function ProjectsView(props: {
   token: string;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
+  onClearError: () => void;
   onNotice: (notice: string) => void;
 }) {
   const canManage = ["owner", "admin"].includes(props.consoleData.human_membership.role);
@@ -200,7 +201,7 @@ export function ProjectsView(props: {
           </div>
           <div className="section-heading-actions">
             <span className="count-badge">{props.consoleData.projects.length}</span>
-            {canManage ? <button className="button primary" type="button" onClick={() => setShowCreateProject(true)}><Icon name="plus" /> 新建项目</button> : null}
+            {canManage ? <button className="button primary" type="button" onClick={() => { props.onClearError(); setShowCreateProject(true); }}><Icon name="plus" /> 新建项目</button> : null}
           </div>
         </div>
         {props.consoleData.projects.length ? (
@@ -247,7 +248,7 @@ export function ProjectsView(props: {
             <Icon name="git" />
             <h3>还没有正式项目</h3>
             <p>从本地文件夹或 Git 地址创建项目。Relay 会自动识别项目类型并加载固定执行规则。</p>
-            {canManage ? <button className="button primary" type="button" onClick={() => setShowCreateProject(true)}><Icon name="plus" /> 创建第一个项目</button> : null}
+            {canManage ? <button className="button primary" type="button" onClick={() => { props.onClearError(); setShowCreateProject(true); }}><Icon name="plus" /> 创建第一个项目</button> : null}
           </div>
         )}
       </section>
@@ -257,6 +258,7 @@ export function ProjectsView(props: {
           token={props.token}
           onClose={() => setShowCreateProject(false)}
           onCreated={async () => {
+            props.onClearError();
             setShowCreateProject(false);
             await props.onChanged();
             props.onNotice("项目已创建，固定项目 Skill 会在 Agent 下一次进入项目时自动加载");
