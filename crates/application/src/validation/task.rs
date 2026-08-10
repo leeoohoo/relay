@@ -24,6 +24,27 @@ pub(crate) fn project_task_dependency_would_cycle(
     false
 }
 
+pub(crate) fn normalize_project_task_dependency_condition(
+    value: Option<&str>,
+) -> AppResult<String> {
+    let condition = value
+        .unwrap_or(PROJECT_TASK_DEPENDENCY_SUCCESS)
+        .trim()
+        .to_lowercase();
+    if matches!(
+        condition.as_str(),
+        PROJECT_TASK_DEPENDENCY_SUCCESS
+            | PROJECT_TASK_DEPENDENCY_COMPLETION
+            | PROJECT_TASK_DEPENDENCY_FAILURE
+    ) {
+        Ok(condition)
+    } else {
+        Err(AppError::Validation(
+            "task dependency condition must be success, completion, or failure".into(),
+        ))
+    }
+}
+
 pub(crate) fn normalize_project_status(value: &str) -> AppResult<String> {
     let status = value.trim().to_lowercase();
     if matches!(

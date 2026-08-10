@@ -4,7 +4,7 @@ import type { RelaySkillLanguage } from "../relaySkills";
 
 export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
-export type CompanyProfession = {
+export type CompanyProfessionSummary = {
   key: string;
   label: string;
   label_en: string;
@@ -14,9 +14,12 @@ export type CompanyProfession = {
   category_label: string;
   category_label_en: string;
   skill_name: string;
+  can_create_tasks: boolean;
+};
+
+export type CompanyProfession = CompanyProfessionSummary & {
   skill_markdown: string;
   skill_markdown_en: string;
-  can_create_tasks: boolean;
 };
 
 export type OrgUnit = {
@@ -62,7 +65,7 @@ export type AgentConnection = {
 export type CompanyAgent = {
   agent_profile: AgentProfile;
   membership: AgentMembership;
-  profession?: CompanyProfession;
+  profession?: CompanyProfessionSummary;
   connection: AgentConnection;
 };
 
@@ -213,6 +216,7 @@ export type CompanyProject = {
     project_id: string;
     task_id: string;
     depends_on_task_id: string;
+    dependency_condition: "success" | "completion" | "failure";
   }>;
   task_status_history: Array<{
     id: string;
@@ -240,6 +244,8 @@ export type CompanyProjectType = {
   rule_markdown: string;
   rule_markdown_en: string;
 };
+
+export type CompanyProjectTypeSummary = Omit<CompanyProjectType, "rule_markdown" | "rule_markdown_en">;
 
 export type CodexTriggerRun = {
   id: string;
@@ -452,6 +458,7 @@ export type CodexMcpServer = {
   tool_timeout_sec: number | null;
   disabled_reason: string | null;
   configured_by_user: boolean;
+  managed_by_relay: boolean;
 };
 
 export type CodexMcpEnvironmentSnapshot = {
@@ -566,12 +573,22 @@ export type CompanyConsole = {
   agents: CompanyAgent[];
   conversations: Conversation[];
   projects: CompanyProject[];
-  professions: CompanyProfession[];
-  project_types: CompanyProjectType[];
+  professions: CompanyProfessionSummary[];
+  project_types: CompanyProjectTypeSummary[];
+  pagination: {
+    agents: CompanyConsolePageState;
+    conversations: CompanyConsolePageState;
+    projects: CompanyConsolePageState;
+  };
   governance_policy: {
     effective_settings: {
       managed_workspace_root: string | null;
       skill_language: RelaySkillLanguage;
     };
   };
+};
+
+export type CompanyConsolePageState = {
+  next_cursor: string | null;
+  has_more: boolean;
 };

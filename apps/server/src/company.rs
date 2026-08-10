@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const MAX_CONSOLE_PAGE_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
 pub(super) async fn dev_login(
     State(state): State<AppState>,
     Json(input): Json<DevLoginInput>,
@@ -49,6 +51,120 @@ pub(super) async fn get_company_console(
     let human = authenticate_human_request(&state, &headers)?;
     let company = state.platform.get_company_console(human.id, company_id)?;
     Ok(Json(serde_json::json!({ "company_console": company })))
+}
+
+pub(super) async fn get_company_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let summary = state.platform.get_company_summary(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "summary": summary })))
+}
+
+pub(super) async fn list_company_console_agents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<ConsolePageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let page = state.platform.list_company_console_agent_page_for_human(
+        human.id,
+        company_id,
+        query.after,
+        query.limit.unwrap_or(20),
+    )?;
+    Ok(Json(console_page_response(
+        "agents",
+        page.items,
+        page.next_cursor,
+        page.has_more,
+    )?))
+}
+
+pub(super) async fn list_company_console_conversations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<ConsolePageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let page = state
+        .platform
+        .list_company_console_conversation_page_for_human(
+            human.id,
+            company_id,
+            query.after,
+            query.limit.unwrap_or(20),
+        )?;
+    Ok(Json(console_page_response(
+        "conversations",
+        page.items,
+        page.next_cursor,
+        page.has_more,
+    )?))
+}
+
+pub(super) async fn list_company_console_projects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<ConsolePageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let page = state.platform.list_company_console_project_page_for_human(
+        human.id,
+        company_id,
+        query.after,
+        query.limit.unwrap_or(12),
+    )?;
+    Ok(Json(console_page_response(
+        "projects",
+        page.items,
+        page.next_cursor,
+        page.has_more,
+    )?))
+}
+
+pub(super) fn console_page_response<T: Serialize>(
+    key: &str,
+    items: Vec<T>,
+    next_cursor: Option<Uuid>,
+    has_more: bool,
+) -> AppResult<serde_json::Value> {
+    let mut response = serde_json::Map::new();
+    response.insert(
+        key.to_string(),
+        serde_json::to_value(items)
+            .map_err(|error| AppError::Internal(format!("serialize Console items: {error}")))?,
+    );
+    response.insert("next_cursor".into(), serde_json::json!(next_cursor));
+    response.insert("has_more".into(), serde_json::json!(has_more));
+    let response = serde_json::Value::Object(response);
+    let response_bytes = serde_json::to_vec(&response)
+        .map_err(|error| AppError::Internal(format!("serialize Console page: {error}")))?
+        .len();
+    if response_bytes > MAX_CONSOLE_PAGE_RESPONSE_BYTES {
+        return Err(AppError::Validation(format!(
+            "Console page exceeds the {} byte response budget; request a smaller page",
+            MAX_CONSOLE_PAGE_RESPONSE_BYTES
+        )));
+    }
+    Ok(response)
+}
+
+pub(super) async fn get_company_skill_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let catalog = state
+        .platform
+        .get_company_skill_catalog(human.id, company_id)?;
+    Ok(Json(serde_json::json!({ "skill_catalog": catalog })))
 }
 
 pub(super) async fn list_company_memories(

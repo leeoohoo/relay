@@ -371,6 +371,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .then_some(now);
         }
         self.repo.update_company_project_task(task.clone())?;
+        if status_changed
+            && matches!(
+                task.status.as_str(),
+                PROJECT_TASK_STATUS_DONE
+                    | PROJECT_TASK_STATUS_FAILED
+                    | PROJECT_TASK_STATUS_CANCELLED
+            )
+        {
+            self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
+        }
         Ok(task)
     }
 
@@ -468,6 +478,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &dependency_ids,
             input.human_user_id,
         )?;
+        if status_changed
+            && matches!(
+                task.status.as_str(),
+                PROJECT_TASK_STATUS_DONE
+                    | PROJECT_TASK_STATUS_FAILED
+                    | PROJECT_TASK_STATUS_CANCELLED
+            )
+        {
+            self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
+        }
         if previous_assignee != task.assignee_agent_id {
             if let Some(assignee_agent_id) = task.assignee_agent_id {
                 let _ = self.enqueue_agent_event(
@@ -525,6 +545,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_company_project_task(input.depends_on_task_id)
             .filter(|dependency| dependency.project_id == project.id)
             .ok_or_else(|| AppError::NotFound("dependency project task not found".into()))?;
+        let dependency_condition =
+            normalize_project_task_dependency_condition(input.dependency_condition.as_deref())?;
         if matches!(
             task.status.as_str(),
             PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_FAILED | PROJECT_TASK_STATUS_CANCELLED
@@ -534,9 +556,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ));
         }
         if task.status == PROJECT_TASK_STATUS_IN_PROGRESS
-            && !matches!(
-                dependency_task.status.as_str(),
-                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+            && !ai_chat_domain::company::project_task_dependency_satisfied(
+                &dependency_condition,
+                &dependency_task.status,
             )
         {
             return Err(AppError::Conflict(
@@ -563,6 +585,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             project_id: project.id,
             task_id: input.task_id,
             depends_on_task_id: input.depends_on_task_id,
+            dependency_condition,
             created_by_agent_id: Some(input.actor_agent_id),
             created_by_human_user_id: None,
             created_at: now_utc(),
@@ -680,6 +703,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }
         let now = now_utc();
         let mut assignments = Vec::new();
+        let mut dependency_unlock_task_ids = Vec::new();
         let mut tasks = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
             let mut task = self
@@ -696,6 +720,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }
                 if task.status != status {
                     task.status = status.to_string();
+                    if matches!(
+                        status,
+                        PROJECT_TASK_STATUS_DONE
+                            | PROJECT_TASK_STATUS_FAILED
+                            | PROJECT_TASK_STATUS_CANCELLED
+                    ) {
+                        dependency_unlock_task_ids.push(task.id);
+                    }
                     task.completed_at = matches!(
                         status,
                         PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_FAILED
@@ -728,6 +760,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             tasks.push(task);
         }
         self.repo.update_company_project_tasks(tasks.clone())?;
+        self.notify_project_tasks_ready_after_changes(&project, &dependency_unlock_task_ids, now)?;
         for (assignee_agent_id, task_id, task_title) in assignments {
             let _ = self.enqueue_agent_event(
                 assignee_agent_id,

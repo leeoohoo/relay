@@ -359,6 +359,9 @@
 .approval-card.rejected,
 .approval-card.failed { border-color: rgba(255, 125, 135, .24); }
 .approval-card-head { color: #dce7ef; border-color: var(--relay-line); background: rgba(255, 255, 255, .025); }
+.approval-card-head:hover { background: rgba(77, 226, 255, .045); }
+.approval-card-head:focus-visible { outline-color: var(--relay-cyan); }
+.approval-card-head > svg { color: #708592; }
 .approval-card-head strong { color: #e7eff5; }
 .approval-card-head small,
 .approval-meta { color: #8fa1af; }

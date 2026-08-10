@@ -4,7 +4,22 @@ import type { CompanyRealtimeEvent } from "../../api/types";
 import { Field } from "../../components/ui";
 import { useUiLanguage } from "../../i18n/uiLanguage";
 import type { CodexRunnerProfileView, CodexSession, CodexTriggerView } from "../../types/platform";
-import { codexActivityPhaseLabel, codexOperationalStatusLabel, codexReasoningEffortLabel, codexRunDisplayMessage, codexTriggerStatusLabel, codexTriggerTypeLabel, formatElapsed, formatInterval, formatRunSeconds, formatTime, StatusBadge } from "../app/shared";
+import { codexActivityPhaseLabel, codexOperationalStatusLabel, codexReasoningEffortLabel, codexRunDisplayMessage, codexSessionTurnLabel, codexTriggerStatusLabel, codexTriggerTypeLabel, formatElapsed, formatInterval, formatRunSeconds, formatTime, StatusBadge } from "../app/shared";
+
+export function currentTriggerSessions(sessions: CodexSession[]) {
+  return sessions.filter((session) => session.status === "active" && !session.archived_at);
+}
+
+export function triggerRunUsesSession(
+  session: CodexSession,
+  recentRuns: CodexTriggerView["recent_runs"],
+) {
+  return recentRuns.some((run) => (
+    run.status === "running"
+    && Boolean(run.codex_thread_id)
+    && run.codex_thread_id === session.codex_thread_id
+  ));
+}
 
 export function CodexTriggerPanel(props: {
   companyId: string;
@@ -25,6 +40,7 @@ export function CodexTriggerPanel(props: {
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const currentSessions = currentTriggerSessions(sessions);
   const selectedProfile = props.profiles.find((item) => item.profile.id === selectedProfileId)?.profile;
   const runningRun = trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const operationalStatus = trigger
@@ -116,7 +132,7 @@ export function CodexTriggerPanel(props: {
       applyTrigger(response.trigger);
       props.onNotice(action === "run-now"
         ? wasRunningOrQueued ? "当前轮次结束后会再次唤醒，不会并发重复启动" : "已请求立即唤醒"
-        : action === "pause" ? "定时触发已暂停" : "定时触发已恢复");
+        : action === "pause" ? "Agent 已暂停，当前轮次正在停止；待处理工作会在恢复后继续" : "Agent 已恢复，将继续待处理工作");
     } catch (error) {
       props.onError(error);
     } finally {
@@ -136,24 +152,25 @@ export function CodexTriggerPanel(props: {
       </div>
       {trigger ? (
         <div className="codex-session-strip">
-          <span><small>控制会话</small><strong>{sessions.some((session) => session.session_kind === "control" && session.status === "active") ? "已建立" : "首次有效唤醒时创建"}</strong></span>
-          <span><small>项目工作会话</small><strong>{sessions.filter((session) => session.session_kind === "project" && session.status === "active").length} 个</strong></span>
+          <span><small>控制会话</small><strong>{currentSessions.some((session) => session.session_kind === "control") ? "已建立" : "首次有效唤醒时创建"}</strong></span>
+          <span><small>项目工作会话</small><strong>{currentSessions.filter((session) => session.session_kind === "project").length} 个</strong></span>
           <span><small>当前状态</small><strong>{runningRun ? `已运行 ${formatElapsed(runningRun.started_at)}` : trigger.config.lease_owner ? "已领取，等待本地 Codex 启动" : trigger.config.manual_run_requested_at ? "手动唤醒已排队" : trigger.config.wake_requested_at ? "消息唤醒已排队" : codexTriggerStatusLabel(trigger.config.status)}</strong></span>
           <span><small>下次兜底检查</small><strong>{formatTime(trigger.config.next_run_at)}</strong></span>
           <span><small>最近成功</small><strong>{trigger.config.last_success_at ? formatTime(trigger.config.last_success_at) : "尚未成功运行"}</strong></span>
         </div>
       ) : null}
-      {sessions.length ? (
+      {currentSessions.length ? (
         <div className="codex-work-session-list">
           <div className="codex-run-list-heading"><strong>工作会话目录</strong><small>控制会话负责判断；项目会话负责执行</small></div>
-          {sessions.slice(0, 12).map((session) => {
+          {currentSessions.slice(0, 12).map((session) => {
             const projectName = session.project_id
               ? props.projects.find((project) => project.id === session.project_id)?.name ?? `项目 ${session.project_id.slice(0, 8)}`
               : "Relay 控制会话";
+            const sessionRunning = trigger ? triggerRunUsesSession(session, trigger.recent_runs) : false;
             return (
               <div className="codex-work-session-row" key={session.id}>
-                <StatusBadge value={session.status} />
-                <div><strong>{projectName}</strong><small>{session.session_kind === "control" ? "消息、协调与派工" : `项目工作会话 · 第 ${session.generation} 代`}</small></div>
+                <StatusBadge value={sessionRunning ? "running" : session.status} />
+                <div><strong>{projectName}</strong><small>{sessionRunning ? "当前 Trigger 正在使用这个会话" : codexSessionTurnLabel(session)}</small></div>
                 <p>{session.summary_short || "尚未生成最近工作总结"}</p>
                 <time>{formatTime(session.last_used_at)}</time>
               </div>
@@ -195,13 +212,14 @@ export function CodexTriggerPanel(props: {
                 <span><small>思考等级</small><strong>{codexReasoningEffortLabel(selectedProfile.reasoning_effort, language)}</strong></span>
                 <span><small>兜底检查</small><strong>{formatInterval(selectedProfile.interval_seconds)}</strong></span>
                 <span><small>Sandbox</small><strong>{selectedProfile.sandbox_mode === "inherit" ? "继承公司" : selectedProfile.sandbox_mode === "workspace_write" ? "可写工作区" : "只读"}</strong></span>
-                <span><small>审批</small><strong>{selectedProfile.approval_policy === "inherit" ? "继承公司" : selectedProfile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+                <span><small>运行审批</small><strong>{selectedProfile.approval_policy === "inherit" ? "继承公司" : selectedProfile.approval_policy === "on-request" ? "Human 审批" : "无需审批"}</strong></span>
+                <span><small>网站访问</small><strong>独立审批</strong></span>
                 <span><small>运行上限</small><strong>{formatRunSeconds(selectedProfile.max_run_seconds, language)}</strong></span>
               </div>
             ) : null}
           </div>
           <div className="codex-trigger-actions">
-            {trigger?.config.status === "active" ? <button className="button small" onClick={() => void triggerAction("pause")} disabled={busy}>暂停</button> : null}
+            {trigger?.config.status === "active" ? <button className="button small" onClick={() => void triggerAction("pause")} disabled={busy}>暂停运行</button> : null}
             {trigger && trigger.config.status !== "active" ? <button className="button small" onClick={() => void triggerAction("resume")} disabled={busy || !props.active}>恢复</button> : null}
             {trigger ? <button className="button small" onClick={() => void triggerAction("run-now")} disabled={busy || trigger.config.status !== "active" || !props.active}>{runningRun || trigger.config.lease_owner ? "本轮后再唤醒" : trigger.config.manual_run_requested_at ? "已排队，再次请求" : "立即唤醒"}</button> : null}
             <button className="button primary small" onClick={() => void saveTrigger()} disabled={busy || !props.active || !selectedProfileId}>{busy ? "处理中…" : trigger ? "保存选择" : "启用这个配置"}</button>

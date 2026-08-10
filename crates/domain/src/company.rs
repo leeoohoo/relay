@@ -129,6 +129,26 @@ pub const PROJECT_TASK_STATUS_BLOCKED: &str = "blocked";
 pub const PROJECT_TASK_STATUS_DONE: &str = "done";
 pub const PROJECT_TASK_STATUS_FAILED: &str = "failed";
 pub const PROJECT_TASK_STATUS_CANCELLED: &str = "cancelled";
+pub const PROJECT_TASK_DEPENDENCY_SUCCESS: &str = "success";
+pub const PROJECT_TASK_DEPENDENCY_COMPLETION: &str = "completion";
+pub const PROJECT_TASK_DEPENDENCY_FAILURE: &str = "failure";
+
+pub fn project_task_dependency_satisfied(condition: &str, status: &str) -> bool {
+    match condition {
+        PROJECT_TASK_DEPENDENCY_SUCCESS => {
+            matches!(
+                status,
+                PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+            )
+        }
+        PROJECT_TASK_DEPENDENCY_COMPLETION => matches!(
+            status,
+            PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_FAILED | PROJECT_TASK_STATUS_CANCELLED
+        ),
+        PROJECT_TASK_DEPENDENCY_FAILURE => status == PROJECT_TASK_STATUS_FAILED,
+        _ => false,
+    }
+}
 
 pub const PROJECT_TASK_PRIORITY_LOW: &str = "low";
 pub const PROJECT_TASK_PRIORITY_NORMAL: &str = "normal";
@@ -147,6 +167,9 @@ pub const AGENT_TOOL_APPROVAL_STATUS_EXECUTED: &str = "executed";
 pub const AGENT_TOOL_APPROVAL_STATUS_REJECTED: &str = "rejected";
 pub const AGENT_TOOL_APPROVAL_STATUS_EXPIRED: &str = "expired";
 pub const AGENT_TOOL_APPROVAL_STATUS_FAILED: &str = "failed";
+pub const AGENT_TOOL_APPROVAL_MODE_ONCE: &str = "once";
+pub const AGENT_TOOL_APPROVAL_MODE_ALWAYS: &str = "always";
+pub const AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST: &str = "always_localhost";
 pub const COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE: &str = "active";
 pub const COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED: &str = "archived";
 
@@ -165,11 +188,19 @@ pub const AGENT_TOOL_APPROVAL_SOURCE_CODEX: &str = "codex";
 pub const AGENT_CODEX_APPROVAL_TOOL_COMMAND: &str = "codex.command_execution";
 pub const AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE: &str = "codex.file_change";
 pub const AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS: &str = "codex.permissions";
+pub const AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS: &str = "codex.website_access";
+pub const AGENT_CODEX_APPROVAL_SCOPE_KEY: &str = "relay_approval_scope";
+pub const AGENT_CODEX_APPROVAL_TARGET_KEY: &str = "relay_approval_target";
+pub const AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY: &str = "relay_approval_local_target";
 pub const AGENT_CODEX_TRIGGER_TYPE_SCHEDULED: &str = "scheduled";
 pub const AGENT_CODEX_TRIGGER_TYPE_MANUAL: &str = "manual";
 pub const AGENT_CODEX_TRIGGER_TYPE_MESSAGE: &str = "message";
 pub const AGENT_CODEX_TRIGGER_TYPE_TASK: &str = "task";
 pub const AGENT_CODEX_TRIGGER_TYPE_ASSET_REFRESH: &str = "asset_refresh";
+pub const AGENT_CODEX_WAKE_REASON_MESSAGE: &str = "message";
+pub const AGENT_CODEX_WAKE_REASON_TASK_READY: &str = "task_ready";
+pub const AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED: &str = "project_resumed";
+pub const AGENT_CODEX_WAKE_REASON_INTENT_RECOVERY: &str = "intent_recovery";
 pub const AGENT_CODEX_RUN_STATUS_RUNNING: &str = "running";
 pub const AGENT_CODEX_RUN_STATUS_SUCCEEDED: &str = "succeeded";
 pub const AGENT_CODEX_RUN_STATUS_FAILED: &str = "failed";
@@ -181,11 +212,22 @@ pub const AGENT_CODEX_SESSION_KIND_PROJECT: &str = "project";
 pub const AGENT_CODEX_SESSION_STATUS_ACTIVE: &str = "active";
 pub const AGENT_CODEX_SESSION_STATUS_ARCHIVED: &str = "archived";
 pub const AGENT_EXECUTION_INTENT_ACTION_EXECUTE: &str = "execute";
+pub const AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION: &str = "replace_session";
 pub const AGENT_EXECUTION_INTENT_STATUS_PENDING: &str = "pending";
 pub const AGENT_EXECUTION_INTENT_STATUS_RUNNING: &str = "running";
 pub const AGENT_EXECUTION_INTENT_STATUS_COMPLETED: &str = "completed";
 pub const AGENT_EXECUTION_INTENT_STATUS_FAILED: &str = "failed";
 pub const AGENT_EXECUTION_INTENT_STATUS_CANCELLED: &str = "cancelled";
+
+pub fn is_agent_codex_wake_reason(value: &str) -> bool {
+    matches!(
+        value,
+        AGENT_CODEX_WAKE_REASON_MESSAGE
+            | AGENT_CODEX_WAKE_REASON_TASK_READY
+            | AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED
+            | AGENT_CODEX_WAKE_REASON_INTENT_RECOVERY
+    )
+}
 
 pub const AGENT_MEMORY_SCOPE_AGENT: &str = "agent";
 pub const AGENT_MEMORY_SCOPE_CONTROL: &str = "control";
@@ -398,7 +440,7 @@ pub struct CompanyProjectAssetRefreshConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentMemorySourceRef {
     pub source_type: String,
-    pub source_id: Uuid,
+    pub source_id: String,
     pub label: Option<String>,
 }
 
@@ -671,6 +713,7 @@ pub struct CompanyProjectTaskDependency {
     pub project_id: Uuid,
     pub task_id: Uuid,
     pub depends_on_task_id: Uuid,
+    pub dependency_condition: String,
     pub created_by_agent_id: Option<Uuid>,
     pub created_by_human_user_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,

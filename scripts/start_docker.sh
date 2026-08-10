@@ -33,6 +33,8 @@ PACKAGED_WEB_INDEX="$ROOT_DIR/apps/web/dist/index.html"
 
 # shellcheck source=scripts/lib/relay_directories.sh
 source "$ROOT_DIR/scripts/lib/relay_directories.sh"
+# shellcheck source=scripts/lib/chrome_devtools_mcp.sh
+source "$ROOT_DIR/scripts/lib/chrome_devtools_mcp.sh"
 
 export RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}"
 export RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}"
@@ -43,6 +45,8 @@ export RELAY_MESSAGE_ATTACHMENTS_ROOT="${RELAY_MESSAGE_ATTACHMENTS_ROOT:-$ROOT_D
 export AGENT_TRIGGER_MANAGED_PROJECTS_ROOT="${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
 export AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS="${AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
 export HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS="${HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS:-$RELAY_DEFAULT_WORKSPACE_ROOT}"
+export RELAY_CHROME_DEVTOOLS_MCP_ENABLED="${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}"
+export RELAY_CHROME_DEVTOOLS_MCP_IMAGE="${RELAY_CHROME_DEVTOOLS_MCP_IMAGE:-relay/chrome-devtools-mcp:1.6.0}"
 KNOWN_BAD_DOCKER_MIRRORS=(
   "hub-mirror.c.163.com"
   "mirror.baidubce.com"
@@ -532,6 +536,7 @@ case "$MODE" in
     prepare_docker_build_network
     prepare_harness_mode
     preflight_docker_images
+    relay_ensure_chrome_devtools_image "$ROOT_DIR" "$DOCKER_BUILD_NETWORK"
     build_web_assets
     prepare_ports
     compose up -d postgres
@@ -548,6 +553,7 @@ case "$MODE" in
     prepare_docker_build_network
     prepare_harness_mode
     preflight_docker_images
+    relay_ensure_chrome_devtools_image "$ROOT_DIR" "$DOCKER_BUILD_NETWORK"
     build_web_assets
     prepare_ports
     compose down

@@ -115,6 +115,10 @@ fn human_managers_create_assign_and_update_project_tasks() {
         .find(|dependency| dependency.task_id == task.id)
         .expect("human-created dependency should be stored");
     assert_eq!(dependency.depends_on_task_id, foundation.id);
+    assert_eq!(
+        dependency.dependency_condition,
+        PROJECT_TASK_DEPENDENCY_SUCCESS
+    );
     assert_eq!(dependency.created_by_human_user_id, Some(owner.id));
     assert!(dependency.created_by_agent_id.is_none());
     assert!(matches!(
@@ -170,7 +174,7 @@ fn human_managers_create_assign_and_update_project_tasks() {
         feature_goals: None,
         feature_shell_tool: None,
         max_run_seconds: 600,
-        next_run_at: now,
+        next_run_at: now + Duration::hours(6),
         lease_owner: None,
         lease_expires_at: None,
         manual_run_requested_at: None,
@@ -185,6 +189,9 @@ fn human_managers_create_assign_and_update_project_tasks() {
         created_at: now,
         updated_at: now,
     };
+    app.repo
+        .save_agent_codex_trigger_config(trigger.clone())
+        .expect("test should persist the engineer Trigger");
     let waiting_decision = app
         .decide_agent_codex_work(&trigger)
         .expect("trigger should classify waiting tasks");
@@ -226,12 +233,87 @@ fn human_managers_create_assign_and_update_project_tasks() {
         depends_on_task_ids: Some(Vec::new()),
     })
     .expect("prerequisite should complete");
+    let ready_event = app
+        .list_agent_inbox_events(engineer.agent_profile.id, true, 50)
+        .expect("engineer inbox should load")
+        .into_iter()
+        .find(|event| {
+            event.event_type == "company.project.task_ready"
+                && payload_uuid_field_optional(&event.payload_json, "task_id") == Some(task.id)
+        })
+        .expect("completing the prerequisite should enqueue a ready event");
+    let ready_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(engineer.agent_profile.id)
+        .expect("engineer Trigger should remain configured");
+    assert_eq!(ready_trigger.wake_reason.as_deref(), Some("task_ready"));
+    let ready_wake_at = ready_trigger
+        .wake_requested_at
+        .expect("ready task should request a wake");
+    assert!(ready_wake_at <= ready_event.created_at);
+    assert!(ready_trigger.next_run_at <= ready_wake_at);
     let ready_decision = app
-        .decide_agent_codex_work(&trigger)
+        .decide_agent_codex_work(&ready_trigger)
         .expect("trigger should re-check completed prerequisites");
     assert!(ready_decision.should_run);
     assert_eq!(ready_decision.active_task_count, 1);
     assert_eq!(ready_decision.waiting_task_count, 0);
+
+    for event in app
+        .list_agent_inbox_events(engineer.agent_profile.id, true, 50)
+        .expect("engineer ready inbox should load")
+    {
+        app.mark_agent_inbox_event_processed(MarkInboxEventProcessedInput {
+            actor_agent_id: engineer.agent_profile.id,
+            event_id: event.id,
+        })
+        .expect("ready events should be acknowledged before recovery check");
+    }
+    app.update_company_project_task_for_human(UpdateCompanyProjectTaskForHumanInput {
+        human_user_id: owner.id,
+        company_id: company.company.id,
+        project_id: project.project.id,
+        task_id: task.id,
+        title: None,
+        description: None,
+        status: Some(PROJECT_TASK_STATUS_IN_PROGRESS.into()),
+        priority: None,
+        assignee_agent_id: None,
+        clear_assignee: false,
+        due_at: None,
+        clear_due_at: false,
+        depends_on_task_ids: None,
+    })
+    .expect("ready task should enter progress");
+    let failed_intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: company.company.id,
+        agent_profile_id: engineer.agent_profile.id,
+        project_id: project.project.id,
+        worker_session_id: Some(Uuid::new_v4()),
+        source_event_ids: Vec::new(),
+        task_ids: vec![task.id],
+        action_type: "execute".into(),
+        objective: "恢复进行中的任务".into(),
+        acceptance_criteria: vec!["任务完成".into()],
+        priority: "high".into(),
+        dedupe_key: "recover-orphaned-in-progress-task".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_FAILED.into(),
+        result_summary: "已完成部分工作".into(),
+        error_message: Some("unexpected status 503 Service Unavailable: auth_unavailable".into()),
+        created_at: now,
+        claimed_at: Some(now),
+        completed_at: Some(now),
+    };
+    app.repo
+        .insert_agent_execution_intent(failed_intent)
+        .expect("failed intent should be stored");
+    let recovery_decision = app
+        .decide_agent_codex_work(&ready_trigger)
+        .expect("trigger should recover retryable orphaned work");
+    assert!(recovery_decision.should_run);
+    assert_eq!(recovery_decision.active_task_count, 1);
+    assert_eq!(recovery_decision.pending_execution_intent_count, 1);
 
     let updated = app
         .update_company_project_task_for_human(UpdateCompanyProjectTaskForHumanInput {

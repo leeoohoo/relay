@@ -5,7 +5,7 @@ import { Field, Icon } from "../../components/ui";
 import type {
   CompanyAgent,
   CompanyConsole,
-  CompanyProfession,
+  CompanyProfessionSummary,
 } from "../../types/platform";
 import { AgentSessionsDialog } from "./agent-sessions";
 import { MemoriesView } from "./memory-and-approvals";
@@ -172,7 +172,7 @@ export function AgentRow(props: {
   const currentProfessionKey = companyAgentProfessionKey(props.agent, props.consoleData.professions);
   const skillLanguage = props.consoleData.governance_policy.effective_settings.skill_language;
   const professionGroups = useMemo(() => {
-    const groups = new Map<string, CompanyProfession[]>();
+    const groups = new Map<string, CompanyProfessionSummary[]>();
     props.consoleData.professions.forEach((profession) => {
       const category = skillLanguage === "en" ? profession.category_label_en : profession.category_label;
       groups.set(category, [...(groups.get(category) ?? []), profession]);

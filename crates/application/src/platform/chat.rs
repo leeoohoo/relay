@@ -617,6 +617,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 input.mentioned_agent_ids,
                 input.mention_all,
             )?;
+        let wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
+            &context,
+            &notification_recipient_ids,
+            &mentioned_agent_ids,
+            input.mention_all,
+        )?;
 
         let message = MessageView {
             id: Uuid::new_v4(),
@@ -639,9 +645,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             &message,
             false,
             &notification_recipient_ids,
-            &mentioned_agent_ids,
-            input.mention_all,
-            true,
+            MessageDeliveryPolicy {
+                mentioned_agent_ids: &mentioned_agent_ids,
+                mention_all: input.mention_all,
+                wake_recipient_agent_ids: &wake_recipient_agent_ids,
+                project_owner_followup_agent_id: None,
+            },
         )?;
         Ok(message)
     }

@@ -113,6 +113,57 @@ describe("ProjectRepositoryBrowser", () => {
     await screen.findByText("page-2.txt");
     expect(requestedPages).toContain("2");
   });
+
+  it("renders SVG files visually by default and keeps source view available", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/repository/refs")) {
+        return jsonResponse({
+          refs: [{ name: "main", full_name: "main", commit: "1".repeat(40), kind: "branch", is_default: true }],
+          default_ref: "main",
+          refreshed_at: "2026-08-09T00:00:00Z",
+          source: "harness_api",
+        });
+      }
+      if (url.includes("/repository/tree?")) {
+        return jsonResponse({
+          reference: "main",
+          commit: "1".repeat(40),
+          path: "",
+          entries: [{ name: "diagram.svg", path: "diagram.svg", kind: "file", size: 114, mode: "100644" }],
+          page: 1,
+          per_page: 100,
+          total: 1,
+          total_pages: 1,
+        });
+      }
+      if (url.includes("/repository/file?")) {
+        return jsonResponse({
+          reference: "main",
+          commit: "1".repeat(40),
+          path: "diagram.svg",
+          name: "diagram.svg",
+          size: 114,
+          line_count: 1,
+          binary: false,
+          content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><text x="10" y="30">流程图</text></svg>',
+          language: "svg",
+        });
+      }
+      return jsonResponse({ message: "unexpected request" }, 500);
+    }));
+
+    const { container } = render(<ProjectRepositoryBrowser companyId="company-1" project={project} token="token" onError={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /diagram\.svg/u }));
+    const preview = await screen.findByRole("img", { name: "diagram.svg 预览" });
+    expect(preview.getAttribute("src")).toMatch(/^data:image\/svg\+xml;charset=utf-8,/u);
+    expect(screen.getByRole("button", { name: "预览" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "源码" }));
+    await waitFor(() => expect(container.querySelector("code.hljs")?.textContent).toContain("<svg"));
+    expect(screen.getByRole("button", { name: "源码" })).toHaveAttribute("aria-pressed", "true");
+  });
 });
 
 function jsonResponse(body: unknown, status = 200) {

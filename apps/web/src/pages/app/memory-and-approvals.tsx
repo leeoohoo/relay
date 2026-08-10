@@ -18,6 +18,8 @@ import {
   Metric,
 } from "./shared";
 
+export type ApprovalReviewDecision = "approve" | "always_allow" | "always_allow_localhost" | "reject";
+
 export function MemoriesView(props: {
   consoleData: CompanyConsole;
   token: string;
@@ -202,11 +204,15 @@ export function MemoryEditDialog(props: { memory: AgentMemory; onClose: () => vo
 export function ApprovalsView(props: {
   approvals: AgentToolApproval[];
   agents: CompanyAgent[];
-  onReview: (approvalId: string, decision: "approve" | "reject", reviewNote: string) => Promise<void>;
+  onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onError: (error: unknown) => void;
 }) {
-  const [filter, setFilter] = useState<"pending" | "all">("pending");
-  const visible = filter === "pending" ? props.approvals.filter((approval) => approval.status === "pending") : props.approvals;
+  const [filter, setFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
+  const visible = props.approvals.filter((approval) => {
+    if (filter === "all") return true;
+    if (filter === "approved") return ["approved", "executed"].includes(approval.status);
+    return approval.status === filter;
+  });
   const approvalPagination = usePagination(visible, 8, filter);
   const pendingCount = props.approvals.filter((approval) => approval.status === "pending").length;
   const completedCount = props.approvals.filter((approval) => ["approved", "executed"].includes(approval.status)).length;
@@ -215,10 +221,10 @@ export function ApprovalsView(props: {
   return (
     <div className="content-stack">
       <section className="metric-row approval-metrics">
-        <Metric label="待处理" value={String(pendingCount)} detail="Codex 会保持当前 turn 等待" />
-        <Metric label="已通过" value={String(completedCount)} detail="批准后继续原进程" />
-        <Metric label="已拒绝" value={String(rejectedCount)} detail="Codex 收到 decline 后继续判断" />
-        <Metric label="审批来源" value="Codex + Agent" detail="统一公司级审批入口" />
+        <Metric label="待处理" value={String(pendingCount)} detail="Codex 会保持当前 turn 等待" active={filter === "pending"} onClick={() => setFilter("pending")} />
+        <Metric label="已通过" value={String(completedCount)} detail="批准后继续原进程" active={filter === "approved"} onClick={() => setFilter("approved")} />
+        <Metric label="已拒绝" value={String(rejectedCount)} detail="Codex 收到 decline 后继续判断" active={filter === "rejected"} onClick={() => setFilter("rejected")} />
+        <Metric label="审批来源" value="Codex + Agent" detail="查看全部审批记录" active={filter === "all"} onClick={() => setFilter("all")} />
       </section>
       <section className="section-card approval-center-card">
         <div className="section-heading">
@@ -234,52 +240,63 @@ export function ApprovalsView(props: {
 export function ApprovalCard(props: {
   approval: AgentToolApproval;
   agents: CompanyAgent[];
-  onReview: (approvalId: string, decision: "approve" | "reject", reviewNote: string) => Promise<void>;
+  onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onError: (error: unknown) => void;
 }) {
+  const [expanded, setExpanded] = useState(props.approval.status === "pending");
   const agentName = props.agents.find((agent) => agent.agent_profile.id === props.approval.requested_by_agent_id)?.agent_profile.display_name ?? "Unknown Agent";
   const detail = approvalRequestDetail(props.approval);
+  const alwaysAllowTarget = props.approval.execution_result.approval_mode === "always"
+    && typeof props.approval.execution_result.approval_target === "string"
+    ? props.approval.execution_result.approval_target
+    : null;
   return (
-    <article className={`approval-card ${props.approval.status}`}>
-      <div className="approval-card-head">
+    <article className={`approval-card ${props.approval.status} ${expanded ? "expanded" : "collapsed"}`}>
+      <button type="button" className="approval-card-head" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
         <span className="approval-icon"><Icon name={props.approval.approval_source === "codex" ? "terminal" : "shield"} /></span>
         <div><strong>{approvalToolLabel(props.approval.tool_name)}</strong><small>{agentName} · {props.approval.approval_source === "codex" ? "Codex 运行审批" : "Agent 高影响动作"} · {formatTime(props.approval.created_at)}</small></div>
         <span className={`approval-status ${props.approval.status}`}>{approvalStatusLabel(props.approval.status)}</span>
-      </div>
-      <div className="approval-card-body">
+        <Icon name={expanded ? "chevron-up" : "chevron-down"} />
+      </button>
+      {expanded ? <div className="approval-card-body">
         {props.approval.reason ? <p>{props.approval.reason}</p> : null}
         {detail ? <pre>{detail}</pre> : null}
-        <div className="approval-meta"><span>风险：{approvalRiskLabel(props.approval.risk_level)}</span><span>有效期至 {formatTime(props.approval.expires_at)}</span>{props.approval.review_note ? <span>备注：{props.approval.review_note}</span> : null}</div>
-      </div>
-      {props.approval.status === "pending" ? <ApprovalReviewActions approvalId={props.approval.id} onReview={props.onReview} onError={props.onError} /> : null}
+        <div className="approval-meta"><span>风险：{approvalRiskLabel(props.approval.risk_level)}</span><span>有效期至 {formatTime(props.approval.expires_at)}</span>{alwaysAllowTarget ? <span><b>始终允许</b> · {alwaysAllowTarget}</span> : null}{props.approval.review_note ? <span>备注：{props.approval.review_note}</span> : null}</div>
+      </div> : null}
+      {expanded && props.approval.status === "pending" ? <ApprovalReviewActions approval={props.approval} onReview={props.onReview} onError={props.onError} /> : null}
     </article>
   );
 }
 
 export function ApprovalReviewActions(props: {
-  approvalId: string;
-  onReview: (approvalId: string, decision: "approve" | "reject", reviewNote: string) => Promise<void>;
+  approval: AgentToolApproval;
+  onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onError: (error: unknown) => void;
 }) {
   const [reviewNote, setReviewNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function review(decision: "approve" | "reject") {
-    setBusy(true);
+  const [busy, setBusy] = useState<ApprovalReviewDecision | null>(null);
+  const canAlwaysAllow = props.approval.tool_name === "codex.website_access"
+    && typeof props.approval.arguments.relay_approval_scope === "string"
+    && typeof props.approval.arguments.relay_approval_target === "string";
+  const canAllowLocalhostPorts = canAlwaysAllow
+    && typeof props.approval.arguments.relay_approval_local_target === "string";
+  async function review(decision: ApprovalReviewDecision) {
+    setBusy(decision);
     try {
-      await props.onReview(props.approvalId, decision, reviewNote);
+      await props.onReview(props.approval.id, decision, reviewNote);
     } catch (error) {
       props.onError(error);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
-  return <div className="approval-actions"><input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="审批备注（可选）" disabled={busy} /><button className="button small danger-outline" onClick={() => void review("reject")} disabled={busy}>拒绝</button><button className="button primary small" onClick={() => void review("approve")} disabled={busy}>{busy ? "处理中…" : "批准并继续"}</button></div>;
+  return <div className="approval-actions"><input value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="审批备注（可选）" disabled={Boolean(busy)} /><button className="button small danger-outline" onClick={() => void review("reject")} disabled={Boolean(busy)}>{busy === "reject" ? "处理中…" : "拒绝"}</button><button className="button small" title={canAlwaysAllow ? "放行当前 Agent 工作会话内该网站 origin 的后续操作" : undefined} onClick={() => void review("approve")} disabled={Boolean(busy)}>{busy === "approve" ? "处理中…" : canAlwaysAllow ? "本次会话允许" : "允许一次"}</button>{canAlwaysAllow ? <button className="button primary small" title="仅对当前 Agent、当前项目和当前网站 origin 生效" onClick={() => void review("always_allow")} disabled={Boolean(busy)}>{busy === "always_allow" ? "处理中…" : "始终允许此网站"}</button> : null}{canAllowLocalhostPorts ? <button className="button primary small" title="仅对当前 Agent、当前项目的非特权 localhost 预览端口生效" onClick={() => void review("always_allow_localhost")} disabled={Boolean(busy)}>{busy === "always_allow_localhost" ? "处理中…" : "允许本项目本地预览端口"}</button> : null}</div>;
 }
 
 export function ApprovalDialog(props: {
   approval: AgentToolApproval;
   agents: CompanyAgent[];
-  onReview: (approvalId: string, decision: "approve" | "reject", reviewNote: string) => Promise<void>;
+  onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onError: (error: unknown) => void;
   onClose: () => void;
 }) {

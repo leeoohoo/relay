@@ -13,7 +13,7 @@ done
 
 legacy_read_pattern='self\s*\.repo\s*\.\s*(get_human_user|get_company|get_company_human_member|get_conversation_context|get_conversation_messages|get_company_project|list_company_projects|list_company_project_tasks)\('
 
-if rg --pcre2 --multiline --line-number "$legacy_read_pattern" "$SERVICE_FILE"; then
+if rg --multiline --line-number "$legacy_read_pattern" "$SERVICE_FILE"; then
   echo >&2
   echo "Application services must use the Result-returning repository reads." >&2
   echo "Use the corresponding *_result method so database failures become Internal Error responses." >&2

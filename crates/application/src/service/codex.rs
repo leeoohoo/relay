@@ -215,6 +215,13 @@ pub trait CodexRuntimePlatformRepository: Send + Sync {
     fn get_agent_execution_intent(&self, _intent_id: Uuid) -> Option<AgentExecutionIntent> {
         None
     }
+    fn find_agent_execution_intent_by_dedupe_key(
+        &self,
+        _agent_id: Uuid,
+        _dedupe_key: &str,
+    ) -> Option<AgentExecutionIntent> {
+        None
+    }
     fn list_agent_execution_intents(
         &self,
         _agent_id: Uuid,

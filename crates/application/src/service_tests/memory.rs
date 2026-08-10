@@ -124,17 +124,29 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
             tags: vec!["订单".into(), "并发".into()],
             importance: Some(5),
             confidence: Some(95),
-            source_refs: vec![AgentMemorySourceRef {
-                source_type: "project".into(),
-                source_id: project.project.id,
-                label: Some("并发控制评审".into()),
-            }],
+            source_refs: vec![
+                AgentMemorySourceRef {
+                    source_type: "project".into(),
+                    source_id: project.project.id.to_string(),
+                    label: Some("并发控制评审".into()),
+                },
+                AgentMemorySourceRef {
+                    source_type: "git_commit".into(),
+                    source_id: "7ed28bec6af9d8cbd8b438f371bd70299a0c4858".into(),
+                    label: Some("QA 重跑证据提交".into()),
+                },
+            ],
             expires_at: None,
             supersedes_memory_id: None,
         })
         .expect("long-term memory should be stored");
     assert_eq!(long_term_memory.status, AGENT_MEMORY_STATUS_ACTIVE);
     assert_eq!(long_term_memory.scope, AGENT_MEMORY_SCOPE_PROJECT);
+    assert_eq!(long_term_memory.source_refs.len(), 2);
+    assert_eq!(
+        long_term_memory.source_refs[1].source_id,
+        "7ed28bec6af9d8cbd8b438f371bd70299a0c4858"
+    );
     assert!(app
         .search_agent_memories(SearchAgentMemoriesInput {
             actor_agent_id: beta.agent_profile.id,

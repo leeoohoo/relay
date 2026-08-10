@@ -138,7 +138,7 @@ impl GovernancePlatformRepository for PostgresPlatformRepository {
                     reviewed_at, execution_result, error_message, created_at, updated_at
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+                    $12, $13, $14, $15, $16, $17, $18, $19, $20
                 )
                 "#,
                 &[
@@ -309,5 +309,45 @@ impl GovernancePlatformRepository for PostgresPlatformRepository {
         })
         .map(|row| row.get::<_, i64>("count").max(0) as usize)
         .unwrap_or(0)
+    }
+
+    fn find_codex_always_allow_approval(
+        &self,
+        company_id: Uuid,
+        agent_id: Uuid,
+        tool_name: &str,
+        approval_scope: &str,
+        approval_target: &str,
+    ) -> AppResult<Option<AgentToolApprovalRequest>> {
+        self.with_client(|client| {
+            client.query_opt(
+                r#"
+                SELECT id, company_id, approval_source, runtime_config_id, runtime_run_id,
+                       codex_trigger_run_id,
+                       requested_by_agent_id, tool_name, risk_level, reason, arguments,
+                       status, expires_at, reviewed_by_human_user_id, review_note,
+                       reviewed_at, execution_result, error_message, created_at, updated_at
+                FROM agent_tool_approval_requests
+                WHERE company_id = $1
+                  AND requested_by_agent_id = $2
+                  AND tool_name = $3
+                  AND approval_source = 'codex'
+                  AND status IN ('approved', 'executed')
+                  AND execution_result ->> 'approval_mode' IN ('always', 'always_localhost')
+                  AND execution_result ->> 'approval_scope' = $4
+                  AND execution_result ->> 'approval_target' = $5
+                ORDER BY reviewed_at DESC NULLS LAST
+                LIMIT 1
+                "#,
+                &[
+                    &company_id,
+                    &agent_id,
+                    &tool_name,
+                    &approval_scope,
+                    &approval_target,
+                ],
+            )
+        })
+        .map(|row| row.map(map_agent_tool_approval_request))
     }
 }

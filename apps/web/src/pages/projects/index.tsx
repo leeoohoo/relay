@@ -14,18 +14,21 @@ import { ProjectRuleCard } from "./rule";
 import { ProjectSessionsCard } from "./sessions";
 import { TasksView } from "./tasks";
 
+export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions";
+
 export function ProjectsView(props: {
   consoleData: CompanyConsole;
   token: string;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
+  onClearError: () => void;
   onNotice: (notice: string) => void;
 }) {
   const canManage = ["owner", "admin"].includes(props.consoleData.human_membership.role);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showOwnerDialog, setShowOwnerDialog] = useState(false);
-  const [activeTab, setActiveTab] = useState<"git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions">("git");
+  const [activeTab, setActiveTab] = useState<ProjectDetailTab>("git");
   const [projectActionBusy, setProjectActionBusy] = useState(false);
   const selectedProject = props.consoleData.projects.find((project) => project.project.id === selectedProjectId) ?? null;
   const projectStats = {
@@ -35,7 +38,7 @@ export function ProjectsView(props: {
   };
   const projectPagination = usePagination(props.consoleData.projects, 8, props.consoleData.company.id);
 
-  function openProject(projectId: string, tab: "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions") {
+  function openProject(projectId: string, tab: ProjectDetailTab) {
     setSelectedProjectId(projectId);
     setActiveTab(tab);
   }
@@ -46,7 +49,7 @@ export function ProjectsView(props: {
       await api(`/api/v1/companies/${props.consoleData.company.id}/projects/${project.project.id}/${paused ? "pause" : "resume"}`, { method: "POST" }, props.token);
       await props.onChanged();
       props.onNotice(paused
-        ? "项目已暂停：项目群、任务唤醒、资产维护和正在运行的项目 Agent 已停止。"
+        ? "项目已暂停：已停止新的项目消息、任务唤醒和资产维护；运行中的项目会话正在取消。"
         : "项目已恢复：项目群和 Agent 工作流重新启用。");
     } catch (error) {
       props.onError(error);
@@ -198,7 +201,7 @@ export function ProjectsView(props: {
           </div>
           <div className="section-heading-actions">
             <span className="count-badge">{props.consoleData.projects.length}</span>
-            {canManage ? <button className="button primary" type="button" onClick={() => setShowCreateProject(true)}><Icon name="plus" /> 新建项目</button> : null}
+            {canManage ? <button className="button primary" type="button" onClick={() => { props.onClearError(); setShowCreateProject(true); }}><Icon name="plus" /> 新建项目</button> : null}
           </div>
         </div>
         {props.consoleData.projects.length ? (
@@ -245,7 +248,7 @@ export function ProjectsView(props: {
             <Icon name="git" />
             <h3>还没有正式项目</h3>
             <p>从本地文件夹或 Git 地址创建项目。Relay 会自动识别项目类型并加载固定执行规则。</p>
-            {canManage ? <button className="button primary" type="button" onClick={() => setShowCreateProject(true)}><Icon name="plus" /> 创建第一个项目</button> : null}
+            {canManage ? <button className="button primary" type="button" onClick={() => { props.onClearError(); setShowCreateProject(true); }}><Icon name="plus" /> 创建第一个项目</button> : null}
           </div>
         )}
       </section>
@@ -255,6 +258,7 @@ export function ProjectsView(props: {
           token={props.token}
           onClose={() => setShowCreateProject(false)}
           onCreated={async () => {
+            props.onClearError();
             setShowCreateProject(false);
             await props.onChanged();
             props.onNotice("项目已创建，固定项目 Skill 会在 Agent 下一次进入项目时自动加载");

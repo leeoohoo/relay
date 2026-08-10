@@ -53,6 +53,12 @@ pub(super) struct CreateCompanyRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ConsolePageQuery {
+    pub(super) limit: Option<usize>,
+    pub(super) after: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct CreateCompanyAgentRequest {
     pub(super) display_name: String,
     pub(super) handle: String,
@@ -376,6 +382,7 @@ pub(super) struct UpdateAgentMemoryRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct ReviewApprovalRequest {
     pub(super) review_note: Option<String>,
+    pub(super) approval_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

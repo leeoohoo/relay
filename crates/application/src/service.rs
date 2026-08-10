@@ -1,6 +1,38 @@
 pub use crate::contracts::*;
 use ai_chat_domain::{agent_identity::*, company::*, social::*};
 use ai_chat_shared::{AppError, AppResult};
+
+fn cursor_page_by_id<T>(
+    items: Vec<T>,
+    after_id: Option<Uuid>,
+    limit: usize,
+    id: impl Fn(&T) -> Uuid,
+) -> AppResult<CursorPage<T>> {
+    let limit = limit.clamp(1, 100);
+    let start = match after_id {
+        Some(cursor) => items
+            .iter()
+            .position(|item| id(item) == cursor)
+            .map(|index| index + 1)
+            .ok_or_else(|| AppError::Validation("cursor does not belong to this list".into()))?,
+        None => 0,
+    };
+    let mut page_items = items
+        .into_iter()
+        .skip(start)
+        .take(limit + 1)
+        .collect::<Vec<_>>();
+    let has_more = page_items.len() > limit;
+    if has_more {
+        page_items.pop();
+    }
+    let next_cursor = has_more.then(|| page_items.last().map(&id)).flatten();
+    Ok(CursorPage {
+        items: page_items,
+        next_cursor,
+        has_more,
+    })
+}
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;

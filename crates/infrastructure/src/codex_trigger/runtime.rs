@@ -4,7 +4,9 @@ impl CodexTriggerRunner {
     pub async fn run(&self, request: CodexRunRequest) -> AppResult<CodexRunResult> {
         validate_request(&request)?;
         if let Some(thread_id) = request.existing_thread_id.as_deref() {
-            let resumed = self.run_once(&request, Some(thread_id)).await?;
+            let resumed = self
+                .run_once_with_startup_retry(&request, Some(thread_id))
+                .await?;
             if should_replace_session(&resumed) {
                 report_progress(
                     request.progress_handler.as_ref(),
@@ -12,13 +14,32 @@ impl CodexTriggerRunner {
                     "Codex 原会话无法稳定完成，正在创建下一代会话继续处理",
                     Some(thread_id),
                 );
-                let created = self.run_once(&request, None).await?;
+                let created = self.run_once_with_startup_retry(&request, None).await?;
                 return Ok(to_public_result(created, false, true));
             }
             return Ok(to_public_result(resumed, true, false));
         }
-        let created = self.run_once(&request, None).await?;
+        let created = self.run_once_with_startup_retry(&request, None).await?;
         Ok(to_public_result(created, false, false))
+    }
+
+    async fn run_once_with_startup_retry(
+        &self,
+        request: &CodexRunRequest,
+        resume_thread_id: Option<&str>,
+    ) -> AppResult<ProcessOutcome> {
+        let first = self.run_once(request, resume_thread_id).await?;
+        if !should_retry_app_server_startup(&first) {
+            return Ok(first);
+        }
+        report_progress(
+            request.progress_handler.as_ref(),
+            "reconnecting",
+            "Codex 启动连接意外中断，正在自动重试",
+            resume_thread_id,
+        );
+        sleep(Duration::from_secs(1)).await;
+        self.run_once(request, resume_thread_id).await
     }
 
     async fn run_once(
@@ -26,17 +47,81 @@ impl CodexTriggerRunner {
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
     ) -> AppResult<ProcessOutcome> {
-        if request.approval_policy == "on-request" {
-            self.run_app_server_once(request, resume_thread_id).await
+        let runtime_temp = self.prepare_runtime_temp_directory()?;
+        if request.approval_handler.is_some() {
+            self.run_app_server_once(request, resume_thread_id, &runtime_temp.path)
+                .await
         } else {
-            self.run_exec_once(request, resume_thread_id).await
+            self.run_exec_once(request, resume_thread_id, &runtime_temp.path)
+                .await
         }
+    }
+
+    pub(super) fn prepare_runtime_temp_directory(&self) -> AppResult<ManagedRuntimeTempDirectory> {
+        let path = self
+            .runtime_temp_root
+            .join(Uuid::new_v4().simple().to_string());
+        fs::create_dir_all(&path).map_err(|error| {
+            AppError::Internal(format!(
+                "cannot create isolated Codex runtime temp directory {}: {error}",
+                path.display()
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).map_err(|error| {
+                AppError::Internal(format!(
+                    "cannot secure Codex runtime temp directory {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        Ok(ManagedRuntimeTempDirectory { path })
+    }
+
+    pub(super) fn apply_runtime_temp_arguments(
+        &self,
+        command: &mut Command,
+        sandbox_mode: &str,
+        runtime_temp_path: &Path,
+    ) -> AppResult<()> {
+        let runtime_temp = runtime_temp_path.to_str().ok_or_else(|| {
+            AppError::Validation("Codex runtime temp path must be valid UTF-8".into())
+        })?;
+        if sandbox_mode == "workspace-write" {
+            command
+                .arg("--config")
+                .arg(format!(
+                    "sandbox_workspace_write.writable_roots=[{}]",
+                    toml_string(runtime_temp)
+                ))
+                .arg("--config")
+                .arg("sandbox_workspace_write.exclude_tmpdir_env_var=false");
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_runtime_temp_environment(
+        &self,
+        command: &mut Command,
+        runtime_temp_path: &Path,
+    ) -> AppResult<()> {
+        let runtime_temp = runtime_temp_path.to_str().ok_or_else(|| {
+            AppError::Validation("Codex runtime temp path must be valid UTF-8".into())
+        })?;
+        command
+            .env("TMPDIR", runtime_temp)
+            .env("TMP", runtime_temp)
+            .env("TEMP", runtime_temp);
+        Ok(())
     }
 
     async fn run_exec_once(
         &self,
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
+        runtime_temp_path: &Path,
     ) -> AppResult<ProcessOutcome> {
         let sandbox_mode = codex_sandbox_mode(&request.sandbox_mode)?;
         let mut command = Command::new(&self.executable);
@@ -48,11 +133,14 @@ impl CodexTriggerRunner {
             .arg("exec")
             .arg("--skip-git-repo-check")
             .arg("--json");
-        self.apply_profile_arguments(&mut command, &request.codex_profile)?;
+        self.apply_run_profile_arguments(&mut command, request)
+            .await?;
         if let Some(model) = request.model.as_deref() {
             command.arg("--model").arg(model);
         }
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
+        apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
+        self.apply_runtime_temp_arguments(&mut command, sandbox_mode, runtime_temp_path)?;
         command
             .arg("--sandbox")
             .arg(sandbox_mode)
@@ -69,9 +157,10 @@ impl CodexTriggerRunner {
             ))
             .arg("--config")
             .arg(format!(
-                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {} }}",
+                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {}, \"x-relay-session-kind\" = {} }}",
                 self.mcp_server_name,
-                toml_string(&self.run_token_env_name)
+                toml_string(&self.run_token_env_name),
+                toml_string(SESSION_KIND_ENV)
             ))
             .arg("--config")
             .arg(format!(
@@ -89,6 +178,7 @@ impl CodexTriggerRunner {
             .env_clear()
             .envs(&self.inherited_environment)
             .env(&self.run_token_env_name, &request.run_token)
+            .env(SESSION_KIND_ENV, &request.session_kind)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -98,6 +188,7 @@ impl CodexTriggerRunner {
         for (key, value) in &request.environment {
             command.env(key, value);
         }
+        self.apply_runtime_temp_environment(&mut command, runtime_temp_path)?;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -176,7 +267,7 @@ impl CodexTriggerRunner {
             error_message = Some(truncate(&sanitize_error(&stderr), 2_000));
         }
         if cancelled {
-            error_message = Some("Codex run cancelled because the project was paused".into());
+            error_message = Some(cancellation_reason(request.cancellation_handler.as_ref()));
         } else if timed_out {
             error_message = Some(format!(
                 "Codex run exceeded {} seconds",
@@ -222,17 +313,26 @@ impl CodexTriggerRunner {
         &self,
         request: &CodexRunRequest,
         resume_thread_id: Option<&str>,
+        runtime_temp_path: &Path,
     ) -> AppResult<ProcessOutcome> {
         let sandbox_mode = codex_sandbox_mode(&request.sandbox_mode)?;
         let approval_handler = request.approval_handler.as_ref().ok_or_else(|| {
-            AppError::Validation(
-                "Codex on-request approval policy requires an approval handler".into(),
-            )
+            AppError::Validation("Codex app-server execution requires an approval handler".into())
         })?;
         let mut command = Command::new(&self.executable);
         command.args(&self.prefix_args);
-        self.apply_profile_arguments(&mut command, &request.codex_profile)?;
+        self.apply_app_server_profile_settings(&mut command, request)?;
+        command
+            .arg("--config")
+            .arg(format!(
+                "approval_policy={}",
+                app_server_approval_policy_config(request)
+            ))
+            .arg("--config")
+            .arg("approvals_reviewer=\"user\"");
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
+        apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
+        self.apply_runtime_temp_arguments(&mut command, sandbox_mode, runtime_temp_path)?;
         command
             .arg("--config")
             .arg(format!(
@@ -247,9 +347,10 @@ impl CodexTriggerRunner {
             ))
             .arg("--config")
             .arg(format!(
-                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {} }}",
+                "mcp_servers.{}.env_http_headers={{ \"x-agent-run-token\" = {}, \"x-relay-session-kind\" = {} }}",
                 self.mcp_server_name,
-                toml_string(&self.run_token_env_name)
+                toml_string(&self.run_token_env_name),
+                toml_string(SESSION_KIND_ENV)
             ))
             .arg("--config")
             .arg(format!(
@@ -265,6 +366,7 @@ impl CodexTriggerRunner {
             .env_clear()
             .envs(&self.inherited_environment)
             .env(&self.run_token_env_name, &request.run_token)
+            .env(SESSION_KIND_ENV, &request.session_kind)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -274,6 +376,7 @@ impl CodexTriggerRunner {
         for (key, value) in &request.environment {
             command.env(key, value);
         }
+        self.apply_runtime_temp_environment(&mut command, runtime_temp_path)?;
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -298,6 +401,7 @@ impl CodexTriggerRunner {
             AppError::Validation("Codex app-server stderr pipe was not available".into())
         })?;
         let stderr_task = tokio::spawn(read_limited_text(stderr, MAX_STDERR_BYTES));
+        let thread_id_capture = Arc::new(Mutex::new(resume_thread_id.map(str::to_string)));
 
         let drive_result = tokio::select! {
             result = timeout(
@@ -309,6 +413,7 @@ impl CodexTriggerRunner {
                     resume_thread_id,
                     sandbox_mode,
                     approval_handler.as_ref(),
+                    &thread_id_capture,
                 ),
             ) => Some(result),
             _ = wait_for_cancellation(request.cancellation_handler.as_ref()) => None,
@@ -317,15 +422,15 @@ impl CodexTriggerRunner {
             Some(Ok(Ok(outcome))) => outcome,
             Some(Ok(Err(error))) => ProcessOutcome {
                 status: CodexRunStatus::Failed,
-                thread_id: resume_thread_id.map(str::to_string),
-                exit_code: Some(1),
+                thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
+                exit_code: None,
                 final_message: None,
                 error_message: Some(truncate(&sanitize_error(&error.to_string()), 2_000)),
                 turn_started: false,
             },
             Some(Err(_)) => ProcessOutcome {
                 status: CodexRunStatus::TimedOut,
-                thread_id: resume_thread_id.map(str::to_string),
+                thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
                 exit_code: None,
                 final_message: None,
                 error_message: Some(format!(
@@ -336,10 +441,10 @@ impl CodexTriggerRunner {
             },
             None => ProcessOutcome {
                 status: CodexRunStatus::Cancelled,
-                thread_id: resume_thread_id.map(str::to_string),
+                thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
                 exit_code: None,
                 final_message: None,
-                error_message: Some("Codex run cancelled because the project was paused".into()),
+                error_message: Some(cancellation_reason(request.cancellation_handler.as_ref())),
                 turn_started: true,
             },
         };
@@ -359,11 +464,15 @@ impl CodexTriggerRunner {
             }
         };
         let stderr = stderr_task.await.map_err(join_error)??;
-        if outcome.status == CodexRunStatus::Failed
-            && outcome.error_message.is_none()
-            && !stderr.trim().is_empty()
-        {
-            outcome.error_message = Some(truncate(&sanitize_error(&stderr), 2_000));
+        if outcome.status == CodexRunStatus::Failed && !stderr.trim().is_empty() {
+            let stderr = sanitize_error(&stderr);
+            outcome.error_message = Some(truncate(
+                &match outcome.error_message.take() {
+                    Some(message) => format!("{message}; Codex stderr: {stderr}"),
+                    None => stderr,
+                },
+                2_000,
+            ));
         }
         if outcome.exit_code.is_none() {
             outcome.exit_code = exit_status.and_then(|status| status.code());
@@ -455,4 +564,21 @@ impl CodexTriggerRunner {
             .filter_map(|line| first_section_name(&line[1..line.len() - 1], "mcp_servers."))
             .collect())
     }
+}
+
+fn cancellation_reason(handler: Option<&Arc<dyn CodexCancellationHandler>>) -> String {
+    handler
+        .map(|handler| handler.cancellation_reason())
+        .unwrap_or_else(|| "Codex run cancelled by Relay".into())
+}
+
+fn captured_app_server_thread_id(
+    capture: &Arc<Mutex<Option<String>>>,
+    fallback: Option<&str>,
+) -> Option<String> {
+    capture
+        .lock()
+        .ok()
+        .and_then(|captured| captured.clone())
+        .or_else(|| fallback.map(str::to_string))
 }

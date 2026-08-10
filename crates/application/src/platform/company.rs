@@ -80,8 +80,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             agents: Vec::new(),
             conversations: vec![default_group],
             projects: Vec::new(),
-            professions: company_profession_catalog(),
-            project_types: company_project_type_catalog(),
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
             governance_policy,
         })
     }
@@ -98,6 +104,86 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         human_user_id: Uuid,
         company_id: Uuid,
     ) -> AppResult<CompanyConsoleView> {
+        let (company, human_membership) =
+            self.company_console_identity(human_user_id, company_id)?;
+        let agents = self.company_console_agents(company_id)?;
+        let conversations = self.company_console_conversations(company_id, &agents)?;
+        let projects = self.company_console_projects(company_id)?;
+        Ok(CompanyConsoleView {
+            company,
+            human_membership,
+            org_units: self.repo.list_company_org_units(company_id),
+            agents,
+            conversations,
+            projects,
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
+            governance_policy: self.company_governance_policy_view(company_id),
+        })
+    }
+
+    pub fn get_company_summary(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<CompanySummaryView> {
+        let (company, human_membership) =
+            self.company_console_identity(human_user_id, company_id)?;
+        Ok(CompanySummaryView {
+            company,
+            human_membership,
+            org_units: self.repo.list_company_org_units(company_id),
+            professions: company_profession_catalog()
+                .into_iter()
+                .map(CompanyProfessionSummary::from)
+                .collect(),
+            project_types: company_project_type_catalog()
+                .into_iter()
+                .map(CompanyProjectTypeSummary::from)
+                .collect(),
+            governance_policy: self.company_governance_policy_view(company_id),
+        })
+    }
+
+    pub fn list_company_console_agents_for_human(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyConsoleAgentView>> {
+        self.company_console_identity(human_user_id, company_id)?;
+        self.company_console_agents(company_id)
+    }
+
+    pub fn list_company_console_conversations_for_human(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyConversationView>> {
+        self.company_console_identity(human_user_id, company_id)?;
+        let agents = self.company_console_agents(company_id)?;
+        self.company_console_conversations(company_id, &agents)
+    }
+
+    pub fn list_company_console_projects_for_human(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyProjectView>> {
+        self.company_console_identity(human_user_id, company_id)?;
+        self.company_console_projects(company_id)
+    }
+
+    pub(super) fn company_console_identity(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<(Company, CompanyHumanMember)> {
         let company = self
             .repo
             .get_company_result(company_id)?
@@ -109,28 +195,60 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .ok_or_else(|| {
                 AppError::Unauthorized("human user is not an active company member".into())
             })?;
-        let org_units = self.repo.list_company_org_units(company_id);
-        let agents = self
-            .repo
+        Ok((company, human_membership))
+    }
+
+    fn company_console_agents(&self, company_id: Uuid) -> AppResult<Vec<CompanyConsoleAgentView>> {
+        self.repo
             .list_company_agent_memberships(company_id)
             .into_iter()
-            .map(|membership| {
-                let agent_profile = self
-                    .repo
-                    .get_agent_profile(membership.agent_profile_id)
-                    .ok_or_else(|| AppError::NotFound("company agent profile not found".into()))?;
-                let connection = self.company_agent_connection_view(&membership);
-                let profession = infer_company_profession(Some(&membership.job_title));
-                Ok(CompanyConsoleAgentView {
-                    agent_profile,
-                    membership,
-                    profession,
-                    connection,
-                })
-            })
-            .collect::<AppResult<Vec<_>>>()?;
+            .map(|membership| self.company_console_agent(membership))
+            .collect::<AppResult<Vec<_>>>()
+    }
+
+    pub(super) fn company_console_agent(
+        &self,
+        membership: CompanyAgentMembership,
+    ) -> AppResult<CompanyConsoleAgentView> {
+        let agent_profile = self
+            .repo
+            .get_agent_profile(membership.agent_profile_id)
+            .ok_or_else(|| AppError::NotFound("company agent profile not found".into()))?;
+        let connection = self.company_agent_connection_view(&membership);
+        let profession =
+            CompanyProfessionSummary::from(infer_company_profession(Some(&membership.job_title)));
+        Ok(CompanyConsoleAgentView {
+            agent_profile,
+            membership,
+            profession,
+            connection,
+        })
+    }
+
+    pub(super) fn company_conversation_view(
+        &self,
+        company_id: Uuid,
+        preview: ConversationPreview,
+    ) -> AppResult<CompanyConversationView> {
+        let context = self
+            .repo
+            .get_conversation_context_result(preview.id)?
+            .filter(|context| context.company_id == Some(company_id))
+            .ok_or_else(|| AppError::NotFound("company conversation context not found".into()))?;
+        Ok(CompanyConversationView {
+            member_agent_ids: self.repo.list_conversation_member_ids(preview.id),
+            preview,
+            context,
+        })
+    }
+
+    fn company_console_conversations(
+        &self,
+        company_id: Uuid,
+        agents: &[CompanyConsoleAgentView],
+    ) -> AppResult<Vec<CompanyConversationView>> {
         let mut conversations_by_id = HashMap::new();
-        for agent in &agents {
+        for agent in agents {
             for preview in self.repo.list_agent_conversations(agent.agent_profile.id) {
                 let Some(context) = self.repo.get_conversation_context_result(preview.id)? else {
                     continue;
@@ -186,22 +304,31 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .cmp(&left.preview.updated_at)
                 .then_with(|| left.preview.id.cmp(&right.preview.id))
         });
-        let projects = self
-            .repo
+        Ok(conversations)
+    }
+
+    fn company_console_projects(&self, company_id: Uuid) -> AppResult<Vec<CompanyProjectView>> {
+        self.repo
             .list_company_projects_result(company_id)?
             .into_iter()
             .map(|project| self.company_project_view(project))
-            .collect::<AppResult<Vec<_>>>()?;
-        Ok(CompanyConsoleView {
-            company,
-            human_membership,
-            org_units,
-            agents,
-            conversations,
-            projects,
+            .collect::<AppResult<Vec<_>>>()
+    }
+
+    pub fn get_company_skill_catalog(
+        &self,
+        human_user_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<CompanySkillCatalogView> {
+        self.repo
+            .get_company_human_member_result(company_id, human_user_id)?
+            .filter(|membership| membership.status == "active")
+            .ok_or_else(|| {
+                AppError::Unauthorized("human user is not an active company member".into())
+            })?;
+        Ok(CompanySkillCatalogView {
             professions: company_profession_catalog(),
             project_types: company_project_type_catalog(),
-            governance_policy: self.company_governance_policy_view(company_id),
         })
     }
 
@@ -313,12 +440,94 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<AgentToolApprovalRequest> {
         self.ensure_human_can_manage_company_runtimes(input.human_user_id, input.company_id)?;
         let review_note = normalize_approval_review_note(input.review_note)?;
+        let approval_mode = input
+            .approval_mode
+            .as_deref()
+            .unwrap_or(AGENT_TOOL_APPROVAL_MODE_ONCE);
+        if !matches!(
+            approval_mode,
+            AGENT_TOOL_APPROVAL_MODE_ONCE
+                | AGENT_TOOL_APPROVAL_MODE_ALWAYS
+                | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+        ) {
+            return Err(AppError::Validation("unsupported approval mode".into()));
+        }
         let reviewable = self.ensure_agent_tool_approval_is_reviewable(
             input.company_id,
             input.approval_request_id,
         )?;
         if reviewable.approval_source == AGENT_TOOL_APPROVAL_SOURCE_CODEX {
-            return self
+            if matches!(
+                approval_mode,
+                AGENT_TOOL_APPROVAL_MODE_ALWAYS | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+            ) && reviewable.tool_name != AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS
+            {
+                return Err(AppError::Validation(
+                    "always allow is only supported for website access".into(),
+                ));
+            }
+            let persistent_grant = if matches!(
+                approval_mode,
+                AGENT_TOOL_APPROVAL_MODE_ALWAYS | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+            ) {
+                let approval_scope = reviewable
+                    .arguments
+                    .get(AGENT_CODEX_APPROVAL_SCOPE_KEY)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::Validation("website approval is missing its project scope".into())
+                    })?;
+                let target_key = if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST {
+                    AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY
+                } else {
+                    AGENT_CODEX_APPROVAL_TARGET_KEY
+                };
+                let approval_target = reviewable
+                    .arguments
+                    .get(target_key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::Validation(
+                            "website approval is missing its website target".into(),
+                        )
+                    })?;
+                let requested_url = reviewable
+                    .arguments
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::Validation("website approval is missing its URL".into())
+                    })?;
+                let parsed_url = url::Url::parse(requested_url)
+                    .map_err(|_| AppError::Validation("website approval URL is invalid".into()))?;
+                let valid_target = if approval_mode == AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST {
+                    let host = parsed_url
+                        .host_str()
+                        .unwrap_or_default()
+                        .trim_start_matches('[')
+                        .trim_end_matches(']');
+                    let is_loopback = host.eq_ignore_ascii_case("localhost")
+                        || host
+                            .parse::<std::net::IpAddr>()
+                            .is_ok_and(|address| address.is_loopback());
+                    is_loopback
+                        && parsed_url.port().is_some_and(|port| port >= 1_024)
+                        && approval_target == format!("{}://localhost:*", parsed_url.scheme())
+                } else {
+                    parsed_url.origin().ascii_serialization() == approval_target
+                };
+                if !matches!(parsed_url.scheme(), "http" | "https") || !valid_target {
+                    return Err(AppError::Validation(
+                        "website approval target does not match its URL".into(),
+                    ));
+                }
+                Some((approval_scope.to_string(), approval_target.to_string()))
+            } else {
+                None
+            };
+            let mut request = self
                 .repo
                 .claim_agent_tool_approval_request(
                     input.approval_request_id,
@@ -332,7 +541,26 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         "approval request is no longer pending or was claimed by another reviewer"
                             .into(),
                     )
+                })?;
+            if let Some((approval_scope, approval_target)) = persistent_grant {
+                request.execution_result = json!({
+                    "approval_mode": approval_mode,
+                    "approval_scope": approval_scope,
+                    "approval_target": approval_target,
                 });
+                request.updated_at = now_utc();
+                self.repo
+                    .update_agent_tool_approval_request(request.clone())?;
+            }
+            return Ok(request);
+        }
+        if matches!(
+            approval_mode,
+            AGENT_TOOL_APPROVAL_MODE_ALWAYS | AGENT_TOOL_APPROVAL_MODE_ALWAYS_LOCALHOST
+        ) {
+            return Err(AppError::Validation(
+                "always allow is only supported for Codex website access".into(),
+            ));
         }
         let mut request = self
             .repo
@@ -390,6 +618,25 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             })
     }
 
+    pub fn has_codex_always_allow_approval(
+        &self,
+        company_id: Uuid,
+        agent_id: Uuid,
+        tool_name: &str,
+        approval_scope: &str,
+        approval_target: &str,
+    ) -> AppResult<bool> {
+        self.repo
+            .find_codex_always_allow_approval(
+                company_id,
+                agent_id,
+                tool_name,
+                approval_scope,
+                approval_target,
+            )
+            .map(|approval| approval.is_some())
+    }
+
     pub(super) fn refresh_and_list_agent_tool_approvals(
         &self,
         company_id: Uuid,
@@ -423,6 +670,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             AGENT_CODEX_APPROVAL_TOOL_COMMAND
                 | AGENT_CODEX_APPROVAL_TOOL_FILE_CHANGE
                 | AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS
+                | AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS
         ) {
             return Err(AppError::Validation(
                 "unsupported Codex approval request type".into(),

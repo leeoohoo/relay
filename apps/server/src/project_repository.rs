@@ -82,7 +82,7 @@ pub(super) async fn list_company_project_repository_refs(
         .harness_provisioner
         .list_repository_refs(human.id, git.remote_url.as_str())
         .await?
-        .ok_or_else(non_harness_repository_error)?;
+        .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
     let refs = harness_repository_refs(refs, git.default_branch.as_str());
     Ok(Json(repository_refs_response(refs, "harness_api")?))
 }
@@ -100,7 +100,7 @@ pub(super) async fn list_company_project_repository_tree(
         .harness_provisioner
         .list_repository_refs(human.id, git.remote_url.as_str())
         .await?
-        .ok_or_else(non_harness_repository_error)?;
+        .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
     let refs = harness_repository_refs(refs, git.default_branch.as_str());
     let reference = selected_repository_ref(&refs, query.reference.as_deref())?;
     let content = state
@@ -112,7 +112,7 @@ pub(super) async fn list_company_project_repository_tree(
             path.as_str(),
         )
         .await?
-        .ok_or_else(non_harness_repository_error)?;
+        .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
     let HarnessRepositoryContent::Directory { entries, .. } = content else {
         return Err(
             AppError::Validation("selected repository path is not a directory".into()).into(),
@@ -150,7 +150,7 @@ pub(super) async fn get_company_project_repository_file(
         .harness_provisioner
         .list_repository_refs(human.id, git.remote_url.as_str())
         .await?
-        .ok_or_else(non_harness_repository_error)?;
+        .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
     let refs = harness_repository_refs(refs, git.default_branch.as_str());
     let reference = selected_repository_ref(&refs, query.reference.as_deref())?;
     let content = state
@@ -162,7 +162,7 @@ pub(super) async fn get_company_project_repository_file(
             path.as_str(),
         )
         .await?
-        .ok_or_else(non_harness_repository_error)?;
+        .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
     let HarnessRepositoryContent::File(file) = content else {
         return Err(AppError::Validation("selected repository path is not a file".into()).into());
     };
@@ -171,8 +171,14 @@ pub(super) async fn get_company_project_repository_file(
     )?))
 }
 
-fn non_harness_repository_error() -> AppError {
-    AppError::Validation("项目仓库不是 Relay 管理的 Harness 仓库".into())
+fn non_harness_repository_error(harness_enabled: bool) -> AppError {
+    if harness_enabled {
+        AppError::Validation("项目仓库不是 Relay 管理的 Harness 仓库".into())
+    } else {
+        AppError::Conflict(
+            "Relay 当前未启用 Harness 集成，请以 self_hosted 或 official 模式重新启动".into(),
+        )
+    }
 }
 
 fn harness_repository_refs(

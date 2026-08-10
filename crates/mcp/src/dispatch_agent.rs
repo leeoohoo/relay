@@ -380,6 +380,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         acceptance_criteria,
                         priority,
                         dedupe_key,
+                        replace_session,
                     } => {
                         if membership.company_id != company_id {
                             return Err(AppError::Unauthorized(
@@ -402,7 +403,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             .or(request_key)
                             .unwrap_or_else(|| format!("dispatch-{}", Uuid::new_v4().simple()));
                         let now = Utc::now();
-                        let intent = AgentExecutionIntent {
+                        let requested_intent = AgentExecutionIntent {
                             id: Uuid::new_v4(),
                             company_id,
                             agent_profile_id: agent_id,
@@ -410,7 +411,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             worker_session_id: None,
                             source_event_ids,
                             task_ids,
-                            action_type: AGENT_EXECUTION_INTENT_ACTION_EXECUTE.into(),
+                            action_type: if replace_session {
+                                AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION
+                            } else {
+                                AGENT_EXECUTION_INTENT_ACTION_EXECUTE
+                            }
+                            .into(),
                             objective,
                             acceptance_criteria,
                             priority,
@@ -422,8 +428,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             claimed_at: None,
                             completed_at: None,
                         };
-                        let intent = self.platform.create_agent_execution_intent(intent)?;
-                        Ok(json!({ "intent": intent }))
+                        let requested_intent_id = requested_intent.id;
+                        let intent = self
+                            .platform
+                            .create_agent_execution_intent(requested_intent)?;
+                        let deduplicated = intent.id != requested_intent_id;
+                        Ok(json!({
+                            "intent": intent,
+                            "deduplicated": deduplicated,
+                            "replacement_requested": replace_session,
+                        }))
                     }
                 }
             }

@@ -1,105 +1,57 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(unix)]
 #[test]
-fn plugin_operations_map_to_cross_platform_codex_cli_subcommands() {
-    assert_eq!(
-        super::configuration::plugin_cli_operation("install").expect("install"),
-        "add"
-    );
-    assert_eq!(
-        super::configuration::plugin_cli_operation("remove").expect("remove"),
-        "remove"
-    );
-    assert!(super::configuration::plugin_cli_operation("refresh").is_err());
-}
-
-#[test]
-fn model_catalog_excludes_hidden_models_and_nested_ids() {
-    let catalog = json!({
-        "models": [
-            {
-                "slug": "gpt-5.6-sol",
-                "display_name": "GPT-5.6-Sol",
-                "visibility": "list",
-                "default_reasoning_level": "low",
-                "supported_reasoning_levels": [
-                    { "effort": "low", "description": "Fast" },
-                    { "effort": "high", "description": "Deep" }
-                ],
-                "service_tiers": [{ "id": "priority", "name": "Fast" }]
-            },
-            {
-                "slug": "codex-auto-review",
-                "display_name": "Codex Auto Review",
-                "visibility": "hide"
-            }
-        ]
-    });
-    let mut models = BTreeMap::new();
-
-    collect_codex_models(&catalog, &mut models);
-
-    assert_eq!(models.len(), 1);
-    let model = models.get("gpt-5.6-sol").expect("selectable model");
-    assert_eq!(model.display_name, "GPT-5.6-Sol");
-    assert_eq!(model.default_reasoning_effort.as_deref(), Some("low"));
-    assert_eq!(
-        model
-            .reasoning_efforts
-            .iter()
-            .map(|effort| effort.effort.as_str())
-            .collect::<Vec<_>>(),
-        vec!["low", "high"]
-    );
-}
-
-#[test]
-fn managed_cli_settings_are_injected_as_cli_overrides() {
-    let request = CodexRunRequest {
-        cwd: PathBuf::from("/tmp"),
-        codex_profile: "default".into(),
-        model: Some("gpt-test".into()),
-        reasoning_effort: Some("high".into()),
-        reasoning_summary: Some("concise".into()),
-        verbosity: Some("medium".into()),
-        personality: Some("pragmatic".into()),
-        service_tier: Some("fast".into()),
-        sandbox_mode: "workspace_write".into(),
-        approval_policy: "never".into(),
-        network_access: false,
-        web_search: "live".into(),
-        feature_multi_agent: true,
-        feature_remote_plugin: false,
-        feature_hooks: true,
-        feature_goals: false,
-        feature_shell_tool: true,
-        max_run_seconds: 60,
-        prompt: "test".into(),
-        existing_thread_id: None,
-        run_token: "token".into(),
-        environment: HashMap::new(),
-        approval_handler: None,
-        progress_handler: None,
-        cancellation_handler: None,
-    };
-    let mut command = Command::new("codex");
-    apply_managed_cli_settings(&mut command, &request, 200_000);
-    let args = command
-        .as_std()
-        .get_args()
-        .map(|value| value.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
-
-    assert!(args.contains(&"model_reasoning_summary=\"concise\"".into()));
-    assert!(args.contains(&"model_verbosity=\"medium\"".into()));
-    assert!(args.contains(&"service_tier=\"fast\"".into()));
-    assert!(args.contains(&"web_search=\"live\"".into()));
-    assert!(args.contains(&"model_auto_compact_token_limit=200000".into()));
-    assert!(args.contains(&"model_auto_compact_token_limit_scope=\"total\"".into()));
-    assert!(args.contains(&"sandbox_workspace_write.network_access=false".into()));
-    assert!(args.contains(&"features.remote_plugin=false".into()));
-    assert!(args.contains(&"features.shell_tool=true".into()));
+fn project_session_kind_is_forwarded_to_relay_mcp() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-session-kind-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let script = r#"test "$RELAY_AGENT_SESSION_KIND" = project || exit 8; case "$*" in *x-relay-session-kind*) ;; *) exit 9 ;; esac; printf '%s\n' '{"type":"thread.started","thread_id":"thread-session-kind"}' '{"type":"turn.started"}' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}' '{"type":"turn.completed"}'"#;
+    let runner = CodexTriggerRunner::new(
+        PathBuf::from("/bin/sh"),
+        vec!["-c".into(), script.into(), "--".into()],
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    let result = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(runner.run(CodexRunRequest {
+            cwd: workspace.clone(),
+            codex_profile: "default".into(),
+            model: None,
+            reasoning_effort: None,
+            reasoning_summary: None,
+            verbosity: None,
+            personality: None,
+            service_tier: None,
+            sandbox_mode: "workspace_write".into(),
+            approval_policy: "never".into(),
+            network_access: false,
+            web_search: "disabled".into(),
+            feature_multi_agent: false,
+            feature_remote_plugin: false,
+            feature_hooks: false,
+            feature_goals: false,
+            feature_shell_tool: false,
+            max_run_seconds: 10,
+            prompt: "work".into(),
+            existing_thread_id: None,
+            run_token: "art_test".into(),
+            session_kind: "project".into(),
+            environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
+            approval_handler: None,
+            progress_handler: None,
+            cancellation_handler: None,
+        }))
+        .expect("fake Codex run");
+    assert_eq!(result.status, CodexRunStatus::Succeeded);
+    std::fs::remove_dir_all(workspace).expect("cleanup");
 }
 
 #[test]
@@ -115,6 +67,45 @@ fn context_compaction_is_reported_as_session_maintenance() {
     assert!(completed.1.contains("已压缩"));
 }
 
+#[test]
+fn agent_messages_report_the_actual_progress_text() {
+    let item = json!({
+        "type": "agent_message",
+        "text": "Production 已进入 Surefire，正在等待目标测试结果。"
+    });
+    let (phase, summary) =
+        summarize_codex_item(&item, true).expect("agent message summary should exist");
+
+    assert_eq!(phase, "reporting");
+    assert_eq!(
+        summary,
+        "Production 已进入 Surefire，正在等待目标测试结果。"
+    );
+}
+
+#[test]
+fn empty_agent_messages_keep_a_useful_fallback() {
+    let (phase, summary) = summarize_codex_item(&json!({ "type": "agentMessage" }), true)
+        .expect("agent message fallback should exist");
+
+    assert_eq!(phase, "reporting");
+    assert_eq!(summary, "Agent 已更新执行进度");
+}
+
+#[test]
+fn progress_text_redacts_common_secret_assignments() {
+    let sanitized = sanitize_error(
+        "mvn -Dflyway.password=wms_dev_password API_TOKEN=abc --client-secret hidden Authorization: Bearer token-value",
+    );
+
+    assert!(sanitized.contains("-Dflyway.password=[REDACTED]"));
+    assert!(sanitized.contains("API_TOKEN=[REDACTED]"));
+    assert!(sanitized.contains("--client-secret [REDACTED]"));
+    assert!(sanitized.contains("Authorization: Bearer [REDACTED]"));
+    assert!(!sanitized.contains("wms_dev_password"));
+    assert!(!sanitized.contains("token-value"));
+}
+
 #[derive(Default)]
 struct AcceptingApprovalHandler {
     calls: AtomicUsize,
@@ -125,6 +116,10 @@ struct AlwaysCancelHandler;
 impl CodexCancellationHandler for AlwaysCancelHandler {
     fn should_cancel(&self) -> bool {
         true
+    }
+
+    fn cancellation_reason(&self) -> String {
+        "Codex run cancelled because the Agent Trigger was paused by Human".into()
     }
 }
 
@@ -247,7 +242,27 @@ fn mcp_progress_summary_includes_the_action() {
         summarize_codex_item(&failed_item, true).expect("failure summary should exist");
     assert_eq!(
         failed,
-        "工具调用失败：relay_company.company.project（action: member_add）"
+        "工具调用失败：relay_company.company.project（action: member_add） — Agent is still provisioning"
+    );
+
+    let failed_content_item = json!({
+        "type": "mcpToolCall",
+        "server": "chrome-devtools",
+        "tool": "take_snapshot",
+        "status": "failed",
+        "result": {
+            "isError": true,
+            "content": [{
+                "type": "text",
+                "text": "Could not save a file\nCause: EACCES: permission denied, mkdir '/docs'"
+            }]
+        }
+    });
+    let (_, failed_content) = summarize_codex_item(&failed_content_item, true)
+        .expect("failure content summary should exist");
+    assert_eq!(
+        failed_content,
+        "工具调用失败：chrome-devtools.take_snapshot — Could not save a file Cause: EACCES: permission denied, mkdir '/docs'"
     );
 }
 
@@ -328,6 +343,47 @@ fn unresumable_or_terminal_stream_errors_replace_a_session() {
             "stream disconnected before completion: stream closed before response.completed".into(),
         ),
         turn_started: true,
+    }));
+}
+
+#[test]
+fn only_pre_initialize_app_server_disconnects_are_retried() {
+    assert!(should_retry_app_server_startup(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: Some(70),
+        final_message: None,
+        error_message: Some(
+            "Codex app-server closed before JSON-RPC response 0; Codex stderr: temporary failure"
+                .into(),
+        ),
+        turn_started: false,
+    }));
+    assert!(!should_retry_app_server_startup(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: Some(1),
+        final_message: None,
+        error_message: Some("turn failed".into()),
+        turn_started: true,
+    }));
+    assert!(should_retry_app_server_startup(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: None,
+        final_message: None,
+        error_message: Some("Codex app-server timed out waiting for initialize response 0".into(),),
+        turn_started: false,
+    }));
+    assert!(should_replace_session(&ProcessOutcome {
+        status: CodexRunStatus::Failed,
+        thread_id: Some("thread-1".into()),
+        exit_code: None,
+        final_message: None,
+        error_message: Some(
+            "Codex app-server timed out waiting for thread/resume response 1".into(),
+        ),
+        turn_started: false,
     }));
 }
 
@@ -514,76 +570,7 @@ fn ordinary_codex_profile_still_uses_profile_argument() {
 
 #[cfg(unix)]
 #[test]
-fn plugin_discovery_uses_the_selected_managed_codex_home() {
-    let profile_id = Uuid::new_v4();
-    let selector = format!("relay_{profile_id}");
-    let state_root = std::env::temp_dir().join(format!(
-        "relay-plugin-profile-test-{}",
-        Uuid::new_v4().simple()
-    ));
-    let expected_home = state_root
-        .join("codex-profiles")
-        .join("homes")
-        .join(profile_id.to_string());
-    let script = format!(
-        r#"test "$CODEX_HOME" = '{}' || exit 8; case "$*" in *"marketplace"*) printf '%s\n' '{{"marketplaces":[{{"name":"openai-bundled"}}]}}' ;; *) printf '%s\n' '{{"installed":[],"available":[{{"pluginId":"browser@openai-bundled"}}]}}' ;; esac"#,
-        expected_home.display()
-    );
-    let mut runner = CodexTriggerRunner::new(
-        PathBuf::from("/bin/sh"),
-        vec!["-c".into(), script, "--".into()],
-        "http://127.0.0.1:8080/mcp".into(),
-        "relay_company".into(),
-        DEFAULT_RUN_TOKEN_ENV.into(),
-    )
-    .expect("runner");
-    runner.managed_profile_homes_root = state_root.join("codex-profiles").join("homes");
-
-    let discovery = tokio::runtime::Runtime::new()
-        .expect("runtime")
-        .block_on(runner.discover_plugins(&selector))
-        .expect("plugin discovery");
-
-    assert_eq!(discovery.available.as_array().map(Vec::len), Some(1));
-    assert_eq!(discovery.marketplaces.as_array().map(Vec::len), Some(1));
-}
-
-#[cfg(unix)]
-#[test]
-fn plugin_operations_use_codex_cli_add_and_remove_subcommands() {
-    let script = r#"case "$*" in "plugin add browser@openai-bundled --json") printf '%s\n' '{"installed":true}' ;; "plugin remove browser@openai-bundled --json") printf '%s\n' '{"removed":true}' ;; *) printf '%s\n' "unexpected arguments: $*" >&2; exit 9 ;; esac"#;
-    let runner = CodexTriggerRunner::new(
-        PathBuf::from("/bin/sh"),
-        vec!["-c".into(), script.into(), "--".into()],
-        "http://127.0.0.1:8080/mcp".into(),
-        "relay_company".into(),
-        DEFAULT_RUN_TOKEN_ENV.into(),
-    )
-    .expect("runner");
-    let runtime = tokio::runtime::Runtime::new().expect("runtime");
-
-    let installed = runtime
-        .block_on(runner.apply_plugin_operation(
-            "default",
-            "install",
-            Some("browser@openai-bundled"),
-        ))
-        .expect("plugin install");
-    let removed = runtime
-        .block_on(runner.apply_plugin_operation(
-            "default",
-            "remove",
-            Some("browser@openai-bundled"),
-        ))
-        .expect("plugin remove");
-
-    assert_eq!(installed, json!({ "installed": true }));
-    assert_eq!(removed, json!({ "removed": true }));
-}
-
-#[cfg(unix)]
-#[test]
-fn running_codex_process_is_cancelled_when_the_project_pauses() {
+fn running_codex_process_uses_the_cancellation_handler_reason() {
     let workspace = std::env::temp_dir().join(format!(
         "relay-fake-codex-cancel-{}",
         uuid::Uuid::new_v4().simple()
@@ -621,7 +608,9 @@ fn running_codex_process_is_cancelled_when_the_project_pauses() {
             prompt: "work on project".into(),
             existing_thread_id: None,
             run_token: "art_test".into(),
+            session_kind: "project".into(),
             environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
             approval_handler: None,
             progress_handler: None,
             cancellation_handler: Some(Arc::new(AlwaysCancelHandler)),
@@ -631,7 +620,7 @@ fn running_codex_process_is_cancelled_when_the_project_pauses() {
     assert!(result
         .error_message
         .as_deref()
-        .is_some_and(|message| message.contains("project was paused")));
+        .is_some_and(|message| message.contains("Agent Trigger was paused")));
     std::fs::remove_dir_all(workspace).expect("cleanup");
 }
 
@@ -676,7 +665,9 @@ fn transient_reconnect_error_is_cleared_after_the_turn_completes() {
             prompt: "check Relay inbox".into(),
             existing_thread_id: None,
             run_token: "art_test".into(),
+            session_kind: "control".into(),
             environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
             approval_handler: None,
             progress_handler: None,
             cancellation_handler: None,
@@ -712,7 +703,7 @@ fn fake_codex_replaces_only_an_unresumable_thread() {
     let result = runtime
         .block_on(runner.run(CodexRunRequest {
             cwd: workspace.clone(),
-            codex_profile: "relay-test".into(),
+            codex_profile: "default".into(),
             model: Some("gpt-5.6-sol".into()),
             reasoning_effort: Some("high".into()),
             reasoning_summary: Some("auto".into()),
@@ -732,7 +723,9 @@ fn fake_codex_replaces_only_an_unresumable_thread() {
             prompt: "check Relay inbox".into(),
             existing_thread_id: Some("missing-thread".into()),
             run_token: "art_test".into(),
+            session_kind: "control".into(),
             environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
             approval_handler: None,
             progress_handler: None,
             cancellation_handler: None,
@@ -786,7 +779,9 @@ fn fake_codex_replaces_a_thread_after_terminal_stream_disconnect() {
             prompt: "continue project work".into(),
             existing_thread_id: Some("large-thread".into()),
             run_token: "art_test".into(),
+            session_kind: "project".into(),
             environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
             approval_handler: None,
             progress_handler: None,
             cancellation_handler: None,
@@ -857,7 +852,9 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-approval"
             prompt: "push the branch".into(),
             existing_thread_id: None,
             run_token: "art_test".into(),
+            session_kind: "project".into(),
             environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
             approval_handler: Some(handler.clone()),
             progress_handler: None,
             cancellation_handler: None,
@@ -867,5 +864,79 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-approval"
     assert_eq!(result.thread_id.as_deref(), Some("thread-approval"));
     assert_eq!(result.final_message.as_deref(), Some("push completed"));
     assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    std::fs::remove_dir_all(workspace).expect("cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn app_server_retries_once_when_it_exits_before_initialize() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-fake-app-server-retry-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let script = r#"marker="$PWD/app-server-started"
+if [ ! -f "$marker" ]; then
+  touch "$marker"
+  printf '%s\n' 'temporary app-server startup failure' >&2
+  exit 70
+fi
+IFS= read -r initialize
+printf '%s\n' '{"id":0,"result":{"userAgent":"fake","platformFamily":"unix","platformOs":"linux","codexHome":"/tmp"}}'
+IFS= read -r initialized
+IFS= read -r thread
+printf '%s\n' '{"id":1,"result":{"thread":{"id":"thread-retried"},"model":"fake","modelProvider":"fake","cwd":"/tmp","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite","writableRoots":[],"readOnlyAccess":{"type":"fullAccess"},"networkAccess":true,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false}}}'
+IFS= read -r turn
+printf '%s\n' '{"id":2,"result":{"turn":{"id":"turn-retried","items":[],"status":"inProgress"}}}'
+printf '%s\n' '{"method":"turn/started","params":{"threadId":"thread-retried","turn":{"id":"turn-retried","items":[],"status":"inProgress"}}}'
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-retried","turnId":"turn-retried","item":{"id":"message-1","type":"agentMessage","text":"startup recovered"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-retried","turn":{"id":"turn-retried","items":[{"id":"message-1","type":"agentMessage","text":"startup recovered"}],"status":"completed"}}}'"#;
+    let script_path = workspace.join("fake-app-server-retry.sh");
+    std::fs::write(&script_path, script).expect("fake app-server retry script");
+    let runner = CodexTriggerRunner::new(
+        PathBuf::from("/bin/sh"),
+        vec![script_path.to_string_lossy().into_owned()],
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    let result = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(runner.run(CodexRunRequest {
+            cwd: workspace.clone(),
+            codex_profile: "default".into(),
+            model: None,
+            reasoning_effort: None,
+            reasoning_summary: Some("auto".into()),
+            verbosity: None,
+            personality: None,
+            service_tier: None,
+            sandbox_mode: "workspace_write".into(),
+            approval_policy: "on-request".into(),
+            network_access: true,
+            web_search: "cached".into(),
+            feature_multi_agent: true,
+            feature_remote_plugin: true,
+            feature_hooks: true,
+            feature_goals: true,
+            feature_shell_tool: true,
+            max_run_seconds: 10,
+            prompt: "retry startup".into(),
+            existing_thread_id: Some("thread-existing".into()),
+            run_token: "art_test".into(),
+            session_kind: "project".into(),
+            environment: HashMap::new(),
+            managed_mcp_servers: Vec::new(),
+            approval_handler: Some(Arc::new(AcceptingApprovalHandler::default())),
+            progress_handler: None,
+            cancellation_handler: None,
+        }))
+        .expect("app-server startup retry");
+
+    assert_eq!(result.status, CodexRunStatus::Succeeded);
+    assert_eq!(result.thread_id.as_deref(), Some("thread-retried"));
+    assert_eq!(result.final_message.as_deref(), Some("startup recovered"));
+    assert!(result.resumed_existing_session);
     std::fs::remove_dir_all(workspace).expect("cleanup");
 }

@@ -125,7 +125,8 @@ impl GitWorkspaceManager {
         );
         let git_marker = worktree_path.join(".git");
         let agent_git_dir = worktree_path.join(AGENT_GIT_DIR_NAME);
-        if git_marker.exists() && agent_git_dir.exists() {
+        let managed_marker = managed_git_marker_matches(&git_marker)?;
+        if git_marker.exists() && agent_git_dir.exists() && !managed_marker {
             archive_legacy_git_marker(
                 &relay_root.join("legacy-gitlinks"),
                 &worktree_path,
@@ -137,7 +138,7 @@ impl GitWorkspaceManager {
         }
         let repository_environment =
             agent_repository_environment(&auth_environment, &worktree_path)?;
-        let branch = if git_marker.is_file() {
+        let branch = if git_marker.is_file() && !managed_marker {
             migrate_legacy_linked_worktree(
                 &relay_root,
                 &worktree_path,
@@ -186,6 +187,7 @@ impl GitWorkspaceManager {
             }
             inbox_branch
         };
+        ensure_managed_git_marker(&worktree_path)?;
 
         let worktree_key = format!("{project_id}/{agent_id}");
         drop(lock);
@@ -193,7 +195,7 @@ impl GitWorkspaceManager {
             path: worktree_path,
             worktree_key,
             branch,
-            auth_environment: repository_environment,
+            auth_environment,
         })
     }
 
@@ -209,7 +211,8 @@ impl GitWorkspaceManager {
         fs::create_dir_all(&path).map_err(file_error)?;
         let legacy_git_dir = path.join(".git");
         let agent_git_dir = path.join(AGENT_GIT_DIR_NAME);
-        if legacy_git_dir.exists() && agent_git_dir.exists() {
+        let managed_marker = managed_git_marker_matches(&legacy_git_dir)?;
+        if legacy_git_dir.exists() && agent_git_dir.exists() && !managed_marker {
             archive_legacy_git_marker(
                 &self.general_workspace_root.join("legacy-gitlinks"),
                 &path,
@@ -224,11 +227,12 @@ impl GitWorkspaceManager {
             fs::create_dir_all(&agent_git_dir).map_err(file_error)?;
             run_git(Some(&path), &repository_environment, ["init".into()])?;
         }
+        ensure_managed_git_marker(&path)?;
         Ok(PreparedGitWorkspace {
             worktree_key: format!("_inbox/{company_id}/{agent_id}"),
             path,
             branch: "inbox".into(),
-            auth_environment: repository_environment,
+            auth_environment: HashMap::new(),
         })
     }
 
@@ -255,6 +259,22 @@ impl GitWorkspaceManager {
                 ))
             })
     }
+}
+
+fn managed_git_marker_matches(marker_path: &Path) -> AppResult<bool> {
+    if !marker_path.is_file() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(marker_path).map_err(file_error)?;
+    Ok(content.trim() == format!("gitdir: {AGENT_GIT_DIR_NAME}"))
+}
+
+fn ensure_managed_git_marker(worktree_path: &Path) -> AppResult<()> {
+    fs::write(
+        worktree_path.join(".git"),
+        format!("gitdir: {AGENT_GIT_DIR_NAME}\n"),
+    )
+    .map_err(file_error)
 }
 
 pub fn is_git_authentication_error(error: &AppError) -> bool {

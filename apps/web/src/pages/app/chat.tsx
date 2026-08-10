@@ -4,7 +4,7 @@ import { MessagesView } from "../../components/MessagesView";
 import { Icon } from "../../components/ui";
 import type { HumanUser } from "../../types/appShell";
 import type { AgentToolApproval, CompanyConsole } from "../../types/platform";
-import { ApprovalsView } from "./memory-and-approvals";
+import { ApprovalsView, type ApprovalReviewDecision } from "./memory-and-approvals";
 
 export function ChatCenter(props: {
   consoleData: CompanyConsole;
@@ -12,7 +12,7 @@ export function ChatCenter(props: {
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
   approvals: AgentToolApproval[];
-  onReview: (approvalId: string, decision: "approve" | "reject", reviewNote: string) => Promise<void>;
+  onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;

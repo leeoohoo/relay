@@ -130,6 +130,7 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
         project_id: project.project.id,
         task_id: delivery.id,
         depends_on_task_id: foundation.id,
+        dependency_condition: None,
     })
     .expect("delivery should depend on foundation");
     app.add_company_project_task_dependency(ChangeCompanyProjectTaskDependencyInput {
@@ -138,6 +139,7 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
         project_id: project.project.id,
         task_id: launch.id,
         depends_on_task_id: delivery.id,
+        dependency_condition: None,
     })
     .expect("launch should depend on delivery");
     assert!(matches!(
@@ -147,6 +149,7 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
             project_id: project.project.id,
             task_id: delivery.id,
             depends_on_task_id: foundation.id,
+            dependency_condition: None,
         }),
         Err(AppError::Conflict(_))
     ));
@@ -157,6 +160,7 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
             project_id: project.project.id,
             task_id: foundation.id,
             depends_on_task_id: launch.id,
+            dependency_condition: None,
         }),
         Err(AppError::Validation(_))
     ));
@@ -209,6 +213,7 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
             project_id: project.project.id,
             task_id: delivery.id,
             depends_on_task_id: late_requirement.id,
+            dependency_condition: None,
         }),
         Err(AppError::Conflict(_))
     ));
@@ -284,12 +289,73 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
         PROJECT_TASK_PRIORITY_HIGH
     );
 
+    let review = app
+        .create_company_project_task(CreateCompanyProjectTaskInput {
+            actor_agent_id: manager.agent_profile.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            title: "独立评审".into(),
+            description: None,
+            priority: Some(PROJECT_TASK_PRIORITY_NORMAL.into()),
+            assignee_agent_id: Some(manager.agent_profile.id),
+            due_at: None,
+        })
+        .expect("review task");
+    let rework = app
+        .create_company_project_task(CreateCompanyProjectTaskInput {
+            actor_agent_id: manager.agent_profile.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            title: "评审拒绝后的返工".into(),
+            description: None,
+            priority: Some(PROJECT_TASK_PRIORITY_HIGH.into()),
+            assignee_agent_id: Some(engineer.agent_profile.id),
+            due_at: None,
+        })
+        .expect("rework task");
+    app.add_company_project_task_dependency(ChangeCompanyProjectTaskDependencyInput {
+        actor_agent_id: manager.agent_profile.id,
+        company_id: company.company.id,
+        project_id: project.project.id,
+        task_id: rework.id,
+        depends_on_task_id: review.id,
+        dependency_condition: Some(PROJECT_TASK_DEPENDENCY_COMPLETION.into()),
+    })
+    .expect("rework should wait for review completion even when rejected");
+    app.update_company_project_task(UpdateCompanyProjectTaskInput {
+        actor_agent_id: manager.agent_profile.id,
+        company_id: company.company.id,
+        project_id: project.project.id,
+        task_id: review.id,
+        title: None,
+        description: None,
+        status: Some(PROJECT_TASK_STATUS_FAILED.into()),
+        priority: None,
+        assignee_agent_id: None,
+        due_at: None,
+    })
+    .expect("review can record a rejected result");
+    app.update_company_project_task(UpdateCompanyProjectTaskInput {
+        actor_agent_id: engineer.agent_profile.id,
+        company_id: company.company.id,
+        project_id: project.project.id,
+        task_id: rework.id,
+        title: None,
+        description: None,
+        status: Some(PROJECT_TASK_STATUS_IN_PROGRESS.into()),
+        priority: None,
+        assignee_agent_id: None,
+        due_at: None,
+    })
+    .expect("failed review completion should unlock rework");
+
     app.remove_company_project_task_dependency(ChangeCompanyProjectTaskDependencyInput {
         actor_agent_id: manager.agent_profile.id,
         company_id: company.company.id,
         project_id: project.project.id,
         task_id: launch.id,
         depends_on_task_id: delivery.id,
+        dependency_condition: None,
     })
     .expect("dependency should be removable");
     let final_view = app
@@ -299,10 +365,15 @@ fn project_planning_supports_metadata_dependencies_and_atomic_batch_updates() {
             project_id: project.project.id,
         })
         .expect("project view should include dependency graph");
-    assert_eq!(final_view.task_dependencies.len(), 1);
-    assert_eq!(final_view.task_dependencies[0].task_id, delivery.id);
-    assert_eq!(
-        final_view.task_dependencies[0].depends_on_task_id,
-        foundation.id
-    );
+    assert!(final_view.task_dependencies.iter().any(|dependency| {
+        dependency.task_id == delivery.id && dependency.depends_on_task_id == foundation.id
+    }));
+    assert!(final_view.task_dependencies.iter().any(|dependency| {
+        dependency.task_id == rework.id
+            && dependency.depends_on_task_id == review.id
+            && dependency.dependency_condition == PROJECT_TASK_DEPENDENCY_COMPLETION
+    }));
+    assert!(!final_view.task_dependencies.iter().any(|dependency| {
+        dependency.task_id == launch.id && dependency.depends_on_task_id == delivery.id
+    }));
 }

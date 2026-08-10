@@ -34,6 +34,9 @@ export RELAY_HARNESS_CREDENTIALS_ROOT="${RELAY_HARNESS_CREDENTIALS_ROOT:-$ROOT_D
 export RELAY_MESSAGE_ATTACHMENTS_ROOT="${RELAY_MESSAGE_ATTACHMENTS_ROOT:-$ROOT_DIR/.relay/attachments}"
 export RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}"
 export RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}"
+export RELAY_CHROME_DEVTOOLS_MCP_ENABLED="${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}"
+export RELAY_CHROME_DEVTOOLS_MCP_IMAGE="${RELAY_CHROME_DEVTOOLS_MCP_IMAGE:-relay/chrome-devtools-mcp:1.6.0}"
+export RELAY_CHROME_PROFILE_ROOT="${RELAY_CHROME_PROFILE_ROOT:-$AGENT_TRIGGER_STATE_ROOT/browser-profiles}"
 
 relay_prepare_managed_directories \
   "$RUNTIME_DIR" \
@@ -137,6 +140,11 @@ start_trigger() {
     "AGENT_TRIGGER_STATE_ROOT=$AGENT_TRIGGER_STATE_ROOT"
     "AGENT_TRIGGER_GIT_CREDENTIALS_ROOT=$AGENT_TRIGGER_STATE_ROOT/git-credentials"
     "AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT=${AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-200000}"
+    "RELAY_CHROME_DEVTOOLS_MCP_ENABLED=$RELAY_CHROME_DEVTOOLS_MCP_ENABLED"
+    "RELAY_CHROME_DEVTOOLS_MCP_IMAGE=$RELAY_CHROME_DEVTOOLS_MCP_IMAGE"
+    "RELAY_CHROME_PROFILE_ROOT=$RELAY_CHROME_PROFILE_ROOT"
+    "RELAY_HOST_UID=$RELAY_HOST_UID"
+    "RELAY_HOST_GID=$RELAY_HOST_GID"
     "AGENT_TRIGGER_RUN_ONCE=false"
     "HARNESS_MODE=$HARNESS_MODE"
     "HARNESS_BASE_URL=$trigger_harness_base_url"
@@ -210,6 +218,10 @@ case "$MODE" in
   up|restart)
     start_all
     ;;
+  trigger-restart)
+    start_trigger
+    print_status
+    ;;
   down)
     stop_trigger
     bash "$ROOT_DIR/scripts/start_docker.sh" down --harness "$HARNESS_MODE"
@@ -223,7 +235,7 @@ case "$MODE" in
     bash "$ROOT_DIR/scripts/start_docker.sh" logs --harness "$HARNESS_MODE"
     ;;
   *)
-    echo "Usage: $0 [up|restart|down|status|logs]" >&2
+    echo "Usage: $0 [up|restart|trigger-restart|down|status|logs]" >&2
     exit 1
     ;;
 esac

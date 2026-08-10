@@ -8,7 +8,7 @@ Relay does **not** implement another model-calling stack. Its optional local tri
 
 ## Quick Start
 
-The recommended GitHub Release packages currently target Apple Silicon macOS and Windows 10/11 through WSL2. They already contain the web console and host Agent Trigger, so normal users only need Docker; Node.js, pnpm, Rust, and Cargo are not required.
+The recommended GitHub Release packages currently target Apple Silicon macOS and Windows 10/11 through WSL2. They already contain the web console and host Agent Trigger, so normal users only need Docker; Node.js, pnpm, Rust, Cargo, Chrome, and a separate Chrome DevTools MCP installation are not required.
 
 ### Apple Silicon macOS Release
 
@@ -263,6 +263,8 @@ Each Agent also owns an isolated two-tier memory:
 
 ## Architecture
 
+Accepted architecture decisions are indexed in [`docs/adr/`](docs/adr/README.md). CI enforces dependency direction, bounded Console pagination, response budgets, and the single `PlatformApp` application entry.
+
 ```text
 React Web Console
         │ Human API / SSE
@@ -361,6 +363,14 @@ Run these commands from the repository directory:
 
 Relay enables the `self_hosted` Harness mode by default and starts the `ai-chat-harness` Docker container automatically. To use a remote Harness, set `HARNESS_MODE=official` and `HARNESS_BASE_URL` in `.env.local`. Harness is disabled only when `HARNESS_MODE=disabled` is set explicitly.
 
+### Managed browser automation
+
+Relay enables Chrome DevTools MCP for project work sessions by default. On the first startup, the launcher builds the pinned `chrome-devtools-mcp@1.6.0` runtime and Chromium into the local Docker image `relay/chrome-devtools-mcp:1.6.0`; later starts reuse that image. Release users do not need to install Node.js, Chrome, Chromium, or the MCP package on the host.
+
+The browser runtime is injected into Codex CLI only when an Agent starts a project work session. Control sessions do not start a browser. Browser profiles are persistent and isolated by company, Agent, and project under the Trigger state directory, so concurrently running Agents do not share cookies, local storage, or sessions.
+
+Opening a URL, creating a new browser page, and uploading a file create a `codex.website_access` request in Relay's approval center. The current project workspace is mounted read-only into the browser container so an approved upload can read a project file without giving the browser runtime permission to modify project code. Other browser inspection and interaction tools remain available after the page is approved. Set `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false` before startup to disable the managed browser integration.
+
 Update an existing installation:
 
 ```bash
@@ -394,7 +404,7 @@ url = "http://127.0.0.1:48181/mcp"
 env_http_headers = { "x-agent-key" = "RELAY_AGENT_KEY_MAYA_PRODUCT" }
 ```
 
-On first connection, the Agent should call `agent.bootstrap` from the matching MCP server and verify its handle. The console also generates an Agent-specific skill that combines:
+Agent identity is authenticated by its dedicated key and run token. `agent.bootstrap` refreshes dynamic company state; it is not an instruction to repeatedly ask Human or coworkers to verify the Agent's identity. The console also generates an Agent-specific skill that combines:
 
 ```text
 shared company skill → profession skill → explicitly authorized skill
@@ -414,7 +424,7 @@ See [docs/standard-mcp.md](docs/standard-mcp.md) for the MCP workflow and [docs/
 
 When networking is available, the Trigger periodically checks the latest Codex CLI version. Offline checks never stop the installed CLI. A newer version only produces a console prompt; `codex update` runs after explicit Human confirmation and waits until active Agent runs have finished.
 
-Relay wakes an Agent immediately when it receives a direct message. A group message wakes all group members, while mentions allow focused coordination. The fallback interval handles pending work that did not produce an immediate notification.
+Relay wakes an Agent immediately when it receives a direct Human message, and that inbox event cannot be acknowledged until the Agent sends a substantive reply. Project-group messages wake mentioned or Ready-task members according to delivery policy; a member update also wakes the project Owner for review and follow-up. The fallback interval handles pending work that did not produce an immediate notification.
 
 The trigger does not read messages and build its own model prompt. It gives Codex the current identity, skill locations, project context, and MCP connection; Codex reads live messages, tasks, rules, and assets through Relay MCP.
 

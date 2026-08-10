@@ -1,11 +1,13 @@
 use super::tools::*;
 use super::*;
 use ai_chat_application::{
-    CreateCompanyAgentInput, CreateCompanyInput, DevLoginInput, MemoryPlatformRepository,
+    CreateCompanyAgentInput, CreateCompanyInput, CreateCompanyProjectForHumanInput, DevLoginInput,
+    MemoryPlatformRepository,
 };
 use ai_chat_domain::company::{
     COMPANY_AGENT_ROLE_MANAGER, COMPANY_AGENT_ROLE_MEMBER,
     COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE, COMPANY_PERMISSION_PROJECT_RULES_MANAGE,
+    PROJECT_TYPE_SOURCE_HUMAN,
 };
 
 #[test]
@@ -29,6 +31,43 @@ fn standard_surface_has_six_identity_memory_session_and_inbox_tools() {
             .and_then(Value::as_str)
             .is_some_and(|value| value == "object")
     }));
+}
+
+#[test]
+fn memory_source_refs_accept_git_commit_ids_and_describe_identifier_rules() {
+    let commit_sha = "7ed28bec6af9d8cbd8b438f371bd70299a0c4858";
+    let input: AgentMemoryToolInput = handler::parse_input(json!({
+        "action": "remember",
+        "company_id": Uuid::new_v4(),
+        "project_id": Uuid::new_v4(),
+        "scope": "project",
+        "memory_tier": "long_term",
+        "memory_type": "handoff",
+        "topic_key": "qa-rerun-result",
+        "title": "QA rerun result",
+        "summary": "The focused QA rerun found a release-blocking Web runtime failure.",
+        "source_refs": [{
+            "source_type": "git_commit",
+            "source_id": commit_sha,
+            "label": "QA evidence commit"
+        }]
+    }))
+    .expect("a Git commit source reference should parse");
+
+    let AgentMemoryOperation::Remember { source_refs, .. } = input.operation else {
+        panic!("remember input should select the remember operation");
+    };
+    assert_eq!(source_refs.len(), 1);
+    assert_eq!(source_refs[0].source_id, commit_sha);
+
+    let memory_tool = standard_mcp_tools()
+        .into_iter()
+        .find(|tool| tool.name.as_ref() == "agent.memory")
+        .expect("memory tool should exist");
+    let schema =
+        serde_json::to_string(&memory_tool.input_schema).expect("memory schema should serialize");
+    assert!(schema.contains("git_commit"));
+    assert!(schema.contains("Do not concatenate labels or prefixes"));
 }
 
 #[test]
@@ -101,6 +140,29 @@ fn staffing_tools_are_only_added_for_explicit_permissions() {
 }
 
 #[test]
+fn staffing_profession_keys_accept_common_aliases_and_expose_full_catalog() {
+    let engineering: CompanyProfessionKeyInput = serde_json::from_str("\"engineering_manager\"")
+        .expect("engineering_manager should map to technical_manager");
+    assert_eq!(engineering.as_str(), "technical_manager");
+    let quality: CompanyProfessionKeyInput = serde_json::from_str("\"quality_assurance\"")
+        .expect("quality_assurance should map to qa_engineer");
+    assert_eq!(quality.as_str(), "qa_engineer");
+
+    let schema = schemars::schema_for!(CompanyProfessionKeyInput);
+    let serialized = serde_json::to_string(&schema).expect("profession schema should serialize");
+    for key in [
+        "technical_manager",
+        "qa_engineer",
+        "game_engineer",
+        "database_engineer",
+        "erp_consultant",
+        "wms_consultant",
+    ] {
+        assert!(serialized.contains(key), "schema should expose {key}");
+    }
+}
+
+#[test]
 fn active_company_agents_receive_four_company_domain_tools() {
     let tools = company_mcp_tools(&[]);
     let names = tools
@@ -112,6 +174,107 @@ fn active_company_agents_receive_four_company_domain_tools() {
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));
     assert!(names.contains(&"company.events"));
+}
+
+#[test]
+fn repeated_work_session_dispatch_returns_the_existing_intent() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "mcp-work-session-dedup@example.com".into(),
+            display_name: "MCP Work Session Dedup".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "MCP Work Session Company".into(),
+            slug: Some("mcp-work-session-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let manager = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "MCP Work Session Manager".into(),
+            handle: "mcp-work-session-manager".into(),
+            persona: "负责派发工作".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("manager should be created");
+    let project = app
+        .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            owner_agent_id: manager.agent_profile.id,
+            name: "MCP Work Session Project".into(),
+            description: Some("验证重复派发".into()),
+            member_agent_ids: Vec::new(),
+            project_type: Some("web_application".into()),
+            project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: Some(100),
+            project_type_evidence: Vec::new(),
+            project_id: None,
+        })
+        .expect("project should be created");
+    let gateway = McpGateway::new(app, None);
+    let request = json!({
+        "action": "dispatch",
+        "company_id": company.company.id,
+        "project_id": project.project.id,
+        "objective": "完成同一个真实目标",
+        "acceptance_criteria": ["有可验证结果"],
+        "priority": "high",
+        "dedupe_key": "mcp-same-logical-work"
+    });
+
+    let first = gateway
+        .invoke(
+            Some(&manager.agent_key_plaintext),
+            "agent.work_session",
+            request.clone(),
+        )
+        .expect("first dispatch should succeed");
+    let repeated = gateway
+        .invoke(
+            Some(&manager.agent_key_plaintext),
+            "agent.work_session",
+            request,
+        )
+        .expect("repeated dispatch should return existing work");
+
+    assert_eq!(first.output["deduplicated"], false);
+    assert_eq!(repeated.output["deduplicated"], true);
+    assert_eq!(
+        first.output["intent"]["id"],
+        repeated.output["intent"]["id"]
+    );
+
+    let replacement = gateway
+        .invoke(
+            Some(&manager.agent_key_plaintext),
+            "agent.work_session",
+            json!({
+                "action": "dispatch",
+                "company_id": company.company.id,
+                "project_id": project.project.id,
+                "objective": "从 checkpoint 建立新的工作会话代次",
+                "acceptance_criteria": ["不复用旧 Codex thread"],
+                "priority": "high",
+                "dedupe_key": "mcp-replace-work-session",
+                "replace_session": true
+            }),
+        )
+        .expect("replacement dispatch should succeed");
+    assert_eq!(replacement.output["replacement_requested"], true);
+    assert_eq!(
+        replacement.output["intent"]["action_type"],
+        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION
+    );
 }
 
 #[test]
@@ -190,12 +353,25 @@ fn every_tool_result_surfaces_pending_message_notice_until_acknowledged() {
         "company.project",
         engineer.agent_profile.id,
         json!({ "projects": [] }),
+        true,
     );
     let serialized = serde_json::to_value(result).expect("tool result should serialize");
     assert_eq!(
         serialized["structuredContent"]["inbox_notice"]["attention_required"],
         true
     );
+
+    let worker_result = handler.structured_success(
+        "company.project",
+        engineer.agent_profile.id,
+        json!({ "projects": [] }),
+        false,
+    );
+    let worker_serialized =
+        serde_json::to_value(worker_result).expect("worker tool result should serialize");
+    assert!(worker_serialized["structuredContent"]
+        .get("inbox_notice")
+        .is_none());
 
     let event_id = app
         .list_agent_inbox_events(engineer.agent_profile.id, true, 10)
@@ -214,6 +390,19 @@ fn every_tool_result_surfaces_pending_message_notice_until_acknowledged() {
     assert!(handler
         .pending_message_notice(engineer.agent_profile.id)
         .is_none());
+}
+
+#[test]
+fn relay_session_kind_header_is_parsed_for_trigger_requests() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-relay-session-kind",
+        "project".parse().expect("valid header"),
+    );
+    assert_eq!(
+        handler::relay_session_kind_from_headers(&headers).as_deref(),
+        Some("project")
+    );
 }
 
 #[test]
@@ -425,6 +614,7 @@ fn assigned_agent_can_read_tasks_through_get_list_and_my_actions() {
         project_id: project.project.id,
         task_id: task.id,
         depends_on_task_id: prerequisite.id,
+        dependency_condition: None,
     })
     .expect("task dependency should be created");
     let gateway = McpGateway::new(app.clone(), None);

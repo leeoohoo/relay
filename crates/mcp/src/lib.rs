@@ -17,12 +17,13 @@ use ai_chat_application::{
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
     company_profession_by_key, infer_company_profession, AgentExecutionIntent,
-    AgentMemorySourceRef, AGENT_EXECUTION_INTENT_ACTION_EXECUTE,
-    AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_MEMORY_STATUS_ARCHIVED,
-    AGENT_MEMORY_STATUS_SUPERSEDED, COMPANY_PERMISSION_PROJECT_CREATE,
-    COMPANY_PERMISSION_PROJECT_MANAGE, COMPANY_PERMISSION_STAFF_HIRE,
-    COMPANY_PERMISSION_STAFF_SUSPEND, COMPANY_PERMISSION_STAFF_TERMINATE,
-    COMPANY_PERMISSION_TASK_ASSIGN, COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
+    AgentMemorySourceRef, AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_EXECUTION_INTENT_ACTION_EXECUTE,
+    AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_PENDING,
+    AGENT_MEMORY_STATUS_ARCHIVED, AGENT_MEMORY_STATUS_SUPERSEDED,
+    COMPANY_PERMISSION_PROJECT_CREATE, COMPANY_PERMISSION_PROJECT_MANAGE,
+    COMPANY_PERMISSION_STAFF_HIRE, COMPANY_PERMISSION_STAFF_SUSPEND,
+    COMPANY_PERMISSION_STAFF_TERMINATE, COMPANY_PERMISSION_TASK_ASSIGN,
+    COMPANY_PERMISSION_TASK_UPDATE, PROJECT_STATUS_PAUSED,
 };
 use ai_chat_infrastructure::project_git::{
     ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
@@ -203,8 +204,14 @@ enum AgentMemoryOperation {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct AgentMemorySourceRefToolInput {
+    #[schemars(
+        description = "Source kind. Internal Relay objects use message, task, run, project, or human; Git evidence uses git_commit; manual is reserved for a stable caller-defined reference."
+    )]
     source_type: String,
-    source_id: Uuid,
+    #[schemars(
+        description = "Stable source identifier. Use a canonical Relay UUID for message/task/run/project/human, a 7-64 character hexadecimal Git object ID for git_commit, or a non-empty caller-defined identifier for manual. Do not concatenate labels or prefixes with a Relay UUID."
+    )]
+    source_id: String,
     label: Option<String>,
 }
 
@@ -222,7 +229,9 @@ impl From<AgentMemorySourceRefToolInput> for AgentMemorySourceRef {
 struct AgentWorkSessionToolInput {
     #[serde(flatten)]
     operation: AgentWorkSessionOperation,
-    #[schemars(description = "Optional retry key for dispatch operations.")]
+    #[schemars(
+        description = "Optional retry key for dispatch operations. Reusing it with the same request returns the existing Intent instead of creating duplicate work."
+    )]
     idempotency_key: Option<String>,
 }
 
@@ -250,7 +259,15 @@ enum AgentWorkSessionOperation {
         #[serde(default)]
         acceptance_criteria: Vec<String>,
         priority: Option<String>,
+        #[schemars(
+            description = "Stable logical-work key. Repeating the same dispatch returns the existing Intent; use a new key when the objective, project, tasks, acceptance criteria, or priority changes."
+        )]
         dedupe_key: Option<String>,
+        #[serde(default)]
+        #[schemars(
+            description = "Create a new generation for this project's worker session instead of resuming the active Codex thread. Use only when the existing session has stale permissions or unrecoverable internal state; Relay preserves the project, branch, tasks, and latest checkpoint summary."
+        )]
+        replace_session: bool,
     },
 }
 
@@ -497,6 +514,10 @@ enum CompanyTaskOperation {
         project_id: Uuid,
         task_id: Uuid,
         depends_on_task_id: Uuid,
+        #[schemars(
+            description = "Dependency condition: success (default), completion (including failed/rejected review), or failure."
+        )]
+        dependency_condition: Option<String>,
     },
     DependencyRemove {
         company_id: Uuid,
@@ -728,6 +749,7 @@ struct CompanyProjectTaskDependencyToolInput {
     project_id: Uuid,
     task_id: Uuid,
     depends_on_task_id: Uuid,
+    dependency_condition: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -768,22 +790,46 @@ struct CompanyStaffHireToolInput {
 enum CompanyProfessionKeyInput {
     ProjectManager,
     ProductManager,
+    #[serde(
+        alias = "engineering_manager",
+        alias = "tech_lead",
+        alias = "technical_lead"
+    )]
     TechnicalManager,
     SolutionArchitect,
+    SecurityEngineer,
     SoftwareEngineer,
+    FullstackEngineer,
     FrontendEngineer,
     BackendEngineer,
     MobileEngineer,
+    DesktopEngineer,
+    GameEngineer,
+    EmbeddedIotEngineer,
+    DatabaseEngineer,
     DataEngineer,
+    DataAnalyst,
+    MachineLearningEngineer,
+    ResearchSpecialist,
     DevopsEngineer,
+    #[serde(
+        alias = "quality_assurance",
+        alias = "quality_engineer",
+        alias = "test_engineer"
+    )]
     QaEngineer,
     ProductDesigner,
     UiDesigner,
     UxDesigner,
+    GameDesigner,
+    TechnicalWriter,
     BusinessAnalyst,
     ImplementationConsultant,
+    ErpConsultant,
+    WmsConsultant,
     DomainExpert,
     OperationsSpecialist,
+    GrowthMarketingSpecialist,
     GeneralMember,
 }
 
@@ -794,20 +840,34 @@ impl CompanyProfessionKeyInput {
             Self::ProductManager => "product_manager",
             Self::TechnicalManager => "technical_manager",
             Self::SolutionArchitect => "solution_architect",
+            Self::SecurityEngineer => "security_engineer",
             Self::SoftwareEngineer => "software_engineer",
+            Self::FullstackEngineer => "fullstack_engineer",
             Self::FrontendEngineer => "frontend_engineer",
             Self::BackendEngineer => "backend_engineer",
             Self::MobileEngineer => "mobile_engineer",
+            Self::DesktopEngineer => "desktop_engineer",
+            Self::GameEngineer => "game_engineer",
+            Self::EmbeddedIotEngineer => "embedded_iot_engineer",
+            Self::DatabaseEngineer => "database_engineer",
             Self::DataEngineer => "data_engineer",
+            Self::DataAnalyst => "data_analyst",
+            Self::MachineLearningEngineer => "machine_learning_engineer",
+            Self::ResearchSpecialist => "research_specialist",
             Self::DevopsEngineer => "devops_engineer",
             Self::QaEngineer => "qa_engineer",
             Self::ProductDesigner => "product_designer",
             Self::UiDesigner => "ui_designer",
             Self::UxDesigner => "ux_designer",
+            Self::GameDesigner => "game_designer",
+            Self::TechnicalWriter => "technical_writer",
             Self::BusinessAnalyst => "business_analyst",
             Self::ImplementationConsultant => "implementation_consultant",
+            Self::ErpConsultant => "erp_consultant",
+            Self::WmsConsultant => "wms_consultant",
             Self::DomainExpert => "domain_expert",
             Self::OperationsSpecialist => "operations_specialist",
+            Self::GrowthMarketingSpecialist => "growth_marketing_specialist",
             Self::GeneralMember => "general_member",
         }
     }

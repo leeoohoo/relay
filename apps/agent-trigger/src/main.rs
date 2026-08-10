@@ -4,7 +4,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration as StdDuration,
 };
 
@@ -25,13 +25,16 @@ use ai_chat_domain::{
         company_profession_by_key, company_project_type_by_key, infer_company_profession,
         AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
         AgentExecutionIntent, AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation,
-        CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_POLICY_NEVER,
-        AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
-        AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
-        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
-        AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
-        AGENT_CODEX_SESSION_STATUS_ACTIVE, AGENT_CODEX_SESSION_STATUS_ARCHIVED,
-        AGENT_CODEX_SETTING_INHERIT, AGENT_EXECUTION_INTENT_STATUS_COMPLETED,
+        CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY,
+        AGENT_CODEX_APPROVAL_POLICY_NEVER, AGENT_CODEX_APPROVAL_SCOPE_KEY,
+        AGENT_CODEX_APPROVAL_TARGET_KEY, AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS, AGENT_CODEX_RUN_STATUS_CANCELLED,
+        AGENT_CODEX_RUN_STATUS_FAILED, AGENT_CODEX_RUN_STATUS_RUNNING,
+        AGENT_CODEX_RUN_STATUS_SUCCEEDED, AGENT_CODEX_RUN_STATUS_TIMED_OUT,
+        AGENT_CODEX_SANDBOX_READ_ONLY, AGENT_CODEX_SESSION_KIND_CONTROL,
+        AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
+        AGENT_CODEX_SESSION_STATUS_ARCHIVED, AGENT_CODEX_SETTING_INHERIT,
+        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_COMPLETED,
         AGENT_EXECUTION_INTENT_STATUS_FAILED, AGENT_EXECUTION_INTENT_STATUS_PENDING,
         AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
         AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXPIRED,
@@ -98,6 +101,7 @@ struct TriggerServiceConfig {
 struct TriggerExecution {
     succeeded: bool,
     error_message: Option<String>,
+    retry_after_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +139,10 @@ struct PlatformCodexApprovalHandler {
     company_id: Uuid,
     run_id: Uuid,
     agent_id: Uuid,
+    project_id: Option<Uuid>,
     expires_at: chrono::DateTime<chrono::Utc>,
+    general_approval_required: bool,
+    session_website_grants: Arc<Mutex<HashSet<(String, String)>>>,
 }
 
 #[derive(Clone)]
@@ -145,24 +152,51 @@ struct PlatformCodexProgressHandler {
 }
 
 #[derive(Clone)]
-struct PlatformProjectCancellationHandler {
+struct PlatformRunCancellationHandler {
     platform: TriggerPlatform,
-    project_id: Uuid,
+    agent_id: Uuid,
+    project_id: Option<Uuid>,
 }
 
-impl CodexCancellationHandler for PlatformProjectCancellationHandler {
+impl CodexCancellationHandler for PlatformRunCancellationHandler {
     fn should_cancel(&self) -> bool {
-        match self.platform.is_company_project_paused(self.project_id) {
+        match self.platform.is_agent_codex_trigger_active(self.agent_id) {
+            Ok(false) => return true,
+            Ok(true) => {}
+            Err(error) => {
+                tracing::error!(
+                    agent_id = %self.agent_id,
+                    error = %error,
+                    "failed to read Agent Trigger state; cancelling the Codex run defensively"
+                );
+                return true;
+            }
+        }
+        let Some(project_id) = self.project_id else {
+            return false;
+        };
+        match self.platform.is_company_project_paused(project_id) {
             Ok(paused) => paused,
             Err(error) => {
                 tracing::error!(
-                    project_id = %self.project_id,
+                    project_id = %project_id,
                     error = %error,
                     "failed to read project pause state; cancelling the Codex run defensively"
                 );
                 true
             }
         }
+    }
+
+    fn cancellation_reason(&self) -> String {
+        if self
+            .platform
+            .is_agent_codex_trigger_active(self.agent_id)
+            .is_ok_and(|active| !active)
+        {
+            return "Codex run cancelled because the Agent Trigger was paused by Human".into();
+        }
+        "Codex run cancelled because the project was paused".into()
     }
 }
 
@@ -190,8 +224,98 @@ impl CodexProgressHandler for PlatformCodexProgressHandler {
 impl CodexApprovalHandler for PlatformCodexApprovalHandler {
     async fn request_approval(
         &self,
-        request: CodexApprovalRequest,
+        mut request: CodexApprovalRequest,
     ) -> AppResult<CodexApprovalDecision> {
+        if let Some(decision) =
+            automatic_codex_approval_decision(&request.tool_name, self.general_approval_required)
+        {
+            return Ok(decision);
+        }
+        let website_grant = website_approval_grant_key(
+            &mut request.arguments,
+            &request.tool_name,
+            self.agent_id,
+            self.project_id,
+        );
+        if let Some((approval_scope, approval_target)) = website_grant.as_ref() {
+            if session_website_grant_allowed(
+                &self.session_website_grants,
+                approval_scope,
+                approval_target,
+            ) {
+                record_run_activity(
+                    &self.platform,
+                    self.run_id,
+                    "running",
+                    &format!("已按本次会话的网站授权访问 {approval_target}"),
+                    None,
+                );
+                return Ok(CodexApprovalDecision::Accept);
+            }
+            if self.platform.has_codex_always_allow_approval(
+                self.company_id,
+                self.agent_id,
+                &request.tool_name,
+                approval_scope,
+                approval_target,
+            )? {
+                record_run_activity(
+                    &self.platform,
+                    self.run_id,
+                    "running",
+                    &format!("已按始终允许规则访问 {approval_target}"),
+                    None,
+                );
+                return Ok(CodexApprovalDecision::Accept);
+            }
+            if let Some(local_target) = request
+                .arguments
+                .get(AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY)
+                .and_then(serde_json::Value::as_str)
+            {
+                if self.platform.has_codex_always_allow_approval(
+                    self.company_id,
+                    self.agent_id,
+                    &request.tool_name,
+                    approval_scope,
+                    local_target,
+                )? {
+                    record_run_activity(
+                        &self.platform,
+                        self.run_id,
+                        "running",
+                        &format!("已按本地预览端口授权访问 {approval_target}"),
+                        None,
+                    );
+                    return Ok(CodexApprovalDecision::Accept);
+                }
+            }
+        }
+        let approval =
+            match self
+                .platform
+                .create_codex_approval_request(CreateCodexApprovalRequestInput {
+                    company_id: self.company_id,
+                    codex_trigger_run_id: self.run_id,
+                    requested_by_agent_id: self.agent_id,
+                    tool_name: request.tool_name,
+                    risk_level: request.risk_level,
+                    reason: request.reason.clone(),
+                    arguments: request.arguments,
+                    expires_at: self.expires_at,
+                }) {
+                Ok(approval) => approval,
+                Err(error) => {
+                    record_run_activity(
+                        &self.platform,
+                        self.run_id,
+                        "approval_delivery_failed",
+                        "审批请求未能送达 Human，当前操作已停止，可重新唤醒后重试",
+                        None,
+                    );
+                    return Err(error);
+                }
+            };
         record_run_activity(
             &self.platform,
             self.run_id,
@@ -199,24 +323,15 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
             &format!("等待 Human 审批：{}", request.reason),
             None,
         );
-        let approval =
-            self.platform
-                .create_codex_approval_request(CreateCodexApprovalRequestInput {
-                    company_id: self.company_id,
-                    codex_trigger_run_id: self.run_id,
-                    requested_by_agent_id: self.agent_id,
-                    tool_name: request.tool_name,
-                    risk_level: request.risk_level,
-                    reason: request.reason,
-                    arguments: request.arguments,
-                    expires_at: self.expires_at,
-                })?;
         loop {
             let current = self
                 .platform
                 .get_codex_approval_request_for_runner(approval.id, self.run_id)?;
             match current.status.as_str() {
                 AGENT_TOOL_APPROVAL_STATUS_APPROVED | AGENT_TOOL_APPROVAL_STATUS_EXECUTED => {
+                    if let Some(grant) = website_grant.as_ref() {
+                        remember_session_website_grant(&self.session_website_grants, grant);
+                    }
                     record_run_activity(
                         &self.platform,
                         self.run_id,
@@ -247,6 +362,90 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
             }
         }
     }
+}
+
+fn website_approval_grant_key(
+    arguments: &mut serde_json::Value,
+    tool_name: &str,
+    agent_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Option<(String, String)> {
+    if tool_name != AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS {
+        return None;
+    }
+    let url = arguments.get("url").and_then(serde_json::Value::as_str)?;
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let approval_target = parsed.origin().ascii_serialization();
+    let approval_scope = project_id
+        .map(|project_id| format!("project:{project_id}"))
+        .unwrap_or_else(|| format!("agent:{agent_id}:control"));
+    let object = arguments.as_object_mut()?;
+    object.insert(
+        AGENT_CODEX_APPROVAL_SCOPE_KEY.into(),
+        serde_json::Value::String(approval_scope.clone()),
+    );
+    object.insert(
+        AGENT_CODEX_APPROVAL_TARGET_KEY.into(),
+        serde_json::Value::String(approval_target.clone()),
+    );
+    if let Some(local_target) = localhost_approval_target(&parsed) {
+        object.insert(
+            AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY.into(),
+            serde_json::Value::String(local_target),
+        );
+    }
+    Some((approval_scope, approval_target))
+}
+
+fn session_website_grant_allowed(
+    grants: &Mutex<HashSet<(String, String)>>,
+    approval_scope: &str,
+    approval_target: &str,
+) -> bool {
+    grants
+        .lock()
+        .expect("session website grants")
+        .contains(&(approval_scope.to_string(), approval_target.to_string()))
+}
+
+fn remember_session_website_grant(
+    grants: &Mutex<HashSet<(String, String)>>,
+    grant: &(String, String),
+) {
+    grants
+        .lock()
+        .expect("session website grants")
+        .insert(grant.clone());
+}
+
+fn localhost_approval_target(parsed: &reqwest::Url) -> Option<String> {
+    let host = parsed
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    let port = parsed.port()?;
+    (is_loopback && port >= 1_024).then(|| format!("{}://localhost:*", parsed.scheme()))
+}
+
+fn automatic_codex_approval_decision(
+    tool_name: &str,
+    general_approval_required: bool,
+) -> Option<CodexApprovalDecision> {
+    if general_approval_required || tool_name == AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS {
+        return None;
+    }
+    Some(if tool_name == AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS {
+        CodexApprovalDecision::Decline
+    } else {
+        CodexApprovalDecision::Accept
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -607,10 +806,12 @@ impl TriggerServiceConfig {
 
 mod codex_control;
 mod execution;
+mod execution_result;
 mod relay_skills;
 
 use codex_control::*;
 use execution::*;
+use execution_result::*;
 use relay_skills::*;
 
 #[cfg(test)]

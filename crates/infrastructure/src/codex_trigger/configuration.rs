@@ -40,6 +40,20 @@ impl CodexTriggerRunner {
             .expect("managed profile home has a parent")
             .to_path_buf();
         runner.managed_cli_home = control_store.managed_cli_home();
+        let runtime_state_root = std::env::var("AGENT_TRIGGER_STATE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(".relay-agent-trigger"));
+        runner.runtime_temp_root = if runtime_state_root.is_absolute() {
+            runtime_state_root.join("runtime-tmp")
+        } else {
+            std::env::current_dir()
+                .map_err(|error| {
+                    AppError::Internal(format!("cannot resolve Trigger state root: {error}"))
+                })?
+                .join(runtime_state_root)
+                .join("runtime-tmp")
+        };
+        runner.browser_mcp = BrowserMcpConfig::from_env()?;
         let allowlist = std::env::var("AGENT_TRIGGER_CODEX_ENV_ALLOWLIST")
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -108,6 +122,11 @@ impl CodexTriggerRunner {
             managed_cli_home: PathBuf::from(".relay-agent-trigger")
                 .join("codex-cli")
                 .join("home"),
+            runtime_temp_root: std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(".relay-agent-trigger")
+                .join("runtime-tmp"),
+            browser_mcp: BrowserMcpConfig::disabled(),
         })
     }
 
@@ -358,6 +377,10 @@ impl CodexTriggerRunner {
             .into_iter()
             .filter_map(|entry| safe_mcp_server_view(entry, &configured_names))
             .collect::<Vec<_>>();
+        if let Some(managed_browser) = self.managed_browser_mcp_view().await {
+            servers.retain(|server| server.name != MANAGED_BROWSER_MCP_NAME);
+            servers.push(managed_browser);
+        }
         servers.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(servers)
     }
@@ -534,19 +557,22 @@ impl CodexTriggerRunner {
                 30,
             )
             .await?;
+        let installed = plugins
+            .get("installed")
+            .map(filter_relay_supported_codex_plugin_items)
+            .unwrap_or_else(|| json!([]));
+        let available = plugins
+            .get("available")
+            .map(filter_relay_supported_codex_plugin_items)
+            .unwrap_or_else(|| json!([]));
+        let marketplaces = marketplaces
+            .get("marketplaces")
+            .map(|items| filter_relay_supported_codex_marketplaces(items, &installed, &available))
+            .unwrap_or_else(|| json!([]));
         Ok(CodexPluginCatalogDiscovery {
-            installed: plugins
-                .get("installed")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-            available: plugins
-                .get("available")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-            marketplaces: marketplaces
-                .get("marketplaces")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
+            installed,
+            available,
+            marketplaces,
         })
     }
 
@@ -564,6 +590,12 @@ impl CodexTriggerRunner {
                     AppError::Validation("plugin_id is required for this operation".into())
                 })?;
                 validate_plugin_id(plugin_id)?;
+                if operation == "install" && !is_relay_supported_codex_plugin_id(plugin_id) {
+                    return Err(AppError::Validation(
+                        "this plugin requires a Codex app-only host capability or bundled runtime and is not available to Relay's Codex CLI runners"
+                            .into(),
+                    ));
+                }
                 let cli_operation = plugin_cli_operation(operation)?;
                 self.run_plugin_json(
                     target_selector,

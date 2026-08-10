@@ -49,6 +49,17 @@ pub trait CompanyPlatformRepository: Send + Sync {
     fn list_company_agent_memberships(&self, _company_id: Uuid) -> Vec<CompanyAgentMembership> {
         Vec::new()
     }
+    fn list_company_agent_membership_page(
+        &self,
+        company_id: Uuid,
+        after_membership_id: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<CursorPage<CompanyAgentMembership>> {
+        let memberships = self.list_company_agent_memberships(company_id);
+        cursor_page_by_id(memberships, after_membership_id, limit, |membership| {
+            membership.id
+        })
+    }
     fn update_company_agent_work_profile(
         &self,
         _agent_id: Uuid,

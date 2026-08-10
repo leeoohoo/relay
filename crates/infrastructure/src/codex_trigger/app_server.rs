@@ -1,5 +1,10 @@
 use super::*;
 
+const APP_SERVER_INITIALIZE_TIMEOUT_SECS: u64 = 20;
+const APP_SERVER_THREAD_TIMEOUT_SECS: u64 = 30;
+const APP_SERVER_TURN_START_TIMEOUT_SECS: u64 = 45;
+const MANAGED_BROWSER_TOOL_TIMEOUT_GRACE_SECS: u64 = 15;
+
 pub(super) async fn drive_app_server<W, R>(
     writer: &mut W,
     reader: R,
@@ -7,12 +12,19 @@ pub(super) async fn drive_app_server<W, R>(
     resume_thread_id: Option<&str>,
     sandbox_mode: &str,
     approval_handler: &dyn CodexApprovalHandler,
+    thread_id_capture: &Arc<Mutex<Option<String>>>,
 ) -> AppResult<ProcessOutcome>
 where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
     let mut reader = BufReader::new(reader);
+    report_progress(
+        request.progress_handler.as_ref(),
+        "starting",
+        "正在初始化 Codex app-server",
+        resume_thread_id,
+    );
     send_json_rpc(
         writer,
         &json!({
@@ -24,12 +36,21 @@ where
                     "title": "Relay Agent Trigger",
                     "version": env!("CARGO_PKG_VERSION")
                 },
-                "capabilities": { "experimentalApi": true }
+                "capabilities": {
+                    "experimentalApi": true,
+                    "mcpServerOpenaiFormElicitation": true
+                }
             }
         }),
     )
     .await?;
-    let initialize = wait_for_rpc_response(&mut reader, 0).await?;
+    let initialize = wait_for_rpc_response_with_timeout(
+        &mut reader,
+        0,
+        "initialize",
+        Duration::from_secs(APP_SERVER_INITIALIZE_TIMEOUT_SECS),
+    )
+    .await?;
     if let Some(error) = rpc_error_message(&initialize) {
         return Err(AppError::Validation(format!(
             "Codex app-server initialization failed: {error}"
@@ -37,10 +58,11 @@ where
     }
     send_json_rpc(writer, &json!({ "method": "initialized", "params": {} })).await?;
 
+    let app_server_approval_policy = app_server_approval_policy(request);
     let mut thread_params = json!({
         "cwd": request.cwd.to_string_lossy(),
         "sandbox": sandbox_mode,
-        "approvalPolicy": request.approval_policy,
+        "approvalPolicy": app_server_approval_policy.clone(),
         "approvalsReviewer": "user"
     });
     if let Some(model) = request.model.as_deref() {
@@ -52,12 +74,28 @@ where
     } else {
         "thread/start"
     };
+    report_progress(
+        request.progress_handler.as_ref(),
+        "starting",
+        if resume_thread_id.is_some() {
+            "正在恢复 Codex 固定会话"
+        } else {
+            "正在创建 Codex 固定会话"
+        },
+        resume_thread_id,
+    );
     send_json_rpc(
         writer,
         &json!({ "method": thread_method, "id": 1, "params": thread_params }),
     )
     .await?;
-    let thread_response = wait_for_rpc_response(&mut reader, 1).await?;
+    let thread_response = wait_for_rpc_response_with_timeout(
+        &mut reader,
+        1,
+        thread_method,
+        Duration::from_secs(APP_SERVER_THREAD_TIMEOUT_SECS),
+    )
+    .await?;
     if let Some(error) = rpc_error_message(&thread_response) {
         return Ok(ProcessOutcome {
             status: CodexRunStatus::Failed,
@@ -74,6 +112,9 @@ where
         .map(str::to_string)
         .or_else(|| resume_thread_id.map(str::to_string))
         .ok_or_else(|| AppError::Validation("Codex app-server returned no thread ID".into()))?;
+    if let Ok(mut captured) = thread_id_capture.lock() {
+        *captured = Some(thread_id.clone());
+    }
     report_progress(
         request.progress_handler.as_ref(),
         "session",
@@ -85,7 +126,7 @@ where
         "threadId": thread_id,
         "input": [{ "type": "text", "text": request.prompt }],
         "cwd": request.cwd.to_string_lossy(),
-        "approvalPolicy": request.approval_policy,
+        "approvalPolicy": app_server_approval_policy,
         "approvalsReviewer": "user"
     });
     if let Some(model) = request.model.as_deref() {
@@ -99,11 +140,60 @@ where
         &json!({ "method": "turn/start", "id": 2, "params": turn_params }),
     )
     .await?;
+    report_progress(
+        request.progress_handler.as_ref(),
+        "starting",
+        "正在启动 Codex 工作 Turn",
+        Some(&thread_id),
+    );
 
     let mut turn_started = false;
     let mut final_message = None;
     let mut error_message = None;
-    while let Some(value) = next_json_rpc(&mut reader).await? {
+    let mut active_mcp_items = HashMap::<String, Value>::new();
+    let mut active_mcp_item_started_at = HashMap::<String, Instant>::new();
+    let managed_browser_tool_timeout = managed_browser_tool_timeout(request);
+    loop {
+        let next = if turn_started {
+            if let Some((item_id, tool, remaining)) = active_managed_browser_timeout(
+                &active_mcp_items,
+                &active_mcp_item_started_at,
+                managed_browser_tool_timeout,
+            ) {
+                match timeout(remaining, next_json_rpc(&mut reader)).await {
+                    Ok(next) => next?,
+                    Err(_) => {
+                        return Ok(ProcessOutcome {
+                            status: CodexRunStatus::TimedOut,
+                            thread_id: Some(thread_id),
+                            exit_code: None,
+                            final_message,
+                            error_message: Some(format!(
+                                "浏览器工具 {tool}（{item_id}）在 {} 秒内没有产生后续事件，Relay 将保留当前会话并自动继续",
+                                managed_browser_tool_timeout.as_secs()
+                            )),
+                            turn_started: true,
+                        });
+                    }
+                }
+            } else {
+                next_json_rpc(&mut reader).await?
+            }
+        } else {
+            timeout(
+                Duration::from_secs(APP_SERVER_TURN_START_TIMEOUT_SECS),
+                next_json_rpc(&mut reader),
+            )
+            .await
+            .map_err(|_| {
+                AppError::Validation(
+                    "Codex app-server timed out waiting for turn/start response".into(),
+                )
+            })??
+        };
+        let Some(value) = next else {
+            break;
+        };
         if json_rpc_id_matches(&value, 2) {
             if let Some(error) = rpc_error_message(&value) {
                 return Ok(ProcessOutcome {
@@ -119,7 +209,8 @@ where
             continue;
         }
         if value.get("id").is_some() && value.get("method").is_some() {
-            handle_app_server_request(writer, &value, approval_handler).await?;
+            let item = active_mcp_item_for_request(&value, &active_mcp_items);
+            handle_app_server_request(writer, &value, approval_handler, item).await?;
             continue;
         }
         match value.get("method").and_then(Value::as_str) {
@@ -134,6 +225,12 @@ where
             }
             Some("item/started") => {
                 if let Some(item) = value.pointer("/params/item") {
+                    if item.get("type").and_then(Value::as_str) == Some("mcpToolCall") {
+                        if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                            active_mcp_items.insert(item_id.to_string(), item.clone());
+                            active_mcp_item_started_at.insert(item_id.to_string(), Instant::now());
+                        }
+                    }
                     if let Some((phase, summary)) = summarize_codex_item(item, false) {
                         report_progress(
                             request.progress_handler.as_ref(),
@@ -146,6 +243,10 @@ where
             }
             Some("item/completed") => {
                 if let Some(item) = value.pointer("/params/item") {
+                    if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                        active_mcp_items.remove(item_id);
+                        active_mcp_item_started_at.remove(item_id);
+                    }
                     if let Some(message) = extract_agent_message(item) {
                         final_message = Some(message);
                     }
@@ -252,10 +353,74 @@ where
     })
 }
 
+fn managed_browser_tool_timeout(request: &CodexRunRequest) -> Duration {
+    let configured = request
+        .managed_mcp_servers
+        .iter()
+        .find(|server| server.name == MANAGED_BROWSER_MCP_NAME)
+        .and_then(|server| server.tool_timeout_sec)
+        .unwrap_or(180);
+    Duration::from_secs(configured.saturating_add(MANAGED_BROWSER_TOOL_TIMEOUT_GRACE_SECS))
+}
+
+pub(super) fn active_managed_browser_timeout(
+    active_items: &HashMap<String, Value>,
+    started_at: &HashMap<String, Instant>,
+    stall_timeout: Duration,
+) -> Option<(String, String, Duration)> {
+    let now = Instant::now();
+    active_items
+        .iter()
+        .filter(|(_, item)| is_managed_browser_item(item))
+        .filter_map(|(item_id, item)| {
+            let started_at = started_at.get(item_id)?;
+            let tool = item
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let elapsed = now.saturating_duration_since(*started_at);
+            Some((item_id.clone(), tool, stall_timeout.saturating_sub(elapsed)))
+        })
+        .min_by_key(|(_, _, remaining)| *remaining)
+}
+
+pub(super) fn app_server_approval_policy(request: &CodexRunRequest) -> Value {
+    if request.approval_policy == "on-request" {
+        return json!("on-request");
+    }
+    json!({
+        "granular": {
+            "sandbox_approval": false,
+            "rules": false,
+            "skill_approval": false,
+            "request_permissions": false,
+            "mcp_elicitations": request
+                .managed_mcp_servers
+                .iter()
+                .any(ManagedCodexMcpServer::requires_human_approval)
+        }
+    })
+}
+
+pub(super) fn app_server_approval_policy_config(request: &CodexRunRequest) -> String {
+    if request.approval_policy == "on-request" {
+        return toml_string("on-request");
+    }
+    let mcp_elicitations = request
+        .managed_mcp_servers
+        .iter()
+        .any(ManagedCodexMcpServer::requires_human_approval);
+    format!(
+        "{{ granular = {{ sandbox_approval = false, rules = false, skill_approval = false, request_permissions = false, mcp_elicitations = {mcp_elicitations} }} }}"
+    )
+}
+
 pub(super) async fn handle_app_server_request<W>(
     writer: &mut W,
     value: &Value,
     approval_handler: &dyn CodexApprovalHandler,
+    active_item: Option<&Value>,
 ) -> AppResult<()>
 where
     W: AsyncWrite + Unpin,
@@ -269,6 +434,20 @@ where
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::Validation("Codex server request had no method".into()))?;
     let params = value.get("params").cloned().unwrap_or_else(|| json!({}));
+    if matches!(
+        method,
+        "item/tool/requestUserInput" | "mcpServer/elicitation/request"
+    ) {
+        return handle_browser_tool_approval(
+            writer,
+            rpc_id,
+            method,
+            &params,
+            active_item,
+            approval_handler,
+        )
+        .await;
+    }
     let (tool_name, default_reason) = match method {
         "item/commandExecution/requestApproval" | "execCommandApproval" => {
             (AGENT_CODEX_APPROVAL_TOOL_COMMAND, "Codex 请求执行受限命令")
@@ -323,6 +502,189 @@ where
     send_approval_response(writer, rpc_id, method, &params, decision).await
 }
 
+pub(super) async fn handle_browser_tool_approval<W>(
+    writer: &mut W,
+    rpc_id: Value,
+    method: &str,
+    params: &Value,
+    active_item: Option<&Value>,
+    approval_handler: &dyn CodexApprovalHandler,
+) -> AppResult<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    if method == "mcpServer/elicitation/request" && !is_mcp_tool_approval_elicitation(params) {
+        return send_json_rpc(
+            writer,
+            &json!({
+                "id": rpc_id,
+                "error": { "code": -32601, "message": "Unsupported MCP elicitation request" }
+            }),
+        )
+        .await;
+    }
+    let managed_item = active_item.filter(|item| is_managed_browser_item(item));
+    let managed_server = managed_item.is_some()
+        || params.get("serverName").and_then(Value::as_str) == Some(MANAGED_BROWSER_MCP_NAME);
+    if !managed_server {
+        return send_json_rpc(
+            writer,
+            &json!({
+                "id": rpc_id,
+                "error": { "code": -32601, "message": "Unsupported interactive tool request" }
+            }),
+        )
+        .await;
+    }
+    let Some(tool) = managed_item
+        .and_then(|item| item.get("tool").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| mcp_tool_name_from_params(params))
+    else {
+        return send_json_rpc(
+            writer,
+            &json!({
+                "id": rpc_id,
+                "error": { "code": -32601, "message": "Unsupported managed browser tool request" }
+            }),
+        )
+        .await;
+    };
+    let input = managed_item
+        .map(|item| normalized_mcp_arguments(item.get("arguments")))
+        .or_else(|| params.pointer("/_meta/tool_params").cloned())
+        .unwrap_or_else(|| json!({}));
+    if !requires_browser_human_approval(&tool, &input) {
+        return send_approval_response(
+            writer,
+            rpc_id,
+            method,
+            params,
+            CodexApprovalDecision::Accept,
+        )
+        .await;
+    }
+    let url = input.get("url").and_then(Value::as_str).map(str::to_string);
+    let reason = match (tool.as_str(), url.as_deref()) {
+        ("navigate_page" | "new_page", Some(url)) => {
+            format!("Agent 请求通过浏览器访问 {url}")
+        }
+        ("upload_file", _) => "Agent 请求向当前网站上传本地文件".into(),
+        _ => "Agent 请求使用受审批保护的浏览器操作".into(),
+    };
+    let approval = approval_handler
+        .request_approval(CodexApprovalRequest {
+            tool_name: AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS.into(),
+            risk_level: if tool == "upload_file" {
+                "high".into()
+            } else {
+                "medium".into()
+            },
+            reason,
+            arguments: json!({
+                "server": managed_item
+                    .and_then(|item| item.get("server").cloned())
+                    .unwrap_or_else(|| json!(MANAGED_BROWSER_MCP_NAME)),
+                "tool": tool,
+                "url": url,
+                "input": input,
+                "prompt": params
+            }),
+        })
+        .await;
+    let decision = match approval {
+        Ok(decision) => decision,
+        Err(error) => {
+            let _ = send_approval_response(
+                writer,
+                rpc_id.clone(),
+                method,
+                params,
+                CodexApprovalDecision::Decline,
+            )
+            .await;
+            return Err(error);
+        }
+    };
+    send_approval_response(writer, rpc_id, method, params, decision).await
+}
+
+pub(super) fn active_mcp_item_for_request<'a>(
+    request: &Value,
+    active_mcp_items: &'a HashMap<String, Value>,
+) -> Option<&'a Value> {
+    if let Some(item_id) = request.pointer("/params/itemId").and_then(Value::as_str) {
+        return active_mcp_items.get(item_id);
+    }
+    if request.get("method").and_then(Value::as_str) != Some("mcpServer/elicitation/request") {
+        return None;
+    }
+    let params = request.get("params")?;
+    let server_name = params.get("serverName").and_then(Value::as_str)?;
+    let requested_arguments = params.pointer("/_meta/tool_params");
+    let mut matching_server_items = active_mcp_items.values().filter(|item| {
+        item.get("type").and_then(Value::as_str) == Some("mcpToolCall")
+            && item.get("server").and_then(Value::as_str) == Some(server_name)
+    });
+    if let Some(requested_arguments) = requested_arguments {
+        if let Some(item) = matching_server_items
+            .clone()
+            .find(|item| normalized_mcp_arguments(item.get("arguments")) == *requested_arguments)
+        {
+            return Some(item);
+        }
+    }
+    let item = matching_server_items.next()?;
+    matching_server_items.next().is_none().then_some(item)
+}
+
+fn is_mcp_tool_approval_elicitation(params: &Value) -> bool {
+    params.get("mode").and_then(Value::as_str) == Some("form")
+        && params
+            .pointer("/_meta/codex_approval_kind")
+            .and_then(Value::as_str)
+            == Some("mcp_tool_call")
+}
+
+fn is_managed_browser_item(item: &Value) -> bool {
+    item.get("type").and_then(Value::as_str) == Some("mcpToolCall")
+        && item.get("server").and_then(Value::as_str) == Some(MANAGED_BROWSER_MCP_NAME)
+}
+
+pub(super) fn requires_browser_human_approval(tool: &str, input: &Value) -> bool {
+    match tool {
+        "upload_file" => true,
+        "navigate_page" | "new_page" => {
+            input.get("url").and_then(Value::as_str).is_some_and(|url| {
+                let url = url.trim();
+                !url.is_empty() && !url.eq_ignore_ascii_case("about:blank")
+            })
+        }
+        _ => false,
+    }
+}
+
+fn mcp_tool_name_from_params(params: &Value) -> Option<String> {
+    for pointer in ["/_meta/tool_name", "/toolName", "/tool"] {
+        if let Some(tool) = params.pointer(pointer).and_then(Value::as_str) {
+            return Some(tool.to_string());
+        }
+    }
+    let message = params.get("message").and_then(Value::as_str)?;
+    let (_, suffix) = message.rsplit_once(" tool ")?;
+    let tool = suffix.trim().trim_end_matches('?').trim();
+    (!tool.is_empty()).then(|| tool.to_string())
+}
+
+fn normalized_mcp_arguments(arguments: Option<&Value>) -> Value {
+    match arguments {
+        Some(Value::String(arguments)) => {
+            serde_json::from_str(arguments).unwrap_or_else(|_| json!({ "raw": arguments }))
+        }
+        Some(arguments) => arguments.clone(),
+        None => json!({}),
+    }
+}
+
 pub(super) async fn send_approval_response<W>(
     writer: &mut W,
     rpc_id: Value,
@@ -348,6 +710,14 @@ where
             };
             json!({ "permissions": permissions, "scope": "turn" })
         }
+        "item/tool/requestUserInput" => tool_user_input_response(params, decision),
+        "mcpServer/elicitation/request" => {
+            if decision == CodexApprovalDecision::Accept {
+                json!({ "action": "accept", "content": {}, "_meta": null })
+            } else {
+                json!({ "action": "decline", "content": null, "_meta": null })
+            }
+        }
         "execCommandApproval" | "applyPatchApproval" => {
             if decision == CodexApprovalDecision::Accept {
                 json!({ "decision": "approved" })
@@ -358,6 +728,62 @@ where
         _ => json!({}),
     };
     send_json_rpc(writer, &json!({ "id": rpc_id, "result": result })).await
+}
+
+fn tool_user_input_response(params: &Value, decision: CodexApprovalDecision) -> Value {
+    let mut answers = serde_json::Map::new();
+    for question in params
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = question.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let labels = question
+            .get("options")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|option| option.get("label").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        let selected = select_approval_option(&labels, decision);
+        answers.insert(id.to_string(), json!({ "answers": [selected] }));
+    }
+    json!({ "answers": answers })
+}
+
+fn select_approval_option(labels: &[&str], decision: CodexApprovalDecision) -> String {
+    let preferred = if decision == CodexApprovalDecision::Accept {
+        [
+            "accept", "allow", "approve", "continue", "yes", "允许", "批准", "继续",
+        ]
+        .as_slice()
+    } else {
+        ["decline", "deny", "reject", "no", "cancel", "拒绝", "取消"].as_slice()
+    };
+    preferred
+        .iter()
+        .find_map(|preferred| {
+            labels
+                .iter()
+                .find(|label| label.trim().eq_ignore_ascii_case(preferred))
+        })
+        .copied()
+        .or_else(|| {
+            if decision == CodexApprovalDecision::Accept {
+                labels.first().copied()
+            } else {
+                labels.last().copied()
+            }
+        })
+        .unwrap_or(if decision == CodexApprovalDecision::Accept {
+            "Accept"
+        } else {
+            "Decline"
+        })
+        .to_string()
 }
 
 pub(super) async fn send_json_rpc<W>(writer: &mut W, value: &Value) -> AppResult<()>
@@ -387,6 +813,24 @@ where
     Err(AppError::Validation(format!(
         "Codex app-server closed before JSON-RPC response {expected_id}"
     )))
+}
+
+pub(super) async fn wait_for_rpc_response_with_timeout<R>(
+    reader: &mut BufReader<R>,
+    expected_id: i64,
+    stage: &str,
+    wait_timeout: Duration,
+) -> AppResult<Value>
+where
+    R: AsyncRead + Unpin,
+{
+    timeout(wait_timeout, wait_for_rpc_response(reader, expected_id))
+        .await
+        .map_err(|_| {
+            AppError::Validation(format!(
+                "Codex app-server timed out waiting for {stage} response {expected_id}"
+            ))
+        })?
 }
 
 pub(super) async fn next_json_rpc<R>(reader: &mut BufReader<R>) -> AppResult<Option<Value>>

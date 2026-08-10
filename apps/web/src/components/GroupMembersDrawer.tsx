@@ -20,6 +20,7 @@ export function GroupMembersDrawer(props: {
   mode: "group" | "direct";
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
+  onTaskOpen?: (taskId: string) => void;
   onClose: () => void;
 }) {
   const agentIdsKey = props.agents.map((agent) => agent.agent_profile.id).join(",");
@@ -93,6 +94,7 @@ export function GroupMembersDrawer(props: {
               agent={agent}
               runtime={runtimeByAgent[agent.agent_profile.id] ?? emptyRuntime(true)}
               tasks={assignedTasks(props.project, agent.agent_profile.id)}
+              onTaskOpen={props.onTaskOpen}
             />
           ))}
           {!props.agents.length ? <div className="conversation-member-empty">当前会话没有可展示的 Agent 成员。</div> : null}
@@ -103,8 +105,8 @@ export function GroupMembersDrawer(props: {
   );
 }
 
-function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState; tasks: CompanyProjectTask[] }) {
-  const operationalStatus = runtimeStatus(props.agent, props.runtime);
+function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState; tasks: CompanyProjectTask[]; onTaskOpen?: (taskId: string) => void }) {
+  const operationalStatus = runtimeStatus(props.agent, props.runtime, props.tasks);
   const runningRun = props.runtime.trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const latestRun = runningRun ?? props.runtime.trigger?.recent_runs[0] ?? null;
   const currentTask = props.tasks.find((task) => task.status === "in_progress") ?? props.tasks[0] ?? null;
@@ -134,7 +136,7 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
         {props.tasks.length ? (
           <section className="runtime-task-section">
             <h4>项目任务</h4>
-            {props.tasks.slice(0, 3).map((task) => <div className="runtime-task" key={task.id}><span className={`task-state ${task.status}`}>{taskStatusLabel(task.status)}</span><strong>{task.title}</strong></div>)}
+            {props.tasks.slice(0, 3).map((task) => <button type="button" className="runtime-task" key={task.id} onClick={() => props.onTaskOpen?.(task.id)}><span className={`task-state ${task.status}`}>{taskStatusLabel(task.status)}</span><strong>{task.title}</strong><Icon name="chevron-right" /></button>)}
           </section>
         ) : null}
 
@@ -197,7 +199,7 @@ function emptyRuntime(loading: boolean): RuntimeState {
   return { loading, trigger: null, error: null };
 }
 
-function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState) {
+function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: CompanyProjectTask[]) {
   if (agent.membership.employment_status !== "active") return "paused";
   if (runtime.loading) return "loading";
   if (runtime.error) return "error";
@@ -206,6 +208,7 @@ function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState) {
   if (trigger.config.status !== "active") return trigger.config.status;
   if (trigger.recent_runs.some((run) => run.status === "running")) return "running";
   if (trigger.config.lease_owner || trigger.config.manual_run_requested_at || trigger.config.wake_requested_at) return "queued";
+  if (tasks.some((task) => task.status === "in_progress")) return "continuing";
   return "idle";
 }
 
@@ -213,6 +216,7 @@ function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task
   if (runtime.loading) return "正在同步运行数据";
   if (runtime.error) return "无法读取运行详情";
   if (operationalStatus === "queued") return "任务已进入执行队列";
+  if (operationalStatus === "continuing" && task) return `等待下一轮继续 · ${task.title}`;
   if (operationalStatus === "paused") return "Trigger 已暂停";
   if (operationalStatus === "error") return runtime.trigger?.config.last_error ?? "Trigger 运行异常";
   if (run?.status === "running") return run.activity_summary ?? "Codex 正在执行任务";
@@ -222,7 +226,7 @@ function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task
 }
 
 function runtimeStatusLabel(value: string) {
-  return ({ loading: "同步中", running: "运行中", queued: "排队中", idle: "空闲", paused: "已暂停", error: "异常", offline: "未连接" } as Record<string, string>)[value] ?? value;
+  return ({ loading: "同步中", running: "运行中", queued: "排队中", continuing: "待继续", idle: "空闲", paused: "已暂停", error: "异常", offline: "未连接" } as Record<string, string>)[value] ?? value;
 }
 
 function runStatusLabel(value: string) {
@@ -247,7 +251,7 @@ function triggerTypeLabel(value: string) {
 }
 
 function activityPhaseLabel(value: string) {
-  return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "整理结果", finishing: "收尾", waiting_approval: "等待审批", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value;
+  return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "进度说明", continuing: "保存进度", finishing: "收尾", waiting_approval: "等待审批", approval_delivery_failed: "审批投递失败", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value;
 }
 
 function runDisplayMessage(run: CodexTriggerRun) {

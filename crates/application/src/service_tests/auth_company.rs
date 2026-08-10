@@ -143,6 +143,20 @@ fn human_can_create_company_and_provision_agents_without_weibo() {
         .expect("member should appear in company console");
     assert_eq!(member_console.connection.status, "not_connected");
     assert!(member_console.connection.last_used_at.is_none());
+    let console_json = serde_json::to_value(&console).expect("console should serialize");
+    assert!(!console_json.to_string().contains("skill_markdown"));
+    assert!(!console_json.to_string().contains("rule_markdown"));
+    let skill_catalog = app
+        .get_company_skill_catalog(owner.id, company.company.id)
+        .expect("owner should load full Skill content on demand");
+    assert!(skill_catalog
+        .professions
+        .iter()
+        .all(|profession| !profession.skill_markdown.is_empty()));
+    assert!(skill_catalog
+        .project_types
+        .iter()
+        .all(|project_type| !project_type.rule_markdown.is_empty()));
     assert!(matches!(
         app.get_company_console(outsider.id, company.company.id),
         Err(AppError::Unauthorized(_))

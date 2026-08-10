@@ -93,6 +93,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .project_id
                     .is_none_or(|project_id| session.project_id == Some(project_id))
             })
+            .map(sanitize_codex_session_for_human)
             .collect();
         Ok(sessions)
     }
@@ -109,6 +110,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }
         self.repo
             .claim_due_agent_codex_trigger_configs(lease_owner, now_utc(), limit.clamp(1, 100))
+    }
+
+    pub fn is_agent_codex_trigger_active(&self, agent_id: Uuid) -> AppResult<bool> {
+        Ok(self
+            .repo
+            .get_agent_codex_trigger_config_by_agent_result(agent_id)?
+            .is_some_and(|config| config.status == AGENT_CODEX_TRIGGER_STATUS_ACTIVE))
     }
 
     pub fn abandon_agent_codex_trigger_leases(&self, lease_owner: &str) -> AppResult<usize> {
@@ -203,9 +211,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                             .iter()
                             .find(|candidate| candidate.id == dependency.depends_on_task_id)
                             .is_some_and(|dependency_task| {
-                                !matches!(
-                                    dependency_task.status.as_str(),
-                                    PROJECT_TASK_STATUS_DONE | PROJECT_TASK_STATUS_CANCELLED
+                                !ai_chat_domain::company::project_task_dependency_satisfied(
+                                    &dependency.dependency_condition,
+                                    &dependency_task.status,
                                 )
                             })
                     });
@@ -213,6 +221,28 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     waiting_task_count += 1;
                 } else {
                     active_tasks.push(task.clone());
+                }
+            }
+        }
+        let in_progress_task_ids = active_tasks
+            .iter()
+            .filter(|task| task.status == PROJECT_TASK_STATUS_IN_PROGRESS)
+            .map(|task| task.id)
+            .collect::<HashSet<_>>();
+        if !in_progress_task_ids.is_empty() {
+            for intent in self.repo.list_agent_execution_intents(
+                config.agent_profile_id,
+                Some(AGENT_EXECUTION_INTENT_STATUS_FAILED),
+                100,
+            ) {
+                if intent
+                    .task_ids
+                    .iter()
+                    .any(|task_id| in_progress_task_ids.contains(task_id))
+                {
+                    let failure = intent.error_message.clone().unwrap_or_default();
+                    let _ = self
+                        .requeue_agent_execution_intent_after_retryable_failure(intent, &failure)?;
                 }
             }
         }
@@ -275,6 +305,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let git = project
             .as_ref()
             .and_then(|project| self.repo.get_company_project_git_config(project.id));
+        let active_project_ids = projects
+            .iter()
+            .map(|project| project.id)
+            .collect::<HashSet<_>>();
         let pending_execution_intent_count = self
             .repo
             .list_agent_execution_intents(
@@ -282,7 +316,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
                 100,
             )
-            .len();
+            .into_iter()
+            .filter(|intent| active_project_ids.contains(&intent.project_id))
+            .count();
         let should_run = manual
             || !pending_events.is_empty()
             || !active_tasks.is_empty()
@@ -423,13 +459,60 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "Agent does not belong to the execution intent company".into(),
             ));
         }
-        self.ensure_company_project_access(
+        let project = self.ensure_company_project_access(
             intent.company_id,
             intent.project_id,
             intent.agent_profile_id,
         )?;
-        self.repo.insert_agent_execution_intent(intent.clone())?;
-        Ok(intent)
+        if let Some(existing) = self
+            .repo
+            .find_agent_execution_intent_by_dedupe_key(intent.agent_profile_id, &intent.dedupe_key)
+        {
+            return resolve_deduplicated_execution_intent(existing, &intent);
+        }
+        self.ensure_project_not_paused(&project)?;
+        match self.repo.insert_agent_execution_intent(intent.clone()) {
+            Ok(()) => Ok(intent),
+            Err(AppError::Conflict(_)) => {
+                let existing = self
+                    .repo
+                    .find_agent_execution_intent_by_dedupe_key(
+                        intent.agent_profile_id,
+                        &intent.dedupe_key,
+                    )
+                    .ok_or_else(|| {
+                        AppError::Conflict(
+                            "execution intent could not be created because its dedupe key is already in use"
+                                .into(),
+                        )
+                    })?;
+                resolve_deduplicated_execution_intent(existing, &intent)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn requeue_agent_execution_intent_after_retryable_failure(
+        &self,
+        mut intent: AgentExecutionIntent,
+        failure_message: &str,
+    ) -> AppResult<Option<AgentExecutionIntent>> {
+        if !matches!(
+            intent.status.as_str(),
+            AGENT_EXECUTION_INTENT_STATUS_RUNNING | AGENT_EXECUTION_INTENT_STATUS_FAILED
+        ) || !is_retryable_codex_execution_failure(failure_message)
+        {
+            return Ok(None);
+        }
+        intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+        intent.claimed_at = None;
+        intent.completed_at = None;
+        intent.error_message = Some(format!(
+            "上次执行遇到临时服务故障，Relay 将自动重试：{}",
+            truncate_execution_failure(failure_message, 800)
+        ));
+        self.repo.update_agent_execution_intent(intent.clone())?;
+        Ok(Some(intent))
     }
 
     pub fn get_agent_project_git_config(
@@ -509,4 +592,105 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.repo
             .latest_company_realtime_sequence_result(company_id)
     }
+}
+
+fn resolve_deduplicated_execution_intent(
+    existing: AgentExecutionIntent,
+    requested: &AgentExecutionIntent,
+) -> AppResult<AgentExecutionIntent> {
+    let same_work = existing.company_id == requested.company_id
+        && existing.project_id == requested.project_id
+        && same_uuid_members(&existing.task_ids, &requested.task_ids)
+        && existing.action_type == requested.action_type
+        && existing.objective == requested.objective
+        && existing.acceptance_criteria == requested.acceptance_criteria
+        && existing.priority == requested.priority;
+    if same_work {
+        return Ok(existing);
+    }
+    Err(AppError::Conflict(format!(
+        "dedupe_key '{}' already belongs to execution intent {} (status: {}); inspect that intent or use a new dedupe_key for different work",
+        requested.dedupe_key, existing.id, existing.status
+    )))
+}
+
+fn same_uuid_members(left: &[Uuid], right: &[Uuid]) -> bool {
+    left.iter().copied().collect::<HashSet<_>>() == right.iter().copied().collect::<HashSet<_>>()
+}
+
+fn is_retryable_codex_execution_failure(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "auth_unavailable",
+        "no auth available",
+        "service unavailable",
+        "temporarily unavailable",
+        "too many requests",
+        "rate limit",
+        "bad gateway",
+        "gateway timeout",
+        "unexpected status 502",
+        "unexpected status 503",
+        "unexpected status 504",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection timed out",
+        "network is unreachable",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+fn truncate_execution_failure(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
+}
+
+fn sanitize_codex_session_for_human(mut session: AgentCodexSession) -> AgentCodexSession {
+    session.summary_short = redact_host_home_path(&session.summary_short);
+    redact_json_host_paths(&mut session.checkpoint_json);
+    session
+}
+
+fn redact_json_host_paths(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = redact_host_home_path(text),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json_host_paths(item);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                redact_json_host_paths(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_host_home_path(value: &str) -> String {
+    redact_unix_home_segment(&redact_unix_home_segment(value, "/Users/"), "/home/")
+}
+
+fn redact_unix_home_segment(value: &str, prefix: &str) -> String {
+    let mut output = value.to_string();
+    let mut search_from = 0;
+    while let Some(relative_start) = output[search_from..].find(prefix) {
+        let start = search_from + relative_start;
+        let username_start = start + prefix.len();
+        let Some(relative_end) = output[username_start..].find('/') else {
+            break;
+        };
+        let end = username_start + relative_end;
+        output.replace_range(start..end, "~");
+        search_from = start + 1;
+    }
+    output
 }

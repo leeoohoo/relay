@@ -284,15 +284,16 @@ impl TaskPlatformRepository for PostgresPlatformRepository {
             tx.execute(
                 r#"
                 INSERT INTO company_project_task_dependencies (
-                    id, project_id, task_id, depends_on_task_id,
+                    id, project_id, task_id, depends_on_task_id, dependency_condition,
                     created_by_agent_id, created_by_human_user_id, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 "#,
                 &[
                     &dependency.id,
                     &dependency.project_id,
                     &dependency.task_id,
                     &dependency.depends_on_task_id,
+                    &dependency.dependency_condition,
                     &dependency.created_by_agent_id,
                     &dependency.created_by_human_user_id,
                     &dependency.created_at,
@@ -360,7 +361,7 @@ impl TaskPlatformRepository for PostgresPlatformRepository {
         self.with_client(|client| {
             client.query(
                 r#"
-                SELECT id, project_id, task_id, depends_on_task_id,
+                SELECT id, project_id, task_id, depends_on_task_id, dependency_condition,
                        created_by_agent_id, created_by_human_user_id, created_at
                 FROM company_project_task_dependencies
                 WHERE project_id = $1

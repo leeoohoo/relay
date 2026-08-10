@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
+import {
+  companyConsoleRegionsForEvent,
+  fetchCompanyConsole,
+  fetchCompanyConsoleRegionPage,
+  fetchCompanyConsoleRegions,
+  type CompanyConsoleRegion,
+} from "../api/companyConsole";
 import type { CompanyRealtimeEvent } from "../api/types";
 import { AuthScreen } from "../components/AuthScreen";
 import { Sidebar } from "../components/Sidebar";
@@ -29,11 +36,13 @@ const SESSION_KEY = "agent_company_session";
 export function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [session, setSession] = useState<Session | null>(() => readSession());
+  const [lastSessionEmail, setLastSessionEmail] = useState(() => readSession()?.user.email ?? "");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [companyConsole, setCompanyConsole] = useState<CompanyConsole | null>(null);
   const [view, setView] = useState<View>("agents");
   const [busy, setBusy] = useState(false);
+  const [loadingRegion, setLoadingRegion] = useState<"agents" | "conversations" | "projects" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [showCompanyForm, setShowCompanyForm] = useState(false);
@@ -43,6 +52,7 @@ export function App() {
   const [dismissedApprovalIds, setDismissedApprovalIds] = useState<Set<string>>(() => new Set());
   const [realtimeEvent, setRealtimeEvent] = useState<CompanyRealtimeEvent | null>(null);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const pendingRealtimeRegionsRef = useRef<Set<CompanyConsoleRegion>>(new Set());
 
   useEffect(() => {
     api<RuntimeConfig>("/api/v1/runtime-config")
@@ -60,8 +70,17 @@ export function App() {
         const next = { ...session, user };
         setSession(next);
         persistSession(next);
-      } catch {
-        if (active) signOut(false);
+      } catch (requestError) {
+        if (!active) return;
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          setLastSessionEmail(session.user.email);
+          setError("当前登录会话已过期，请重新登录");
+          signOut(false);
+          return;
+        }
+        setError(requestError instanceof Error
+          ? `会话暂时无法校验，已保留当前登录：${requestError.message}`
+          : "会话暂时无法校验，已保留当前登录");
       }
     };
     void heartbeat();
@@ -106,8 +125,10 @@ export function App() {
       }
     };
     void refresh();
+    const timer = window.setInterval(() => void refresh(), 5_000);
     return () => {
       active = false;
+      window.clearInterval(timer);
     };
   }, [session?.token, selectedCompanyId, companyConsole?.human_membership.role]);
 
@@ -119,13 +140,19 @@ export function App() {
       if (event.event_type.startsWith("agent.runtime.approval_")) {
         void refreshApprovals().catch(() => undefined);
       }
+      for (const region of companyConsoleRegionsForEvent(event.event_type)) {
+        pendingRealtimeRegionsRef.current.add(region);
+      }
+      if (pendingRealtimeRegionsRef.current.size === 0) return;
       if (realtimeRefreshTimerRef.current !== null) {
         window.clearTimeout(realtimeRefreshTimerRef.current);
       }
       realtimeRefreshTimerRef.current = window.setTimeout(() => {
         realtimeRefreshTimerRef.current = null;
         if (selectedCompanyId && session?.token) {
-          void loadCompanyConsole(selectedCompanyId, session.token);
+          const regions = new Set(pendingRealtimeRegionsRef.current);
+          pendingRealtimeRegionsRef.current.clear();
+          void refreshCompanyRegions(selectedCompanyId, session.token, regions);
         }
       }, 100);
     },
@@ -152,19 +179,98 @@ export function App() {
   async function loadCompanyConsole(companyId: string, token = session?.token) {
     if (!token) return;
     try {
-      const response = await api<{ company_console: CompanyConsole }>(
-        `/api/v1/companies/${companyId}/console`,
-        {},
-        token,
-      );
-      setCompanyConsole(response.company_console);
+      const nextConsole = await fetchCompanyConsole(companyId, token);
+      setCompanyConsole(nextConsole);
     } catch (requestError) {
       showError(requestError);
     }
   }
 
+  async function refreshCompanyRegions(
+    companyId: string,
+    token: string,
+    regions: Iterable<CompanyConsoleRegion>,
+  ) {
+    try {
+      const patch = await fetchCompanyConsoleRegions(companyId, token, regions);
+      setCompanyConsole((current) => {
+        if (!current || current.company.id !== companyId) return current;
+        return {
+          ...current,
+          ...patch.data,
+          pagination: { ...current.pagination, ...patch.pagination },
+        };
+      });
+    } catch (requestError) {
+      showError(requestError);
+    }
+  }
+
+  async function loadMoreCompanyRegion(region: "agents" | "conversations" | "projects") {
+    if (!companyConsole || !session || loadingRegion) return;
+    const page = companyConsole.pagination[region];
+    if (!page.has_more || !page.next_cursor) return;
+    setLoadingRegion(region);
+    try {
+      if (region === "agents") {
+        const next = await fetchCompanyConsoleRegionPage(
+          companyConsole.company.id,
+          session.token,
+          "agents",
+          page.next_cursor,
+        );
+        setCompanyConsole((current) => {
+          if (!current || current.company.id !== companyConsole.company.id) return current;
+          const known = new Set(current.agents.map((item) => item.agent_profile.id));
+          return {
+            ...current,
+            agents: [...current.agents, ...next.items.filter((item) => !known.has(item.agent_profile.id))],
+            pagination: { ...current.pagination, agents: next.page },
+          };
+        });
+      } else if (region === "conversations") {
+        const next = await fetchCompanyConsoleRegionPage(
+          companyConsole.company.id,
+          session.token,
+          "conversations",
+          page.next_cursor,
+        );
+        setCompanyConsole((current) => {
+          if (!current || current.company.id !== companyConsole.company.id) return current;
+          const known = new Set(current.conversations.map((item) => item.preview.id));
+          return {
+            ...current,
+            conversations: [...current.conversations, ...next.items.filter((item) => !known.has(item.preview.id))],
+            pagination: { ...current.pagination, conversations: next.page },
+          };
+        });
+      } else {
+        const next = await fetchCompanyConsoleRegionPage(
+          companyConsole.company.id,
+          session.token,
+          "projects",
+          page.next_cursor,
+        );
+        setCompanyConsole((current) => {
+          if (!current || current.company.id !== companyConsole.company.id) return current;
+          const known = new Set(current.projects.map((item) => item.project.id));
+          return {
+            ...current,
+            projects: [...current.projects, ...next.items.filter((item) => !known.has(item.project.id))],
+            pagination: { ...current.pagination, projects: next.page },
+          };
+        });
+      }
+    } catch (requestError) {
+      showError(requestError);
+    } finally {
+      setLoadingRegion(null);
+    }
+  }
+
   function completeAuth(next: Session) {
     setSession(next);
+    setLastSessionEmail(next.user.email);
     persistSession(next);
     setError("");
   }
@@ -185,6 +291,10 @@ export function App() {
     setError(value instanceof Error ? value.message : "请求失败，请稍后重试");
   }
 
+  function changeView(nextView: View) {
+    setView(nextView);
+  }
+
   async function refreshCompany() {
     if (selectedCompanyId) await loadCompanyConsole(selectedCompanyId);
   }
@@ -199,11 +309,12 @@ export function App() {
     setApprovals(response.approvals);
   }
 
-  async function reviewApproval(approvalId: string, decision: "approve" | "reject", reviewNote: string) {
+  async function reviewApproval(approvalId: string, decision: "approve" | "always_allow" | "always_allow_localhost" | "reject", reviewNote: string) {
     if (!session || !selectedCompanyId) return;
+    const endpointDecision = ["always_allow", "always_allow_localhost"].includes(decision) ? "approve" : decision;
     await api(
-      `/api/v1/companies/${selectedCompanyId}/approvals/${approvalId}/${decision}`,
-      { method: "POST", body: JSON.stringify({ review_note: reviewNote || null }) },
+      `/api/v1/companies/${selectedCompanyId}/approvals/${approvalId}/${endpointDecision}`,
+      { method: "POST", body: JSON.stringify({ review_note: reviewNote || null, approval_mode: decision === "always_allow" ? "always" : decision === "always_allow_localhost" ? "always_localhost" : "once" }) },
       session.token,
     );
     setDismissedApprovalIds((current) => {
@@ -212,7 +323,7 @@ export function App() {
       return next;
     });
     await refreshApprovals();
-    setNotice(decision === "approve" ? "审批已通过，等待中的 Codex 会继续执行" : "审批已拒绝，Codex 会收到拒绝结果并继续处理");
+    setNotice(decision === "always_allow_localhost" ? "已允许当前 Agent 在此项目访问非特权 localhost 预览端口" : decision === "always_allow" ? "已始终允许当前 Agent 在此项目访问该网站" : decision === "approve" ? "审批已通过，等待中的 Codex 会继续执行" : "审批已拒绝，Codex 会收到拒绝结果并继续处理");
   }
 
   const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
@@ -222,6 +333,7 @@ export function App() {
     return (
       <AuthScreen
         runtimeConfig={runtimeConfig}
+        initialEmail={lastSessionEmail}
         busy={busy}
         error={error}
         setBusy={setBusy}
@@ -239,7 +351,7 @@ export function App() {
         selectedCompanyId={selectedCompanyId}
         view={view}
         onCompanyChange={setSelectedCompanyId}
-        onViewChange={setView}
+        onViewChange={changeView}
         pendingApprovalCount={pendingApprovals.length}
         onCreateCompany={() => setShowCompanyForm(true)}
         onOpenPreferences={() => setShowUserPreferences(true)}
@@ -262,6 +374,7 @@ export function App() {
             <SkillsView
               consoleData={companyConsole}
               systemProjectTypes={runtimeConfig?.project_types ?? []}
+              token={session.token}
             />
           </>
         ) : !companies.length ? (
@@ -282,11 +395,28 @@ export function App() {
                         ? "仓库、规则、资产、任务与项目记忆"
                         : "身份、凭证、组织架构与权限范围"}</p>
               </div>
-              {view === "agents" ? (
-                <button className="button primary" onClick={() => setShowAgentForm(true)}>
-                  <Icon name="plus" /> 创建 Agent 账号
-                </button>
-              ) : null}
+              <div className="page-header-actions">
+                {view === "agents" ? (
+                  <button className="button primary" onClick={() => setShowAgentForm(true)}>
+                    <Icon name="plus" /> 创建 Agent 账号
+                  </button>
+                ) : null}
+                {view === "agents" && companyConsole.pagination.agents.has_more ? (
+                  <button className="button secondary" disabled={loadingRegion !== null} onClick={() => void loadMoreCompanyRegion("agents")}>
+                    {loadingRegion === "agents" ? "加载中…" : "加载更多 Agent"}
+                  </button>
+                ) : null}
+                {view === "projects" && companyConsole.pagination.projects.has_more ? (
+                  <button className="button secondary" disabled={loadingRegion !== null} onClick={() => void loadMoreCompanyRegion("projects")}>
+                    {loadingRegion === "projects" ? "加载中…" : "加载更多项目"}
+                  </button>
+                ) : null}
+                {view === "messages" && companyConsole.pagination.conversations.has_more ? (
+                  <button className="button secondary" disabled={loadingRegion !== null} onClick={() => void loadMoreCompanyRegion("conversations")}>
+                    {loadingRegion === "conversations" ? "加载中…" : "加载更多会话"}
+                  </button>
+                ) : null}
+              </div>
             </header>
 
             {view === "agents" ? (
@@ -304,6 +434,7 @@ export function App() {
                 token={session.token}
                 onChanged={refreshCompany}
                 onError={showError}
+                onClearError={() => setError("")}
                 onNotice={setNotice}
               />
             ) : null}

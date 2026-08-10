@@ -455,6 +455,85 @@ impl ChatPlatformRepository for PostgresPlatformRepository {
         .map(|rows| rows.into_iter().map(map_conversation_preview).collect())
     }
 
+    fn list_company_conversation_page(
+        &self,
+        company_id: Uuid,
+        after_conversation_id: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<CursorPage<ConversationPreview>> {
+        let cursor = match after_conversation_id {
+            Some(cursor_id) => self
+                .with_client(|client| {
+                    client.query_opt(
+                        r#"
+                        SELECT COALESCE(latest.created_at, conversation.updated_at, conversation.created_at) AS updated_at,
+                               conversation.id
+                        FROM conversations conversation
+                        LEFT JOIN LATERAL (
+                            SELECT created_at FROM messages
+                            WHERE conversation_id = conversation.id
+                            ORDER BY created_at DESC LIMIT 1
+                        ) latest ON TRUE
+                        WHERE conversation.company_id = $1 AND conversation.id = $2
+                        "#,
+                        &[&company_id, &cursor_id],
+                    )
+                })?
+                .map(|row| {
+                    (
+                        row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at"),
+                        row.get::<_, Uuid>("id"),
+                    )
+                })
+                .ok_or_else(|| {
+                    AppError::Validation(
+                        "conversation cursor does not belong to the selected company".into(),
+                    )
+                })?,
+            None => (chrono::DateTime::<chrono::Utc>::MAX_UTC, Uuid::max()),
+        };
+        let limit = limit.clamp(1, 100);
+        let query_limit = i64::try_from(limit + 1).unwrap_or(101);
+        let rows = self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT conversation.id,
+                       COALESCE(conversation.title, '') AS title,
+                       conversation.conversation_type,
+                       latest.content_text AS last_message_preview,
+                       COALESCE(latest.created_at, conversation.updated_at, conversation.created_at) AS updated_at
+                FROM conversations conversation
+                LEFT JOIN LATERAL (
+                    SELECT content_text, created_at
+                    FROM messages
+                    WHERE conversation_id = conversation.id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) latest ON TRUE
+                WHERE conversation.company_id = $1
+                  AND conversation.context_type IN ('company_all', 'company_direct', 'company_group', 'project_group')
+                  AND (COALESCE(latest.created_at, conversation.updated_at, conversation.created_at), conversation.id) < ($2, $3)
+                ORDER BY updated_at DESC, conversation.id DESC
+                LIMIT $4
+                "#,
+                &[&company_id, &cursor.0, &cursor.1, &query_limit],
+            )
+        })?;
+        let mut items = rows
+            .into_iter()
+            .map(map_conversation_preview)
+            .collect::<Vec<_>>();
+        let has_more = items.len() > limit;
+        if has_more {
+            items.pop();
+        }
+        Ok(CursorPage {
+            next_cursor: has_more.then(|| items.last().map(|item| item.id)).flatten(),
+            items,
+            has_more,
+        })
+    }
+
     fn get_conversation_messages(&self, conversation_id: Uuid) -> Vec<MessageView> {
         self.get_conversation_messages_result(conversation_id)
             .unwrap_or_default()

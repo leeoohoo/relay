@@ -616,6 +616,14 @@ pub(super) fn codex_plugin_fingerprint(installed: &serde_json::Value) -> String 
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|plugin| {
+            plugin
+                .get("pluginId")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(
+                    ai_chat_infrastructure::codex_trigger::is_relay_supported_codex_plugin_id,
+                )
+        })
         .filter(|plugin| plugin.get("enabled").and_then(serde_json::Value::as_bool) != Some(false))
         .filter_map(|plugin| {
             let plugin_id = plugin.get("pluginId")?.as_str()?;
@@ -631,11 +639,19 @@ pub(super) fn codex_plugin_fingerprint(installed: &serde_json::Value) -> String 
 }
 
 pub(super) fn public_codex_plugin_items(items: &serde_json::Value) -> serde_json::Value {
+    let supported =
+        ai_chat_infrastructure::codex_trigger::filter_relay_supported_codex_plugin_items(items);
     serde_json::Value::Array(
-        items
+        supported
             .as_array()
             .into_iter()
             .flatten()
+            .filter(|plugin| {
+                plugin
+                    .get("pluginId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(ai_chat_infrastructure::codex_trigger::is_relay_supported_codex_plugin_id)
+            })
             .filter_map(|plugin| {
                 Some(serde_json::json!({
                     "pluginId": plugin.get("pluginId")?.as_str()?,

@@ -7,6 +7,7 @@ import { MessagesView } from "./MessagesView";
 vi.mock("../api/client", () => ({ api: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
+const taskId = "6c3a8ead-68bb-4e9d-9e79-45b31f4762ef";
 
 const trigger: CodexTriggerView = {
   runner_profile_id: "profile-1",
@@ -63,6 +64,11 @@ const trigger: CodexTriggerView = {
 };
 
 const consoleData: CompanyConsole = {
+  pagination: {
+    agents: { next_cursor: null, has_more: false },
+    conversations: { next_cursor: null, has_more: false },
+    projects: { next_cursor: null, has_more: false },
+  },
   company: { id: "company-1", name: "Relay", slug: "relay", description: "" },
   human_membership: { role: "owner", status: "active" },
   org_units: [],
@@ -115,7 +121,7 @@ const consoleData: CompanyConsole = {
     asset_refresh: null,
     members: [],
     tasks: [{
-      id: "task-1",
+      id: taskId,
       project_id: "project-1",
       title: "实现库存工作台",
       description: "",
@@ -152,6 +158,106 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
+  it("shows entity names instead of raw UUIDs in chat messages", async () => {
+    const intentId = "d7225caf-9e91-457e-a3fa-bd95a177d42b";
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) {
+        return {
+          messages: [{
+            id: "message-entity-reference",
+            conversation_id: "conversation-1",
+            sender_agent_id: "agent-1",
+            sender_human_user_id: null,
+            content: `任务 \`${taskId}\` 已完成，我已派发 Intent \`${intentId}\`。`,
+            attachments: [],
+            created_at: "2026-08-07T03:05:00Z",
+          }],
+          next_cursor: null,
+          has_more: false,
+        };
+      }
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    const taskReference = await screen.findByRole("button", { name: "任务：实现库存工作台" });
+    expect(taskReference.getAttribute("title")).toContain(taskId);
+    expect(screen.getByText("工作派发记录").getAttribute("title")).toContain(intentId);
+    expect(screen.queryByText(taskId)).not.toBeInTheDocument();
+    expect(screen.queryByText(intentId)).not.toBeInTheDocument();
+
+    fireEvent.click(taskReference);
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /实现库存工作台/ })
+      .find((element) => element.getAttribute("aria-pressed") === "true")).toBeInTheDocument();
+  });
+
+  it("opens the current project directory and task list without leaving chat", async () => {
+    const { container } = render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "项目任务" }));
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+    expect(container.querySelector(".message-console")).toHaveClass("project-context-open");
+    expect(screen.getByText("实现库存工作台")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /任务/ })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "项目目录" }));
+    expect(screen.getByRole("tab", { name: "目录" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Harness 仓库尚未初始化完成")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭项目面板" }));
+    expect(screen.queryByLabelText("项目上下文")).not.toBeInTheDocument();
+    expect(container.querySelector(".message-console")).not.toHaveClass("project-context-open");
+  });
+
+  it("uses one right-side context area for project content and member runtime", async () => {
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "项目任务" }));
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
+    expect(screen.queryByLabelText("项目上下文")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("群成员与运行情况")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "项目目录" }));
+    expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+  });
+
   it("opens inside the chat layout and exposes the Agent execution process", async () => {
     const { container } = render(
       <MessagesView
@@ -176,15 +282,63 @@ describe("MessagesView group member runtime drawer", () => {
     const memberDetails = screen.getByText("前端 Agent").closest("details")!;
     fireEvent.click(memberDetails.querySelector("summary")!);
     expect(memberDetails).toHaveAttribute("open");
-    expect(screen.getByText("项目任务")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "项目任务" })).toBeInTheDocument();
     expect(screen.getByText("实现库存工作台")).toBeInTheDocument();
     expect(screen.getByText("当前执行过程")).toBeInTheDocument();
     expect(screen.getByText("拆分实现步骤")).toBeInTheDocument();
     expect(screen.getByText("修改库存页面")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "关闭群成员" }));
-    await waitFor(() => expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument());
-    expect(container.querySelector(".message-console")).not.toHaveClass("members-open");
+    fireEvent.click(screen.getByRole("button", { name: /进行中实现库存工作台/ }));
+    expect(screen.queryByLabelText("群成员与运行情况")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("项目上下文")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /实现库存工作台/ })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭项目面板" }));
+    await waitFor(() => expect(screen.queryByLabelText("项目上下文")).not.toBeInTheDocument());
+    expect(container.querySelector(".message-console")).not.toHaveClass("project-context-open");
+  });
+
+  it("shows an in-progress task as waiting to continue between Codex runs", async () => {
+    const betweenRunsTrigger: CodexTriggerView = {
+      ...trigger,
+      config: {
+        ...trigger.config,
+        lease_owner: null,
+        lease_expires_at: null,
+        wake_requested_at: null,
+        manual_run_requested_at: null,
+      },
+      recent_runs: [{
+        ...trigger.recent_runs[0],
+        status: "succeeded",
+        finished_at: "2026-08-07T03:05:00Z",
+        activity_phase: "completed",
+        activity_summary: "Codex 已完成本轮工作",
+      }],
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger: betweenRunsTrigger };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
+    expect(await screen.findByText("待继续")).toBeInTheDocument();
+    expect(screen.getByText("等待下一轮继续 · 实现库存工作台")).toBeInTheDocument();
+    expect(screen.queryByText("空闲")).not.toBeInTheDocument();
   });
 
   it("shows the same Agent runtime details in a direct conversation", async () => {

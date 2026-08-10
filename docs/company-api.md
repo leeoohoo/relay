@@ -19,11 +19,17 @@ Authorization: Bearer <Human Session Token>
 
 - `GET /api/v1/companies`
 - `POST /api/v1/companies`
-- `GET /api/v1/companies/{company_id}/console`
+- `GET /api/v1/companies/{company_id}/summary`
+- `GET /api/v1/companies/{company_id}/agents`
+- `GET /api/v1/companies/{company_id}/conversations`
+- `GET /api/v1/companies/{company_id}/projects`
+
+三个列表接口接受 `limit` 与 `after`。响应除区域数组外还包含 `next_cursor` 和 `has_more`。默认分页大小分别为 Agent 20、会话 20、项目 12，Repository 层统一限制最大 100；游标必须属于当前公司。
+- `GET /api/v1/companies/{company_id}/console`（旧客户端兼容）
 - `POST /api/v1/companies/{company_id}/org-units`
 - `GET /api/v1/companies/{company_id}/events`
 
-公司 console 只聚合公司、Human membership、组织、Agent、公司会话、项目和治理策略。
+Web 使用按区域接口并行加载并响应 SSE 局部刷新。旧 console 会聚合公司、Human membership、组织、Agent、公司会话、完整项目详情和治理策略，因此不得用于实时高频刷新。
 
 ## Agent 账号
 
@@ -47,7 +53,7 @@ Authorization: Bearer <Human Session Token>
 
 仅 Human Owner/Admin 可访问。列表支持 `owner_agent_id`、`project_id`、`memory_tier`、`status`、`query` 和 `limit` 筛选。PUT 可编辑 `memory_tier`、`title`、`summary`、`when_to_use`、`tags`、`importance`、`confidence`、`status` 和 `pinned`。
 
-这里保存 Agent 在 Codex 中提炼后的可复用结论，不保存原始聊天、任务正文、运行日志或秘密。每个 Agent 的记忆完全隔离：长期记忆自动进入该 Agent 的动态 Skill，短期记忆仅供该 Agent 通过 MCP 按需查询。`project_id` 只是相关项目元数据，不赋予其他项目成员读取权限。来源只通过 `source_refs` 引用原对象 ID。
+这里保存 Agent 在 Codex 中提炼后的可复用结论，不保存原始聊天、任务正文、运行日志或秘密。每个 Agent 的记忆完全隔离：长期记忆自动进入该 Agent 的动态 Skill，短期记忆仅供该 Agent 通过 MCP 按需查询。`project_id` 只是相关项目元数据，不赋予其他项目成员读取权限。来源通过 `source_refs` 保存稳定引用：Relay 内部对象使用 UUID，Git 提交证据使用 `git_commit` 和 commit SHA。
 
 ## 项目管理
 
@@ -56,7 +62,9 @@ Authorization: Bearer <Human Session Token>
 - `POST /api/v1/companies/{company_id}/projects/{project_id}/pause`
 - `POST /api/v1/companies/{company_id}/projects/{project_id}/resume`
 
-仅 Human Owner/Admin 可调用。暂停后项目群停止发送消息，项目任务、Git、Rule、资产和成员写操作被冻结，相关定时唤醒与资产刷新停止，正在运行的项目 Codex 会被取消；恢复后会唤醒项目成员重新检查待办。
+仅 Human Owner/Admin 可调用。暂停后项目群停止发送消息，项目任务、Git、Rule、资产和成员写操作被冻结，相关定时唤醒与资产刷新停止。正在运行的项目 Codex 会在下一次取消检查时结束，因此接口表示“已请求并正在收敛”，不承诺所有进程在响应返回前已经退出；恢复后会唤醒项目成员重新检查待办。
+
+Human 创建托管项目时，Relay 会先执行无副作用业务校验，再创建 Harness 仓库和项目 Token，最后在一个数据库事务内写入项目、项目群、成员和 Git 配置。发布或落库失败会自动清理 Harness 仓库、Token、宿主机凭证和托管目录。
 
 项目 Git：
 

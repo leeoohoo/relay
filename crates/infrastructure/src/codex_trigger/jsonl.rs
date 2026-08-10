@@ -201,18 +201,24 @@ pub(super) fn summarize_codex_item(item: &Value, completed: bool) -> Option<(Str
             let action = mcp_tool_action(item)
                 .map(|action| format!("（action: {action}）"))
                 .unwrap_or_default();
-            let progress = if completed && codex_item_failed(item) {
+            let failed = completed && codex_item_failed(item);
+            let progress = if failed {
                 "工具调用失败："
             } else if completed {
                 "完成调用工具："
             } else {
                 "正在调用工具："
             };
-            format!("{progress}{label}{action}")
+            let detail = failed
+                .then(|| mcp_tool_error_detail(item))
+                .flatten()
+                .map(|detail| format!(" — {detail}"))
+                .unwrap_or_default();
+            format!("{progress}{label}{action}{detail}")
         }
         "file_change" | "fileChange" => format!("{completion}修改项目文件"),
         "reasoning" => format!("{completion}分析问题和下一步"),
-        "agent_message" | "agentMessage" => format!("{completion}整理回复和执行结果"),
+        "agent_message" | "agentMessage" => agent_message_summary(item, completed),
         "web_search" | "webSearch" => format!("{completion}搜索资料"),
         "todo_list" | "todoList" => format!("{completion}更新执行计划"),
         "context_compaction" | "contextCompaction" => {
@@ -236,6 +242,19 @@ pub(super) fn summarize_codex_item(item: &Value, completed: bool) -> Option<(Str
         _ => "running",
     };
     Some((phase.into(), summary))
+}
+
+fn agent_message_summary(item: &Value, completed: bool) -> String {
+    let text = item
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    match text {
+        Some(text) => truncate(&sanitize_error(text), 500),
+        None if completed => "Agent 已更新执行进度".into(),
+        None => "Agent 正在说明当前进度".into(),
+    }
 }
 
 pub(super) fn mcp_tool_action(item: &Value) -> Option<String> {
@@ -271,6 +290,49 @@ pub(super) fn codex_item_failed(item: &Value) -> bool {
             .pointer("/result/isError")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+}
+
+fn mcp_tool_error_detail(item: &Value) -> Option<String> {
+    for pointer in [
+        "/error/message",
+        "/result/error/message",
+        "/result/structuredContent/error/message",
+        "/result/structuredContent/message",
+    ] {
+        if let Some(message) = item.pointer(pointer).and_then(Value::as_str) {
+            return non_empty_error_detail(message);
+        }
+    }
+    for pointer in ["/error", "/result/error"] {
+        if let Some(message) = item.pointer(pointer).and_then(Value::as_str) {
+            return non_empty_error_detail(message);
+        }
+    }
+    for pointer in ["/result/content", "/content", "/output"] {
+        let Some(content) = item.pointer(pointer) else {
+            continue;
+        };
+        if let Some(message) = content.as_str().and_then(non_empty_error_detail) {
+            return Some(message);
+        }
+        if let Some(message) = content.as_array().and_then(|entries| {
+            entries.iter().find_map(|entry| {
+                entry
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .and_then(non_empty_error_detail)
+            })
+        }) {
+            return Some(message);
+        }
+    }
+    None
+}
+
+fn non_empty_error_detail(message: &str) -> Option<String> {
+    let message = sanitize_error(message);
+    let message = message.trim();
+    (!message.is_empty()).then(|| truncate(message, 220))
 }
 
 pub(super) async fn read_limited_text<R>(mut reader: R, max_bytes: usize) -> AppResult<String>
@@ -321,6 +383,9 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
     {
         return true;
     }
+    if !outcome.turn_started && message.contains("codex app-server timed out waiting for") {
+        return true;
+    }
     if outcome.turn_started {
         return false;
     }
@@ -337,6 +402,19 @@ pub(super) fn should_replace_session(outcome: &ProcessOutcome) -> bool {
         ]
         .iter()
         .any(|marker| message.contains(marker))
+}
+
+pub(super) fn should_retry_app_server_startup(outcome: &ProcessOutcome) -> bool {
+    if outcome.status != CodexRunStatus::Failed || outcome.turn_started {
+        return false;
+    }
+    let message = outcome
+        .error_message
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    message.contains("codex app-server closed before json-rpc response 0")
+        || message.contains("codex app-server timed out waiting for initialize response 0")
 }
 
 pub(super) fn to_public_result(

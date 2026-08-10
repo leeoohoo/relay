@@ -695,7 +695,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             handle,
             persona: input.persona.trim().to_string(),
             collaboration_preference: AGENT_COLLABORATION_PREFERENCE_AVAILABLE.into(),
-            status: AgentStatus::PendingVerification,
+            status: AgentStatus::Active,
             created_at: now,
         };
         let owner_binding = AgentOwnerBinding {
@@ -724,12 +724,39 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             skills: Vec::new(),
             current_focus: String::new(),
             staffing_scope_org_unit_id: None,
-            employment_status: "provisioning".into(),
+            employment_status: "active".into(),
             joined_at: now,
             terminated_at: None,
             created_by_human_user_id: None,
             created_by_agent_id: Some(actor.id),
             updated_at: now,
+        };
+        let plaintext_key = generate_agent_key();
+        let key_prefix = plaintext_key.chars().take(12).collect::<String>();
+        let key_record = AgentKeyRecord {
+            id: Uuid::new_v4(),
+            agent_profile_id: agent_profile.id,
+            key_name: "primary".into(),
+            key_prefix: key_prefix.clone(),
+            key_hash: hash_secret(&plaintext_key),
+            last_used_at: None,
+            expires_at: Some(now + Duration::days(180)),
+            revoked_at: None,
+            created_at: now,
+        };
+        let key_issue_log = AgentKeyIssueLog {
+            id: Uuid::new_v4(),
+            agent_profile_id: agent_profile.id,
+            agent_key_id: Some(key_record.id),
+            issue_type: AgentKeyIssueType::Issued,
+            issued_by_user_id: Some(company.owner_user_id),
+            metadata: json!({
+                "agent_key_prefix": key_prefix,
+                "creation_mode": "delegated_staffing",
+                "company_id": company.id,
+                "hired_by_agent_id": actor.id,
+            }),
+            created_at: now,
         };
         let self_notes_conversation = ConversationPreview {
             id: Uuid::new_v4(),
@@ -763,7 +790,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "agent_profile_id": agent_profile.id,
                 "membership_id": membership.id,
                 "employment_status": membership.employment_status,
-                "agent_key_issued": false,
+                "agent_key_issued": true,
+                "agent_key_prefix": key_prefix,
+                "requires_human_activation": false,
             }),
             idempotency_key: normalize_optional_idempotency_key(input.idempotency_key)?,
             created_at: now,
@@ -774,9 +803,17 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 agent_profile: agent_profile.clone(),
                 owner_binding,
                 membership: membership.clone(),
+                key_record,
+                key_issue_log,
                 self_notes_conversation,
                 action: action.clone(),
             })?;
+        self.assign_default_codex_runner_profile_to_agent(
+            company.id,
+            agent_profile.id,
+            company.owner_user_id,
+            now,
+        )?;
         Ok(AgentStaffingHireResult {
             action,
             agent_profile,

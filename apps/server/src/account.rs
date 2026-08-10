@@ -38,6 +38,7 @@ pub(super) fn build_cors_layer(origins: &[String]) -> anyhow::Result<CorsLayer> 
             CONTENT_TYPE,
             HeaderName::from_static("x-agent-key"),
             HeaderName::from_static("x-agent-run-token"),
+            HeaderName::from_static("x-relay-session-kind"),
             HeaderName::from_static("idempotency-key"),
             HeaderName::from_static("last-event-id"),
             HeaderName::from_static("mcp-protocol-version"),

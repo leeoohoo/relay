@@ -125,9 +125,9 @@ export function TasksView(props: {
             {taskPagination.pageItems.map(({ project, task }) => {
               const dependencies = project.task_dependencies
                 .filter((dependency) => dependency.task_id === task.id)
-                .map((dependency) => project.tasks.find((candidate) => candidate.id === dependency.depends_on_task_id))
-                .filter((dependency): dependency is CompanyProjectTask => Boolean(dependency));
-              const unresolvedDependencies = dependencies.filter((dependency) => !["done", "cancelled"].includes(dependency.status));
+                .map((dependency) => ({ dependency, task: project.tasks.find((candidate) => candidate.id === dependency.depends_on_task_id) }))
+                .filter((item): item is { dependency: CompanyProject["task_dependencies"][number]; task: CompanyProjectTask } => Boolean(item.task));
+              const unresolvedDependencies = dependencies.filter((item) => !taskDependencyResolved(item.dependency.dependency_condition, item.task.status));
               return (
                 <div
                   className={`task-row ${canManage && project.project.status !== "paused" ? "editable" : ""} ${project.project.status === "paused" ? "project-paused" : ""}`}
@@ -140,7 +140,7 @@ export function TasksView(props: {
                   <span className="task-title-cell">
                     <strong>{task.title}</strong>
                     <small>{project.project.name}{project.project.status === "paused" ? " · 项目已暂停" : ""}{dependencies.length ? ` · ${dependencies.length} 个前置任务` : ""}</small>
-                    {unresolvedDependencies.length ? <em className="task-waiting-dependencies">等待：{unresolvedDependencies.map((dependency) => dependency.title).join("、")}</em> : null}
+                    {unresolvedDependencies.length ? <em className="task-waiting-dependencies">等待：{unresolvedDependencies.map((item) => item.task.title).join("、")}</em> : null}
                   </span>
                   <span>{unresolvedDependencies.length ? <span className="task-status waiting"><span className="status-dot" />等待前置</span> : <TaskStatusBadge status={task.status} />}</span>
                   <span><TaskPriorityBadge priority={task.priority} /></span>
@@ -196,6 +196,15 @@ export function TasksView(props: {
   );
 }
 
+function taskDependencyResolved(
+  condition: CompanyProject["task_dependencies"][number]["dependency_condition"],
+  status: CompanyProjectTask["status"],
+) {
+  if (condition === "completion") return ["done", "failed", "cancelled"].includes(status);
+  if (condition === "failure") return status === "failed";
+  return ["done", "cancelled"].includes(status);
+}
+
 function TaskMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
   return <div className={`task-metric ${tone}`}><span className="task-metric-icon"><Icon name="tasks" /></span><span><small>{label}</small><strong>{value}</strong></span></div>;
 }
@@ -239,7 +248,12 @@ function TaskDialog(props: {
   const selectedDependencies = dependencyIds
     .map((dependencyId) => dependencyCandidates.find((candidate) => candidate.id === dependencyId))
     .filter((dependency): dependency is CompanyProjectTask => Boolean(dependency));
-  const unresolvedDependencies = selectedDependencies.filter((dependency) => !["done", "cancelled"].includes(dependency.status));
+  const unresolvedDependencies = selectedDependencies.filter((dependency) => {
+    const condition = project?.task_dependencies.find((item) => (
+      item.task_id === props.task?.id && item.depends_on_task_id === dependency.id
+    ))?.dependency_condition ?? "success";
+    return !taskDependencyResolved(condition, dependency.status);
+  });
   const dependenciesLocked = Boolean(props.task && ["done", "failed", "cancelled"].includes(props.task.status));
   const statusBlockedByDependencies = Boolean(props.task && unresolvedDependencies.length && ["in_progress", "done"].includes(status));
   const statusHistory = props.task
@@ -368,4 +382,3 @@ function TaskDialog(props: {
     </Dialog>
   );
 }
-

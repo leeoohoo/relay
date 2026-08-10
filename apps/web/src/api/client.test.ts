@@ -1,9 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { consumeSse, parseSseFrame } from "./client";
+import { api, ApiError, consumeSse, parseSseFrame } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("parseSseFrame", () => {
+  it("preserves HTTP status and server error code", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: "rate_limited",
+      message: "owner API limit exceeded",
+    }), { status: 429, headers: { "content-type": "application/json" } })));
+
+    await expect(api("/api/v1/test")).rejects.toEqual(expect.objectContaining<ApiError>({
+      name: "ApiError",
+      status: 429,
+      code: "rate_limited",
+      message: "owner API limit exceeded",
+    }));
+  });
+
   it("parses ids, named events, and multiline data", () => {
     expect(parseSseFrame("id: 42\nevent: message.created\ndata: {\"line\":1}\ndata: tail")).toEqual({
       id: "42",

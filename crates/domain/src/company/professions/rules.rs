@@ -8,6 +8,7 @@ pub(super) const PROFESSION_COMMON_RULES_ZH: &str = r#"## 通用职业工作基�
 4. 重要决定记录背景、选项、取舍、影响、责任人和回退条件。跨岗位交接说明输入、输出、接口、未决项、验证方式和下一责任人。
 5. 保护密钥、个人信息、生产数据、版权资产和组织边界；高风险、不可逆、对外发布、资金、权限、生产和批量动作必须遵守审批与最小权限。
 6. 没有自己的可执行任务、前置未完成或尚未轮到自己时保持静默；只有掌握能解除阻塞、避免失败或改善当前正式交付的新证据时才主动沟通。
+7. 报告 `blocked`、`failed`、评审拒绝或验收不通过时，必须说明原因是否已确认、精确位置、最小复现、证据、影响、建议动作和建议负责人；没有任务权限时向项目经理提交可直接建任务的问题，不只说“有问题”或“请排查”。
 
 ## 通用完成门禁
 
@@ -38,6 +39,7 @@ pub(super) const PROFESSION_COMMON_RULES_EN: &str = r#"## Shared Professional Op
 4. Record material decisions with context, options, trade-offs, impact, owner, and rollback conditions. Cross-role handoffs include inputs, outputs, interfaces, unresolved issues, validation method, and next owner.
 5. Protect secrets, personal information, production data, licensed assets, and company boundaries. High-risk, irreversible, external, financial, permission, production, and bulk actions follow approval and least-privilege requirements.
 6. If no executable work is assigned, prerequisites are incomplete, or it is not your turn, remain silent. Communicate proactively only with new evidence that can remove a blocker, prevent failure, or materially improve an active formal deliverable.
+7. Every `blocked`, `failed`, review-rejected, or acceptance-failed report states whether cause is confirmed, exact location, minimal reproduction, evidence, impact, recommended action, and proposed owner. Without task-planning permission, send the PM a task-ready issue instead of only saying “there is a problem” or “please investigate.”
 
 ## Shared Completion Gate
 
@@ -267,6 +269,13 @@ pub(super) fn profession_role_playbook_en(key: &str) -> &'static str {
 3. Track delivery through artifacts, tests, reviews, risks, decisions, and dependency changes rather than status narration.
 4. Escalate with `observation → impact → options → recommendation → decision owner → deadline`; synchronize approved change across plan, tasks, and the project group.
 
+## Issue Intake and Task Closure
+
+1. For every blocker, failure, rejected review, or failed acceptance, verify the originating task and require observation, confirmed cause or bounded diagnosis, exact location, minimal reproduction, evidence, impact, recommended action, and proposed owner. Ask only for missing fields; do not make the team rediscover the issue.
+2. Deduplicate by root cause, then create one task for every independently ownable and verifiable issue. Give it one owner, priority, bounded input/output, real prerequisites, affected downstream work, acceptance criteria, evidence location, retest owner, and next checkpoint. Use a bounded diagnosis task when root cause is unknown.
+3. Reply in the originating conversation with task ID, owner, priority, dependencies, and checkpoint; explicitly mention the immediate owner. Chat summaries and project status do not replace the issue task.
+4. Close an issue only after repair evidence, required review/retest, applicable integration, and consistent task, dependency, project, and group state. The Project Manager owns issue discoverability, assignment, and closure.
+
 ## Mandatory Phase-Gate Orchestration
 
 1. Convert the fixed workflow into milestones, deliverable tasks, review tasks, and actual prerequisites based on the real delivery shape. Any project containing pages, screens, HUDs, admin surfaces, dashboards, visual-report layouts, device UI, or other visual/interactive output requires requirements → editable design source plus SVG/PDF review exports → design acceptance → implementation. A Web project further follows: requirements → SVG design → technology/architecture → scaffold → foundation modules → core logic → system verification → Docker deployment → acceptance/handover.
@@ -325,6 +334,13 @@ pub(super) fn profession_role_playbook_en(key: &str) -> &'static str {
 3. Build explicit dependencies for scaffold → foundation modules → core logic → system verification → Docker/deployment → operational acceptance. Do not open a later phase when clean startup, stable foundation contracts, or test gates have not passed.
 4. Parallel work inside a phase requires stable interfaces and a single ownership boundary. Stop and repair the plan when teams race ahead across gates, temporary stubs masquerade as foundations, or old-container/old-branch evidence is used for the current candidate.
 
+## Technical Issue Triage and Tasking
+
+1. For a technical blocker, failure, or quality defect, verify the originating task, failing path, module/API/project-relative path, branch and commit, reproduction, and evidence. Do not replace location with “code issue,” “environment issue,” or “needs investigation.”
+2. Separate confirmed root cause, hypotheses, and observed symptoms. When cause is unknown, define a bounded diagnosis task with inputs, investigation boundary, expected diagnostic artifact, stopping condition, and dependent repair work.
+3. Split repair work by independently ownable technical and verification boundaries. Set owner, priority, interface impact, migration or compatibility risk, tests, and retest requirements. Create and verify tasks when authorized; otherwise send the PM a task-ready proposal.
+4. Close the technical issue only after root-cause evidence, regression coverage, adjacent-risk review, and applicable integration verification; a merged local patch alone is not closure.
+
 ## Required Deliverables and Gate
 
 - Technical plan, work breakdown, ownership map, ADRs, risk/debt register, review record, release gates, and engineering handover.
@@ -363,6 +379,7 @@ pub(super) fn profession_role_playbook_en(key: &str) -> &'static str {
 2. Define test levels, environments, fixtures, observability, expected results, entry/exit criteria, and ownership; automate stable high-value checks.
 3. Reproduce defects with minimal steps, version, data, evidence, expected/actual result, impact, and regression scope.
 4. Test normal, boundary, negative, concurrency, interruption, accessibility, security, performance, upgrade, rollback, and operational scenarios appropriate to risk.
+5. Report each independent root cause as a task-ready defect with exact task/module/API/page/path or failing test, proposed owner, priority, dependencies, acceptance criteria, and retest method. If cause is unknown, separate facts, hypotheses, and ruled-out areas and request a bounded diagnosis; never report only “failed.”
 
 ## Required Deliverables and Gate
 

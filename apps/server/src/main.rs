@@ -20,7 +20,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use futures_util::Stream;
@@ -43,23 +43,24 @@ use rmcp::transport::streamable_http_server::{
 
 use ai_chat_application::{
     ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
-    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput, CreateOrgUnitInput,
-    DeleteAgentMemoryForHumanInput, DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
+    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
+    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput, DeleteAgentMemoryForHumanInput,
+    DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
     GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
     ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
-    OpenHumanCompanyDirectConversationInput, PlatformApp, PublishCompanyGovernancePolicyInput,
-    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
-    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
-    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
-    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
-    TransferCompanyProjectOwnerForHumanInput, UpdateAgentMemoryForHumanInput,
-    UpdateCompanyAgentPermissionsInput, UpdateCompanyAgentProfessionInput,
-    UpdateCompanyAgentRoleInput, UpdateCompanyProjectRuleForHumanInput,
-    UpdateCompanyProjectTaskForHumanInput, UpsertCompanyAgentCodexTriggerForHumanInput,
-    UpsertCompanyCodexRunnerProfileForHumanInput, UpsertCompanyProjectAssetRefreshForHumanInput,
-    UpsertCompanyProjectGitForHumanInput,
+    OpenHumanCompanyDirectConversationInput, PlatformApp, ProjectProvisioningCleanupJob,
+    PublishCompanyGovernancePolicyInput, RegisterHumanInput,
+    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
+    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
+    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
+    SetCompanyProjectPauseForHumanInput, TransferCompanyProjectOwnerForHumanInput,
+    UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
+    UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
+    UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
+    UpsertCompanyAgentCodexTriggerForHumanInput, UpsertCompanyCodexRunnerProfileForHumanInput,
+    UpsertCompanyProjectAssetRefreshForHumanInput,
 };
 use ai_chat_domain::agent_identity::{HumanHarnessAccount, HumanUser};
 use ai_chat_domain::company::{
@@ -80,7 +81,9 @@ use ai_chat_infrastructure::harness::{
     HarnessProjectGitProvisioner, HarnessProvisioner, HarnessRepositoryContent,
 };
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
-use ai_chat_infrastructure::project_git::ProvisionedProjectGit;
+use ai_chat_infrastructure::project_git::{
+    generated_repository_identifier, initial_project_access_token_identifier, ProvisionedProjectGit,
+};
 use ai_chat_infrastructure::realtime::spawn_postgres_realtime_listener;
 use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
@@ -337,6 +340,7 @@ async fn main() -> anyhow::Result<()> {
         codex_control_store,
         harness_provisioner,
     };
+    spawn_project_provisioning_cleanup_worker(app_state.clone());
 
     let app = Router::new()
         .route("/health", get(health))
@@ -386,6 +390,18 @@ async fn main() -> anyhow::Result<()> {
             get(get_company_console),
         )
         .route(
+            "/api/v1/companies/{company_id}/summary",
+            get(get_company_summary),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/conversations",
+            get(list_company_console_conversations),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/skill-catalog",
+            get(get_company_skill_catalog),
+        )
+        .route(
             "/api/v1/companies/{company_id}/workspace-settings",
             post(update_company_workspace_settings),
         )
@@ -399,7 +415,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/projects",
-            post(create_company_project_for_human),
+            get(list_company_console_projects).post(create_company_project_for_human),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/import-folder",
@@ -433,7 +449,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/agents",
-            post(create_company_agent),
+            get(list_company_console_agents).post(create_company_agent),
         )
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/permissions",
@@ -646,6 +662,7 @@ async fn main() -> anyhow::Result<()> {
             post(rotate_admin_agent_key),
         )
         .route("/api/v1/dev/bootstrap", post(dev_bootstrap_agent))
+        .route("/api/{*path}", any(api_not_found))
         .route_service(STANDARD_MCP_PATH, standard_mcp)
         .fallback_service(
             ServeDir::new(resolve_web_dist_dir())
@@ -675,6 +692,10 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn api_not_found() -> ApiError {
+    ApiError(AppError::NotFound("API route not found".into()))
 }
 
 #[cfg(test)]

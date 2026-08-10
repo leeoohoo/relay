@@ -154,11 +154,17 @@ fn profession_catalog_is_detailed_grouped_and_bilingual() {
     assert!(project_manager.skill_markdown.contains("强制阶段门禁编排"));
     assert!(project_manager.skill_markdown.contains("固定集成分支职责"));
     assert!(project_manager
+        .skill_markdown
+        .contains("问题接收、任务化与闭环"));
+    assert!(project_manager
         .skill_markdown_en
         .contains("Mandatory Phase-Gate Orchestration"));
     assert!(project_manager
         .skill_markdown_en
         .contains("Stable Integration Branch Responsibility"));
+    assert!(project_manager
+        .skill_markdown_en
+        .contains("Issue Intake and Task Closure"));
 
     let product_manager = catalog
         .iter()
@@ -177,6 +183,18 @@ fn profession_catalog_is_detailed_grouped_and_bilingual() {
     assert!(technical_manager
         .skill_markdown_en
         .contains("Engineering Phase Gates"));
+    assert!(technical_manager
+        .skill_markdown_en
+        .contains("Technical Issue Triage and Tasking"));
+
+    let qa_engineer = catalog
+        .iter()
+        .find(|profession| profession.key == COMPANY_PROFESSION_QA_ENGINEER)
+        .expect("QA engineer profession");
+    assert!(qa_engineer
+        .skill_markdown
+        .contains("可直接建任务的缺陷建议"));
+    assert!(qa_engineer.skill_markdown_en.contains("task-ready defect"));
 }
 
 #[test]

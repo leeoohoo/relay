@@ -12,7 +12,7 @@
 
 | Status | Lines | File | Planned ownership split |
 | --- | ---: | --- | --- |
-| [x] | 16,634 | `crates/application/src/service.rs` | split into contracts, platform services, validation, pagination and tests; repository facade is now 65 lines |
+| [x] | 16,634 | `crates/application/src/service.rs` | split into contracts, PlatformApp use cases, domain repository ports, validation, pagination and tests; the unused duplicate Service Facade was removed |
 | [x] | 6,725 | `crates/infrastructure/src/postgres.rs` | facade is now 164 lines; auth, company, Agent, chat, project, memory, Codex control/runtime, task, governance and row mapping are focused modules |
 | [x] | 5,236 | `apps/web/src/pages/App.tsx` | application shell is now 400 lines; feature pages, dialogs and view models were extracted |
 | [x] | 4,655 | `apps/server/src/main.rs` | bootstrap/router is now 653 lines; account, company, chat, project, Codex, Agent, auth/error, DTO and tests are focused modules |

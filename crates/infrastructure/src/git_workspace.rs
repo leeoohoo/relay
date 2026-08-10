@@ -369,7 +369,10 @@ mod tests {
             .prepare_general_workspace(Uuid::new_v4(), Uuid::new_v4())
             .expect("general workspace");
         assert!(prepared.path.join(AGENT_GIT_DIR_NAME).is_dir());
-        assert!(!prepared.path.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(prepared.path.join(".git")).expect("managed Git marker"),
+            "gitdir: .relay-git\n"
+        );
         assert_eq!(
             run_git(
                 Some(&prepared.path),
@@ -404,7 +407,12 @@ mod tests {
             .expect("project workspace");
 
         assert!(prepared.path.join(AGENT_GIT_DIR_NAME).is_dir());
-        assert!(!prepared.path.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(prepared.path.join(".git")).expect("managed Git marker"),
+            "gitdir: .relay-git\n"
+        );
+        assert!(!prepared.auth_environment.contains_key("GIT_DIR"));
+        assert!(!prepared.auth_environment.contains_key("GIT_WORK_TREE"));
         assert_eq!(prepared.branch, "relay/backend/inbox");
         assert_eq!(
             run_git(
@@ -423,6 +431,31 @@ mod tests {
             )
             .expect("clean Agent worktree"),
             ""
+        );
+        let independent_clone = root.join("independent-clone");
+        run_git(
+            None,
+            &HashMap::new(),
+            [
+                "clone".into(),
+                path_string(&remote).expect("remote path"),
+                path_string(&independent_clone).expect("independent path"),
+            ],
+        )
+        .expect("independent clone");
+        assert_eq!(
+            run_git(
+                Some(&prepared.path),
+                &prepared.auth_environment,
+                [
+                    "-C".into(),
+                    path_string(&independent_clone).expect("independent path"),
+                    "branch".into(),
+                    "--show-current".into(),
+                ],
+            )
+            .expect("git -C must use the independent repository"),
+            "main"
         );
         fs::write(prepared.path.join("agent.txt"), "work\n").expect("agent file");
         run_git(
@@ -744,6 +777,7 @@ mod tests {
             .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
             .expect("project workspace");
         fs::write(prepared.path.join("agent.txt"), "preserve me\n").expect("agent file");
+        fs::remove_file(prepared.path.join(".git")).expect("remove managed marker");
         fs::rename(
             prepared.path.join(AGENT_GIT_DIR_NAME),
             prepared.path.join(".git"),
@@ -755,7 +789,10 @@ mod tests {
             .expect("relocated workspace");
 
         assert!(migrated.path.join(AGENT_GIT_DIR_NAME).is_dir());
-        assert!(!migrated.path.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(migrated.path.join(".git")).expect("managed Git marker"),
+            "gitdir: .relay-git\n"
+        );
         assert_eq!(
             fs::read_to_string(migrated.path.join("agent.txt")).expect("preserved agent file"),
             "preserve me\n"
@@ -785,6 +822,7 @@ mod tests {
             .prepare_project_workspace(Uuid::new_v4(), git.project_id, agent_id, "@backend", &git)
             .expect("project workspace");
         let duplicate_git = prepared.path.join(".git");
+        fs::remove_file(&duplicate_git).expect("remove managed marker");
         fs::create_dir_all(&duplicate_git).expect("duplicate metadata");
         fs::write(
             duplicate_git.join("sentinel"),
@@ -797,7 +835,10 @@ mod tests {
             .expect("workspace should recover from duplicate metadata");
 
         assert!(recovered.path.join(AGENT_GIT_DIR_NAME).is_dir());
-        assert!(!recovered.path.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(recovered.path.join(".git")).expect("managed Git marker"),
+            "gitdir: .relay-git\n"
+        );
         let backups = project_root.join(".relay/legacy-gitlinks");
         let backup = backups
             .read_dir()
@@ -833,7 +874,10 @@ mod tests {
             .expect("general workspace should recover from duplicate metadata");
 
         assert!(recovered.path.join(AGENT_GIT_DIR_NAME).is_dir());
-        assert!(!recovered.path.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(recovered.path.join(".git")).expect("managed Git marker"),
+            "gitdir: .relay-git\n"
+        );
         let backup = manager
             .general_workspace_root
             .join("legacy-gitlinks")
@@ -898,7 +942,10 @@ mod tests {
             .expect("migrated workspace");
 
         assert!(prepared.path.join(AGENT_GIT_DIR_NAME).is_dir());
-        assert!(!prepared.path.join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(prepared.path.join(".git")).expect("managed Git marker"),
+            "gitdir: .relay-git\n"
+        );
         assert_eq!(
             fs::read_to_string(prepared.path.join("agent.txt")).expect("preserved file"),
             "preserve me\n"

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_agent_tool_approvals_always_allow;

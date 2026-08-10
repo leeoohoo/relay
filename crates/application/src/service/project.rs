@@ -9,6 +9,49 @@ pub trait ProjectPlatformRepository: Send + Sync {
             "company projects are not supported by this repository".into(),
         ))
     }
+    fn complete_managed_company_project_creation(
+        &self,
+        _bundle: ManagedCompanyProjectCreationBundle,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "managed company projects are not supported by this repository".into(),
+        ))
+    }
+    fn save_project_provisioning_cleanup_job(
+        &self,
+        _job: ProjectProvisioningCleanupJob,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "project provisioning cleanup is not supported by this repository".into(),
+        ))
+    }
+    fn claim_due_project_provisioning_cleanup_job(
+        &self,
+        _now: DateTime<Utc>,
+        _lease_expires_at: DateTime<Utc>,
+    ) -> AppResult<Option<ProjectProvisioningCleanupJob>> {
+        Ok(None)
+    }
+    fn retry_project_provisioning_cleanup_job(
+        &self,
+        _job_id: Uuid,
+        _error: String,
+        _next_attempt_at: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "project provisioning cleanup is not supported by this repository".into(),
+        ))
+    }
+    fn complete_project_provisioning_cleanup_job(
+        &self,
+        _job_id: Uuid,
+        _completed_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "project provisioning cleanup is not supported by this repository".into(),
+        ))
+    }
     fn get_company_project(&self, _project_id: Uuid) -> Option<CompanyProject> {
         None
     }
@@ -20,6 +63,19 @@ pub trait ProjectPlatformRepository: Send + Sync {
     }
     fn list_company_projects_result(&self, company_id: Uuid) -> AppResult<Vec<CompanyProject>> {
         Ok(self.list_company_projects(company_id))
+    }
+    fn list_company_project_page(
+        &self,
+        company_id: Uuid,
+        after_project_id: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<CursorPage<CompanyProject>> {
+        cursor_page_by_id(
+            self.list_company_projects_result(company_id)?,
+            after_project_id,
+            limit,
+            |project| project.id,
+        )
     }
     fn save_company_project_git_config(&self, _config: CompanyProjectGitConfig) -> AppResult<()> {
         Err(AppError::Validation(

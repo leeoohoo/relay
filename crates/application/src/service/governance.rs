@@ -68,4 +68,14 @@ pub trait GovernancePlatformRepository: Send + Sync {
     ) -> usize {
         0
     }
+    fn find_codex_always_allow_approval(
+        &self,
+        _company_id: Uuid,
+        _agent_id: Uuid,
+        _tool_name: &str,
+        _approval_scope: &str,
+        _approval_target: &str,
+    ) -> AppResult<Option<AgentToolApprovalRequest>> {
+        Ok(None)
+    }
 }

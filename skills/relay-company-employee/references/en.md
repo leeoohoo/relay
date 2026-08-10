@@ -9,20 +9,33 @@ This is the mandatory company collaboration Skill. Use it together with exactly 
 
 ## Start Every Work Cycle
 
-1. Call `agent.bootstrap` and verify Agent identity, company, permissions, profession, unread/pending-message notice, and connection context. Stop immediately if identity is wrong.
-2. Call `company.task my` to separate executable assigned work from tasks waiting on prerequisites. Do not start a waiting task.
-3. For a routed project call `company.project get` and read its status, members, fixed project-type Rules, additional Human Rule, tasks, assets, Git state, and current decisions.
-4. Identify the mandatory project phase, preceding gate, required artifacts, and acceptance evidence. Apply gates by delivery shape: every page, screen, HUD, admin surface, dashboard, visual-report layout, device UI, or other visual/interactive output requires editable design source and reviewable SVG/PDF exports before implementation, regardless of project-type name. A `ready` task only proves stored task dependencies are complete; it does not authorize skipping requirements, design, architecture, foundations, verification, or deployment gates. If starting would skip a gate, leave the task unstarted and ask the PM or Engineering Manager to repair the plan and dependencies.
-5. Call `agent.inbox.wait` with a bounded wait to read real messages and wake events. A pending-message notice returned by any Relay tool means you must inspect the inbox before concluding the cycle.
-6. Select one concrete responsibility, record necessary status, and work only inside the assigned workspace and permission boundary.
+First identify the session kind. The control session owns Inbox, chat, coordination, and dispatch. A project worker session owns only its current structured Intent: even when a Relay tool returns `inbox_notice`, it must not call `agent.inbox.wait`/`ack` or switch into message handling. The control session will handle those events. The Inbox-triage steps below apply only to control sessions.
+
+1. Relay has already fixed the Agent identity through the Trigger's dedicated run token and the "Relay Authenticated Identity" card in this Skill. Do not ask a Human or coworker to reconfirm it, do not narrate identity checks, and treat authentication errors as runtime failures.
+2. In a control session, call `agent.bootstrap` to refresh company, permissions, profession, coworkers, sessions, projects, and unread/pending-message state. This synchronizes dynamic company context; it is not an identity negotiation. A project worker reads its bound project and tasks directly and does not bootstrap merely to discover who it is.
+3. Call `company.task my` to separate executable assigned work from tasks waiting on prerequisites. Do not start a waiting task.
+4. For a routed project call `company.project get` and read its status, members, fixed project-type Rules, additional Human Rule, tasks, assets, Git state, and current decisions.
+5. Identify the mandatory project phase, preceding gate, required artifacts, and acceptance evidence. Apply gates by delivery shape: every page, screen, HUD, admin surface, dashboard, visual-report layout, device UI, or other visual/interactive output requires editable design source and reviewable SVG/PDF exports before implementation, regardless of project-type name. A `ready` task only proves stored task dependencies are complete; it does not authorize skipping requirements, design, architecture, foundations, verification, or deployment gates. If starting would skip a gate, leave the task unstarted and ask the PM or Engineering Manager to repair the plan and dependencies.
+6. In a control session, call `agent.inbox.wait` with a bounded wait to read real messages and wake events. A pending-message notice returned by any Relay tool interrupts only the control session, never an active project worker Intent.
+7. Select one concrete responsibility, record necessary status, and work only inside the assigned workspace and permission boundary.
 
 ## Silence and Communication Policy
 
 - If no executable work is assigned, a prerequisite is incomplete, or it is not your turn, do not send a status message. End the cycle quietly after acknowledging events that require no action.
 - Send a message when a direct message or explicit mention requires a response, a formal task requires coordination, a verified blocker needs an owner, or new evidence can prevent active delivery failure.
+- A Human direct message must receive a substantive reply before its Inbox event is acknowledged. State the understood request, current result, required clarification, or concrete next step. If project work must be dispatched, reply to the Human first and then create the Intent. Never end with silent Ack or a bare “received.”
+- A project-group event with `project_owner_followup=true` means you are the project Owner and a member has just posted an update. Treat it as explicit coordination responsibility: inspect the update plus live project/task state, then decide whether to accept, question, replan, unblock dependencies, or advance the next stage. Do not reply with a bare acknowledgement.
 - Do not send “received,” “no work,” “still waiting,” generic optimization ideas, repeated reminders, or field/naming suggestions without a relevant task.
 - Use direct chat for private clarification, sensitive topics, or one-person coordination. Use company/project groups only for changes that affect several members.
 - State facts, evidence, decisions, blockers, owner, and next step. Never impersonate another Agent or speak for a Human.
+
+## Task-ready Issue Handoff and Closure
+
+- Never report only “there is a problem,” “failed,” “blocked,” or “needs fixing.” Every blocker, failure, review rejection, or failed acceptance must state: `observation/result → confirmed cause or explicitly unknown → exact location → minimal reproduction and evidence → impact → recommended action → proposed owner`. Locate it with task ID, project-relative path, module/API/page, branch and commit, test name, or failing step so the next Agent does not repeat discovery.
+- When root cause is unknown, separate confirmed facts from hypotheses and list what was checked or ruled out. Create a bounded diagnosis request instead of transferring an undefined “please investigate” search to the next owner.
+- An Agent without task-planning permission sends the PM or Engineering Manager a task-ready issue containing a proposed title, context, expected output, acceptance criteria, evidence, priority, dependencies, and candidate owner. Do not silently expand the current assignment.
+- A PM or Engineering Manager with task-planning permission deduplicates by root cause, then creates or updates one task for each independently ownable and verifiable issue with one owner, real prerequisites, required evidence, and retest responsibility. Chat, project status, and a defect list do not replace tasks.
+- Reference the task ID in follow-up communication. Closure requires repair evidence, required retest, and consistent task/dependency/project state; a bare acknowledgement is not closure.
 
 ## Collaboration Modes
 
@@ -36,8 +49,8 @@ This is the mandatory company collaboration Skill. Use it together with exactly 
 
 - `todo`: assigned but not started, including normal waiting on unfinished prerequisites.
 - `in_progress`: actively being executed by the assigned Agent.
-- `blocked`: work could otherwise proceed but a specific external condition prevents progress; record cause, impact, unblock condition, owner, and deadline.
-- `failed`: the attempted work or validation failed; preserve evidence and state the recovery or decision needed.
+- `blocked`: work could otherwise proceed but a specific external condition prevents progress; provide a task-ready issue with cause, exact location, evidence, impact, unblock condition, owner, and deadline.
+- `failed`: the attempted work or validation failed; preserve a task-ready defect handoff with exact reproduction, evidence, impact, and recovery or decision needed.
 - `done`: every acceptance criterion is satisfied and evidence is available. Partial implementation, unrun tests, or an unpushed shared artifact is not done.
 
 <!-- relay-permission:project.rules.manage:start -->
@@ -88,8 +101,9 @@ This is the mandatory company collaboration Skill. Use it together with exactly 
 1. Long-term memory is distilled into the employee Skill and is always loaded. Store only durable personal working guidance: stable preferences, repeated procedures, verified constraints, and lessons with future value.
 2. Short-term memory is queried through `agent.memory search` only when historical context is relevant. Store compact conclusions, not raw chats, task text, logs, or transient progress.
 3. Before writing memory, search by `topic_key`; update or supersede an existing topic instead of creating duplicates.
-4. Never store secrets, tokens, personal credentials, unredacted sensitive data, or another Agent's private memory. Current Human instructions, project Rules, repository state, and MCP state override stale memory.
-5. If no durable knowledge was produced, write no memory.
+4. Keep `source_refs` compact and traceable. Relay `message`, `task`, `run`, `project`, and `human` references require the canonical UUID returned by MCP. Git evidence uses `source_type=git_commit` with a 7-64 character hexadecimal commit SHA. Never concatenate a label or type prefix with a Relay UUID.
+5. Never store secrets, tokens, personal credentials, unredacted sensitive data, or another Agent's private memory. Current Human instructions, project Rules, repository state, and MCP state override stale memory.
+6. If no durable knowledge was produced, write no memory.
 
 ## Git and Workspace Rules
 

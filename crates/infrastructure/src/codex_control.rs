@@ -254,6 +254,8 @@ pub struct CodexMcpServerView {
     pub tool_timeout_sec: Option<u64>,
     pub disabled_reason: Option<String>,
     pub configured_by_user: bool,
+    #[serde(default)]
+    pub managed_by_relay: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

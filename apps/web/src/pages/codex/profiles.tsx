@@ -22,6 +22,7 @@ export function CodexRunnerProfilesPanel(props: {
   companyId: string;
   profiles: CodexRunnerProfileView[];
   loading: boolean;
+  unavailable?: boolean;
   authProfiles: CodexAuthProfile[];
   cliSettings: CodexCompanyCliSettings | null;
   token: string;
@@ -79,6 +80,8 @@ export function CodexRunnerProfilesPanel(props: {
           ))}
           <Pagination {...profilePagination} onPageChange={profilePagination.setPage} />
         </div>
+      ) : props.unavailable && !creating ? (
+        <div className="empty-inline compact-empty"><Icon name="terminal" /><h3>运行配置暂时无法读取</h3><p>当前没有可用缓存；请稍后刷新，不会把暂时不可用误判为配置已删除。</p></div>
       ) : !creating ? (
         <div className="empty-inline compact-empty"><Icon name="terminal" /><h3>还没有运行配置</h3><p>创建第一个配置后，它会自动成为默认配置。</p></div>
       ) : null}
@@ -200,7 +203,8 @@ function CodexRunnerProfileEditor(props: {
           <span><small>兜底检查</small><strong>{formatInterval(profile.interval_seconds)}</strong></span>
           <span><small>思考等级</small><strong>{reasoningLabel}</strong></span>
           <span><small>Sandbox</small><strong>{sandboxLabel}</strong></span>
-          <span><small>审批</small><strong>{approvalLabel}</strong></span>
+          <span><small>运行审批</small><strong>{approvalLabel}</strong></span>
+          <span><small>网站访问</small><strong>独立审批</strong></span>
           <span><small>运行上限</small><strong>{formatRunSeconds(profile.max_run_seconds, language)}</strong></span>
           <span><small>已绑定</small><strong>{formatAgentCount(props.profileView?.assigned_agent_count ?? 0, language)}</strong></span>
         </div>
@@ -234,7 +238,7 @@ function CodexRunnerProfileEditor(props: {
         <Field label="模型"><select value={model} onChange={(event) => { const nextModel = event.target.value; setModel(nextModel); const supported = models.find((item) => item.id === nextModel)?.reasoning_efforts ?? []; if (reasoningEffort && supported.length && !supported.some((item) => item.effort === reasoningEffort)) setReasoningEffort(""); }} disabled={modelsLoading}><option value="">{cliSettingsOption(companyModelValue, language)}</option>{currentModelMissing ? <option value={model}>{model}（当前配置）</option> : null}{models.map((item) => <option key={item.id} value={item.id}>{item.display_name === item.id ? item.id : `${item.display_name} · ${item.id}`}</option>)}</select>{modelsError ? <small className="codex-runtime-error">{modelsError}</small> : null}</Field>
         <Field label="思考等级"><select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as CodexReasoningEffort | "")} disabled={modelsLoading}><option value="">{cliSettingsOption(companyReasoningValue, language)}</option>{currentReasoningMissing ? <option value={reasoningEffort}>{reasoningEffort}（当前配置）</option> : null}{reasoningOptions.map((item) => <option key={item.effort} value={item.effort}>{codexReasoningEffortLabel(item.effort, language)} · {item.effort}</option>)}</select></Field>
         <Field label="Sandbox"><select value={sandboxMode} onChange={(event) => setSandboxMode(event.target.value as CodexSandboxMode)}><option value="inherit">{cliSettingsOption(sandboxValue(props.cliSettings?.sandbox_mode, language), language)}</option><option value="workspace_write">workspace-write</option><option value="read_only">read-only</option></select></Field>
-        <Field label="审批策略"><select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as CodexApprovalPolicy)}><option value="inherit">{cliSettingsOption(approvalValue(props.cliSettings?.approval_policy, language), language)}</option><option value="never">never</option><option value="on-request">on-request</option></select></Field>
+        <Field label="运行审批策略"><select aria-label="运行审批策略" value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as CodexApprovalPolicy)}><option value="inherit">{cliSettingsOption(approvalValue(props.cliSettings?.approval_policy, language), language)}</option><option value="never">never</option><option value="on-request">on-request</option></select><small>命令与文件权限；网站访问由审批中心单独管理。</small></Field>
       </div>
       <details className="runner-profile-advanced">
         <summary><span>高级设置</span><small>{advancedOverrideCount ? `已自定义 ${advancedOverrideCount} 项` : "使用系统默认，通常无需修改"}</small></summary>

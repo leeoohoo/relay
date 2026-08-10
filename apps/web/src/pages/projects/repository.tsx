@@ -18,6 +18,7 @@ export function ProjectRepositoryBrowser(props: {
   token: string;
   onError: (error: unknown) => void;
 }) {
+  const hasGit = Boolean(props.project.git);
   const [refsResponse, setRefsResponse] = useState<ProjectRepositoryRefsResponse | null>(null);
   const [selectedRef, setSelectedRef] = useState("");
   const [currentPath, setCurrentPath] = useState("");
@@ -28,6 +29,8 @@ export function ProjectRepositoryBrowser(props: {
   const [loadingTree, setLoadingTree] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [fileView, setFileView] = useState<"preview" | "source">("source");
+  const [svgPreviewFailed, setSvgPreviewFailed] = useState(false);
 
   async function loadRefs(preferredRef = selectedRef) {
     setLoadingRefs(true);
@@ -57,6 +60,7 @@ export function ProjectRepositoryBrowser(props: {
   }
 
   useEffect(() => {
+    if (!hasGit) return;
     setRefsResponse(null);
     setSelectedRef("");
     setCurrentPath("");
@@ -66,10 +70,10 @@ export function ProjectRepositoryBrowser(props: {
     void loadRefs("");
     // Project identity is the reset boundary; loadRefs deliberately uses the fresh empty ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.companyId, props.project.project.id, props.token]);
+  }, [props.companyId, hasGit, props.project.project.id, props.token]);
 
   useEffect(() => {
-    if (!selectedRef) return;
+    if (!hasGit || !selectedRef) return;
     let active = true;
     setLoadingTree(true);
     setErrorMessage("");
@@ -97,7 +101,7 @@ export function ProjectRepositoryBrowser(props: {
         if (active) setLoadingTree(false);
       });
     return () => { active = false; };
-  }, [currentPath, page, props.companyId, props.project.project.id, props.token, selectedRef]);
+  }, [currentPath, page, props.companyId, hasGit, props.project.project.id, props.token, selectedRef]);
 
   function changeRef(reference: string) {
     setSelectedRef(reference);
@@ -123,6 +127,8 @@ export function ProjectRepositoryBrowser(props: {
         props.token,
       );
       setSelectedFile(response);
+      setFileView(isSvgFile(response) ? "preview" : "source");
+      setSvgPreviewFailed(false);
     } catch (error) {
       setErrorMessage(errorMessageOf(error));
       props.onError(error);
@@ -141,6 +147,10 @@ export function ProjectRepositoryBrowser(props: {
       language,
       html: hljs.highlight(selectedFile.content, { language, ignoreIllegals: true }).value,
     };
+  }, [selectedFile]);
+  const svgPreviewUrl = useMemo(() => {
+    if (!selectedFile?.content || !isSvgFile(selectedFile)) return null;
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(selectedFile.content)}`;
   }, [selectedFile]);
 
   if (!props.project.git) {
@@ -235,14 +245,34 @@ export function ProjectRepositoryBrowser(props: {
             <>
               <header className="repository-file-header">
                 <div><strong>{selectedFile.name}</strong><small>{selectedFile.path}</small></div>
-                <div>
-                  <span>{formatBytes(selectedFile.size)}</span>
-                  {selectedFile.line_count !== null ? <span>{selectedFile.line_count} 行</span> : null}
-                  <code>{selectedFile.commit.slice(0, 10)}</code>
+                <div className="repository-file-header-actions">
+                  <div className="repository-file-facts">
+                    <span>{formatBytes(selectedFile.size)}</span>
+                    {selectedFile.line_count !== null ? <span>{selectedFile.line_count} 行</span> : null}
+                    <code>{selectedFile.commit.slice(0, 10)}</code>
+                  </div>
+                  {isSvgFile(selectedFile) && !selectedFile.binary ? (
+                    <div className="repository-file-view-switch" role="group" aria-label="SVG 查看方式">
+                      <button type="button" className={fileView === "preview" ? "active" : ""} aria-pressed={fileView === "preview"} onClick={() => setFileView("preview")}>预览</button>
+                      <button type="button" className={fileView === "source" ? "active" : ""} aria-pressed={fileView === "source"} onClick={() => setFileView("source")}>源码</button>
+                    </div>
+                  ) : null}
                 </div>
               </header>
               {selectedFile.binary || selectedFile.content === null ? (
                 <div className="repository-file-unavailable"><Icon name="image" /><strong>该文件无法文本预览</strong></div>
+              ) : isSvgFile(selectedFile) && fileView === "preview" ? (
+                <div className="repository-svg-preview">
+                  {svgPreviewFailed || !svgPreviewUrl ? (
+                    <div className="repository-svg-preview-error">
+                      <Icon name="alert" />
+                      <strong>SVG 无法渲染</strong>
+                      <button className="button small" type="button" onClick={() => setFileView("source")}>查看源码</button>
+                    </div>
+                  ) : (
+                    <img src={svgPreviewUrl} alt={`${selectedFile.name} 预览`} onError={() => setSvgPreviewFailed(true)} />
+                  )}
+                </div>
               ) : (
                 <div className="repository-code-frame">
                   <span className="repository-code-language">{highlightedCode?.language ?? "text"}</span>
@@ -260,6 +290,10 @@ export function ProjectRepositoryBrowser(props: {
       </div>
     </article>
   );
+}
+
+function isSvgFile(file: Pick<ProjectRepositoryFileResponse, "language" | "name">) {
+  return file.language.toLowerCase() === "svg" || file.name.toLowerCase().endsWith(".svg");
 }
 
 function repositoryBreadcrumbs(path: string) {

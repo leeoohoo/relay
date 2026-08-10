@@ -9,12 +9,13 @@ import type {
   AgentToolApproval,
   CodexPluginOperation,
   CodexReasoningEffort,
+  CodexSession,
   CodexTriggerRun,
   CodexTriggerView,
   CompanyAgent,
-  CompanyProfession,
+  CompanyProfessionSummary,
   CompanyProjectTask,
-  CompanyProjectType,
+  CompanyProjectTypeSummary,
 } from "../../types/platform";
 
 const SESSION_KEY = "agent_company_session";
@@ -41,8 +42,23 @@ export function SkillCopyBlock({ documents, step = "3" }: { documents: RelaySkil
 
 export function EmptyCompany(props: { onCreate: () => void }) { return <div className="center-state"><span className="brand-mark"><Icon name="network" /></span><span className="eyebrow">START HERE</span><h1>先创建一家公司</h1><p>公司会成为外部 Agent 的身份与通信边界。创建后再添加组织和 Agent 账号。</p><button className="button primary" onClick={props.onCreate}><Icon name="plus" /> 创建公司</button></div>; }
 export function LoadingState() { return <div className="center-state"><span className="loader" /><h2>正在读取公司目录</h2></div>; }
-export function Metric(props: { label: string; value: string; detail: string }) { return <div className="metric"><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></div>; }
+export function Metric(props: { label: string; value: string; detail: string; onClick?: () => void; active?: boolean }) {
+  const content = <><span>{props.label}</span><strong>{props.value}</strong><small>{props.detail}</small></>;
+  return props.onClick
+    ? <button type="button" className={`metric interactive ${props.active ? "active" : ""}`} aria-pressed={props.active} onClick={props.onClick}>{content}</button>
+    : <div className="metric">{content}</div>;
+}
 export function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
+export function codexSessionTurnLabel(session: CodexSession) {
+  const status = typeof session.checkpoint_json.last_turn_status === "string"
+    ? session.checkpoint_json.last_turn_status
+    : null;
+  if (status === "timed_out" && session.checkpoint_json.continuation_expected === true) return "上轮达到时限，已保留会话等待续跑";
+  if (status === "succeeded") return "上轮已完成，会话可继续复用";
+  if (status === "failed") return "上轮失败，会话仍保留用于诊断或恢复";
+  if (status === "cancelled") return "上轮因暂停而停止，恢复后可继续";
+  return session.status === "active" ? "会话可复用，当前未必正在执行" : "历史会话";
+}
 export function Toast(props: { children: ReactNode; tone?: "error"; onClose: () => void }) { return <div className={`toast ${props.tone ?? ""}`}><span>{props.children}</span><button onClick={props.onClose}><Icon name="close" /></button></div>; }
 
 export function readSession(): Session | null {
@@ -110,7 +126,7 @@ export function codexReasoningEffortLabel(value: CodexReasoningEffort | null, la
   if (!value) return "跟随模型默认";
   return ({ none: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "超高", max: "最大", ultra: "极致" } as Record<CodexReasoningEffort, string>)[value];
 }
-export function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProfession[]) {
+export function companyAgentProfessionKey(agent: CompanyAgent, professions: CompanyProfessionSummary[]) {
   if (agent.profession?.key) return agent.profession.key;
   const title = (agent.membership.job_title || "").trim().toLowerCase();
   const exact = professions.find((profession) => profession.label.toLowerCase() === title);
@@ -137,7 +153,7 @@ export function companyAgentProfessionKey(agent: CompanyAgent, professions: Comp
   return "general_member";
 }
 export function projectStatusLabel(value: string) { return ({ planned: "计划中", active: "进行中", paused: "已暂停", blocked: "已阻塞", completed: "已完成", cancelled: "已取消" } as Record<string, string>)[value] ?? value; }
-export function projectTypeLabel(value: string, types: CompanyProjectType[], language: RelaySkillLanguage = "zh-CN") {
+export function projectTypeLabel(value: string, types: CompanyProjectTypeSummary[], language: RelaySkillLanguage = "zh-CN") {
   const projectType = types.find((type) => type.key === value);
   return projectType ? language === "en" ? projectType.label_en : projectType.label : value;
 }
@@ -159,7 +175,7 @@ export function toDateTimeLocalValue(value: string | null) {
 export function collaborationPreferenceLabel(value: AgentProfile["collaboration_preference"]) { return { available: "可协作", low_cost_only: "仅接受低成本请求", unavailable: "暂不接受请求" }[value] ?? value; }
 export function codexTriggerStatusLabel(value: CodexTriggerView["config"]["status"]) { return { active: "已启用", paused: "已暂停", error: "错误" }[value]; }
 export function codexOperationalStatusLabel(value: string) { return { running: "执行中", queued: "排队中", idle: "等待检查", paused: "已暂停", error: "错误" }[value] ?? value; }
-export function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "整理结果", finishing: "收尾", waiting_approval: "等待审批", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value; }
+export function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "进度说明", continuing: "保存进度", finishing: "收尾", waiting_approval: "等待审批", approval_delivery_failed: "审批投递失败", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value; }
 export function codexTriggerTypeLabel(value: string) { return { scheduled: "定时", manual: "手动", run_now: "手动", message: "消息", task: "任务", asset_refresh: "资产维护" }[value] ?? value; }
 export function codexPluginOperationStatusLabel(value: CodexPluginOperation["status"]) { return { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败" }[value]; }
 export function codexRunDisplayMessage(run: CodexTriggerRun) {
@@ -174,7 +190,7 @@ export function codexRunDisplayMessage(run: CodexTriggerRun) {
     failed: "本轮运行失败",
   }[run.status] ?? "等待运行结果";
 }
-export function approvalToolLabel(value: string) { return ({ "codex.command_execution": "执行命令", "codex.file_change": "修改受保护文件", "codex.permissions": "申请额外权限", "agent.staff.hire": "扩招 Agent", "agent.staff.suspend": "暂停 Agent", "agent.staff.terminate": "裁撤 Agent", "company.project.task.reassign": "重新分配任务" } as Record<string, string>)[value] ?? value; }
+export function approvalToolLabel(value: string) { return ({ "codex.command_execution": "执行命令", "codex.file_change": "修改受保护文件", "codex.permissions": "申请额外权限", "codex.website_access": "访问网站", "agent.staff.hire": "扩招 Agent", "agent.staff.suspend": "暂停 Agent", "agent.staff.terminate": "裁撤 Agent", "company.project.task.reassign": "重新分配任务" } as Record<string, string>)[value] ?? value; }
 export function approvalStatusLabel(value: AgentToolApproval["status"]) { return { pending: "待审批", approved: "已批准", executing: "执行中", executed: "已执行", rejected: "已拒绝", expired: "已过期", failed: "失败" }[value]; }
 export function approvalRiskLabel(value: AgentToolApproval["risk_level"]) { return { low: "低", medium: "中", high: "高" }[value]; }
 export function approvalRequestDetail(approval: AgentToolApproval) {
@@ -191,6 +207,11 @@ export function approvalRequestDetail(approval: AgentToolApproval) {
   }
   if (approval.tool_name === "codex.permissions") {
     return JSON.stringify(params.permissions ?? params, null, 2);
+  }
+  if (approval.tool_name === "codex.website_access") {
+    const url = typeof approval.arguments.url === "string" ? approval.arguments.url : "";
+    const tool = typeof approval.arguments.tool === "string" ? approval.arguments.tool : "";
+    return [url, tool ? `浏览器操作：${tool}` : ""].filter(Boolean).join("\n");
   }
   return JSON.stringify(params, null, 2);
 }

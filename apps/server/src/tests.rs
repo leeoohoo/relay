@@ -11,7 +11,31 @@ fn bearer_token_requires_authorization_bearer_scheme() {
 
     headers.insert(
         axum::http::header::AUTHORIZATION,
+        "bearer   hus_lowercase".parse().expect("valid header"),
+    );
+    assert_eq!(
+        bearer_token(&headers).expect("case-insensitive bearer token"),
+        "hus_lowercase"
+    );
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "BEARER\thus_uppercase".parse().expect("valid header"),
+    );
+    assert_eq!(
+        bearer_token(&headers).expect("uppercase bearer token"),
+        "hus_uppercase"
+    );
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
         "Basic abc".parse().expect("valid header"),
+    );
+    assert!(bearer_token(&headers).is_err());
+
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        "Bearer".parse().expect("valid header"),
     );
     assert!(bearer_token(&headers).is_err());
 }
@@ -132,6 +156,7 @@ fn imported_project_is_published_to_the_provisioned_remote() {
         default_branch: "main".into(),
         auth_profile,
         repository_identifier: "imported-project".into(),
+        access_token_identifier: "relay-project-test-token".into(),
     };
 
     push_managed_project_to_remote(&project, &provisioned, &credential_store)
@@ -148,6 +173,100 @@ fn imported_project_is_published_to_the_provisioned_remote() {
         .expect("read remote file");
     assert!(show.status.success());
     assert_eq!(String::from_utf8_lossy(&show.stdout), "# Imported\n");
+    fs::remove_dir_all(root).expect("test publish should be removable");
+}
+
+#[test]
+fn shallow_git_import_is_completed_before_harness_publish() {
+    let root = std::env::temp_dir().join(format!("relay-shallow-publish-{}", Uuid::new_v4()));
+    let source = root.join("source");
+    let project = root.join("project");
+    let remote = root.join("remote.git");
+    fs::create_dir_all(&source).expect("source directory");
+
+    let run = |path: &FsPath, args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("git command should start");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&source, &["init", "-b", "main"]);
+    run(&source, &["config", "user.name", "Relay Test"]);
+    run(
+        &source,
+        &["config", "user.email", "relay-test@local.invalid"],
+    );
+    fs::write(source.join("README.md"), "first\n").expect("first revision");
+    run(&source, &["add", "README.md"]);
+    run(&source, &["commit", "-m", "first"]);
+    fs::write(source.join("README.md"), "second\n").expect("second revision");
+    run(&source, &["commit", "-am", "second"]);
+
+    let clone = Command::new("git")
+        .args([
+            "clone",
+            "--depth",
+            "1",
+            "--single-branch",
+            "--branch",
+            "main",
+            &format!("file://{}", source.display()),
+            project.to_str().expect("project path"),
+        ])
+        .output()
+        .expect("shallow clone should start");
+    assert!(
+        clone.status.success(),
+        "shallow clone failed: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+
+    let init_remote = Command::new("git")
+        .args(["init", "--bare", remote.to_str().expect("remote path")])
+        .output()
+        .expect("bare remote initialization");
+    assert!(init_remote.status.success());
+
+    let project_id = Uuid::new_v4();
+    let credential_store = GitCredentialStore::at(root.join("credentials")).expect("credentials");
+    let auth_profile = credential_store
+        .store_managed_git_token(
+            project_id,
+            "relay-test",
+            "test-token-with-more-than-20-characters",
+        )
+        .expect("managed token");
+    let provisioned = ProvisionedProjectGit {
+        remote_url: format!("file://{}", remote.display()),
+        push_url: None,
+        default_branch: "main".into(),
+        auth_profile,
+        repository_identifier: "shallow-imported-project".into(),
+        access_token_identifier: "relay-project-shallow-token".into(),
+    };
+
+    push_managed_project_to_remote(&project, &provisioned, &credential_store)
+        .expect("shallow project publish");
+
+    let count = Command::new("git")
+        .args([
+            "--git-dir",
+            remote.to_str().expect("remote path"),
+            "rev-list",
+            "--count",
+            "main",
+        ])
+        .output()
+        .expect("read remote history");
+    assert!(count.status.success());
+    assert_eq!(String::from_utf8_lossy(&count.stdout).trim(), "2");
     fs::remove_dir_all(root).expect("test publish should be removable");
 }
 
@@ -202,4 +321,21 @@ fn repository_browser_accepts_only_enumerated_harness_refs_and_safe_paths() {
     );
     assert!(normalize_repository_path("../secret", false).is_err());
     assert!(normalize_repository_path("/absolute", false).is_err());
+}
+
+#[test]
+fn console_pages_enforce_a_bounded_response_size() {
+    let response = console_page_response(
+        "agents",
+        vec![serde_json::json!({ "id": Uuid::new_v4(), "name": "Agent" })],
+        None,
+        false,
+    )
+    .expect("small Console page should fit its budget");
+    assert_eq!(response["agents"].as_array().map(Vec::len), Some(1));
+
+    let oversized = "x".repeat(MAX_CONSOLE_PAGE_RESPONSE_BYTES + 1);
+    let error = console_page_response("projects", vec![oversized], None, false)
+        .expect_err("oversized Console page must be rejected");
+    assert!(error.to_string().contains("response budget"));
 }

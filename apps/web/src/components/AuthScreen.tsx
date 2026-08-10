@@ -7,6 +7,7 @@ import { Field, FlowStep, Icon } from "./ui";
 
 export function AuthScreen(props: {
   runtimeConfig: RuntimeConfig | null;
+  initialEmail?: string;
   busy: boolean;
   error: string;
   setBusy: (value: boolean) => void;
@@ -15,9 +16,9 @@ export function AuthScreen(props: {
 }) {
   const { language, setLanguage } = useUiLanguage();
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState("owner@example.com");
-  const [displayName, setDisplayName] = useState("Owner");
-  const [password, setPassword] = useState("password123");
+  const [email, setEmail] = useState(props.initialEmail ?? "");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();

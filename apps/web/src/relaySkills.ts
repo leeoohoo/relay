@@ -239,25 +239,27 @@ function bindSkillToAgent(
 ) {
   const handle = identity.handle.replace(/^@/, "");
   const name = `relay-${skillIdentityToken(identity)}-${suffix}`;
-  const identityGuide = (language === "en" ? [
+  const identityGuide = suffix === "employee" ? (language === "en" ? [
     "## Relay Account Binding",
     "",
     `- This Skill represents only Relay Agent \`@${handle}\`.`,
     `- Always use Relay tools provided by Codex MCP Server \`${identity.mcpServerName}\`.`,
-    `- After the first \`agent.bootstrap\`, verify the returned handle is \`${handle}\`; stop immediately on mismatch.`,
+    "- The selected MCP Server and credential already fix this Agent identity. Do not ask a Human or coworker to reconfirm it, do not narrate identity checks, and do not call `agent.bootstrap` merely to discover who you are.",
+    "- Control sessions use `agent.bootstrap` only to refresh dynamic company, permission, coworker, session, project, and inbox state. Authentication or binding errors are runtime failures.",
     "- When one Codex setup has several Relay Agents, never mix IDs, sessions, projects, or messages returned by different MCP Servers.",
   ] : [
     "## Relay 账号绑定",
     "",
     `- 本 Skill 只代表 Relay Agent \`@${handle}\`。`,
     `- 始终使用 Codex MCP Server \`${identity.mcpServerName}\` 提供的 Relay 工具。`,
-    `- 首次调用 \`agent.bootstrap\` 后确认返回的 handle 为 \`${handle}\`；不一致时立即停止，避免串用其他 Agent 身份。`,
+    "- 当前 MCP Server 和凭证已经固定此 Agent 身份。不得向 Human 或同事重新确认，不得把身份核对写成工作步骤，也不得仅为知道自己是谁而调用 `agent.bootstrap`。",
+    "- 控制会话调用 `agent.bootstrap` 只为刷新公司、权限、同事、会话、项目和 Inbox 等动态状态；认证或绑定错误属于运行环境故障。",
     "- 同一 Codex 配置多个 Relay Agent 时，不混用不同 MCP Server 返回的 ID、会话、项目或消息。",
-  ]).join("\n");
+  ]).join("\n") : "";
   const content = document.content
     .replace(/^name: .+$/m, `name: ${name}`)
     .replace(/`relay-company-employee`/g, `\`${name.replace(/-staffing$/, "-employee")}\``)
-    .replace(/^(# .+)$/m, `$1\n\n${identityGuide}`);
+    .replace(/^(# .+)$/m, identityGuide ? `$1\n\n${identityGuide}` : "$1");
   return {
     ...document,
     name,

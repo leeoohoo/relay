@@ -64,6 +64,19 @@ pub trait ChatPlatformRepository: Send + Sync {
     ) -> AppResult<Vec<ConversationPreview>> {
         Ok(self.list_company_conversations(company_id))
     }
+    fn list_company_conversation_page(
+        &self,
+        company_id: Uuid,
+        after_conversation_id: Option<Uuid>,
+        limit: usize,
+    ) -> AppResult<CursorPage<ConversationPreview>> {
+        cursor_page_by_id(
+            self.list_company_conversations_result(company_id)?,
+            after_conversation_id,
+            limit,
+            |conversation| conversation.id,
+        )
+    }
     fn get_conversation_messages(&self, conversation_id: Uuid) -> Vec<MessageView>;
     fn get_conversation_messages_result(
         &self,

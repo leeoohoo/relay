@@ -5,11 +5,17 @@ pub(super) fn bearer_token(headers: &HeaderMap) -> Result<&str, ApiError> {
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized("missing bearer token".into()))?;
-    value
-        .strip_prefix("Bearer ")
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| ApiError(AppError::Unauthorized("invalid bearer token".into())))
+    let scheme_end = value
+        .find(char::is_whitespace)
+        .ok_or_else(|| ApiError(AppError::Unauthorized("invalid bearer token".into())))?;
+    let (scheme, token) = value.split_at(scheme_end);
+    let token = token.trim();
+    if !scheme.eq_ignore_ascii_case("bearer") || token.is_empty() {
+        return Err(ApiError(AppError::Unauthorized(
+            "invalid bearer token".into(),
+        )));
+    }
+    Ok(token)
 }
 
 pub(super) fn authenticate_human_session_request(

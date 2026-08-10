@@ -7,6 +7,7 @@ use std::sync::{
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use ai_chat_domain::agent_identity::{
@@ -26,6 +27,8 @@ use ai_chat_domain::company::{
     AGENT_CODEX_RUN_STATUS_LEASE_LOST, AGENT_CODEX_RUN_STATUS_RUNNING,
     AGENT_CODEX_TRIGGER_STATUS_ACTIVE, AGENT_CODEX_TRIGGER_STATUS_ERROR,
     AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
+    AGENT_TOOL_APPROVAL_MODE_ALWAYS, AGENT_TOOL_APPROVAL_SOURCE_CODEX,
+    AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
     AGENT_TOOL_APPROVAL_STATUS_PENDING, CODEX_PLUGIN_OPERATION_STATUS_FAILED,
     CODEX_PLUGIN_OPERATION_STATUS_QUEUED, CODEX_PLUGIN_OPERATION_STATUS_RUNNING,
     CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED, COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE,
@@ -37,6 +40,7 @@ use ai_chat_domain::social::{
 };
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
+use crate::contracts::ProjectProvisioningCleanupJob;
 use crate::service::{
     AgentPlatformRepository, AgentStaffingHireBundle, AgentStaffingStatusChangeBundle,
     AuthPlatformRepository, ChatPlatformRepository, CodexControlPlatformRepository,
@@ -45,8 +49,8 @@ use crate::service::{
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
     CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
-    MemoryPlatformRepositoryPort, ProjectPlatformRepository, RegistrationCompletionBundle,
-    TaskPlatformRepository,
+    ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, ProjectPlatformRepository,
+    RegistrationCompletionBundle, TaskPlatformRepository,
 };
 
 #[derive(Default, Serialize, Deserialize)]
@@ -81,6 +85,7 @@ struct MemoryState {
     company_default_groups: HashMap<Uuid, ConversationPreview>,
     conversation_contexts: HashMap<Uuid, ConversationContext>,
     company_projects: HashMap<Uuid, CompanyProject>,
+    project_provisioning_cleanup_jobs: HashMap<Uuid, ProjectProvisioningCleanupJob>,
     company_project_git_configs: HashMap<Uuid, CompanyProjectGitConfig>,
     company_project_rules: HashMap<Uuid, CompanyProjectRule>,
     company_project_assets: HashMap<Uuid, Vec<CompanyProjectAsset>>,

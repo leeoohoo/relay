@@ -5,6 +5,125 @@ use ai_chat_domain::agent_identity::AgentStatus;
 use super::*;
 
 #[test]
+fn website_always_allow_key_is_scoped_to_project_and_origin() {
+    let agent_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let mut arguments = serde_json::json!({
+        "url": "https://example.com:8443/dashboard?tab=one",
+        "tool": "new_page"
+    });
+
+    let (scope, target) = website_approval_grant_key(
+        &mut arguments,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("website grant key");
+
+    assert_eq!(scope, format!("project:{project_id}"));
+    assert_eq!(target, "https://example.com:8443");
+    assert_eq!(
+        arguments
+            .get(AGENT_CODEX_APPROVAL_SCOPE_KEY)
+            .and_then(serde_json::Value::as_str),
+        Some(scope.as_str())
+    );
+    assert_eq!(
+        arguments
+            .get(AGENT_CODEX_APPROVAL_TARGET_KEY)
+            .and_then(serde_json::Value::as_str),
+        Some(target.as_str())
+    );
+}
+
+#[test]
+fn website_session_grant_covers_the_same_origin_only() {
+    let agent_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let grants = Mutex::new(HashSet::new());
+    let mut first = serde_json::json!({ "url": "https://example.com/start" });
+    let grant = website_approval_grant_key(
+        &mut first,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("website grant");
+    remember_session_website_grant(&grants, &grant);
+
+    let mut same_origin = serde_json::json!({ "url": "https://example.com/next?step=2" });
+    let (scope, target) = website_approval_grant_key(
+        &mut same_origin,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("same-origin grant key");
+    assert!(session_website_grant_allowed(&grants, &scope, &target));
+
+    let mut another_origin = serde_json::json!({ "url": "https://other.example.com/" });
+    let (scope, target) = website_approval_grant_key(
+        &mut another_origin,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("other-origin grant key");
+    assert!(!session_website_grant_allowed(&grants, &scope, &target));
+}
+
+#[test]
+fn website_always_allow_key_rejects_non_web_targets() {
+    let mut arguments = serde_json::json!({ "url": "file:///tmp/report.html" });
+    assert!(website_approval_grant_key(
+        &mut arguments,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        Uuid::new_v4(),
+        Some(Uuid::new_v4()),
+    )
+    .is_none());
+}
+
+#[test]
+fn website_localhost_grant_covers_only_non_privileged_loopback_ports() {
+    for url in [
+        "http://127.0.0.1:4177/",
+        "http://localhost:5173/",
+        "http://[::1]:8080/",
+    ] {
+        let mut arguments = serde_json::json!({ "url": url });
+        website_approval_grant_key(
+            &mut arguments,
+            AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+            Uuid::new_v4(),
+            Some(Uuid::new_v4()),
+        )
+        .expect("local website key");
+        assert_eq!(
+            arguments
+                .get(AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY)
+                .and_then(serde_json::Value::as_str),
+            Some("http://localhost:*")
+        );
+    }
+
+    for url in ["http://127.0.0.1:80/", "https://example.com:4177/"] {
+        let mut arguments = serde_json::json!({ "url": url });
+        website_approval_grant_key(
+            &mut arguments,
+            AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+            Uuid::new_v4(),
+            Some(Uuid::new_v4()),
+        )
+        .expect("website key");
+        assert!(arguments
+            .get(AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY)
+            .is_none());
+    }
+}
+
+#[test]
 fn managed_codex_installer_supports_macos_linux_and_windows() {
     for host_os in ["macos", "linux"] {
         let command = codex_installer_command(host_os).expect("POSIX installer");
@@ -76,6 +195,12 @@ fn plugin_fingerprint_is_stable_and_tracks_enabled_versions() {
             {"pluginId": "browser@openai-bundled", "version": "3", "enabled": true}
         ]))
     );
+    assert_eq!(
+        codex_plugin_fingerprint(&serde_json::json!([
+            {"pluginId": "browser@openai-bundled", "version": "2", "enabled": true}
+        ])),
+        codex_plugin_fingerprint(&serde_json::json!([]))
+    );
 }
 
 #[test]
@@ -135,6 +260,22 @@ fn control_session_loads_profession_skill_without_project_skill() {
         .join(&prepared.employee_name)
         .join("SKILL.md")
         .is_file());
+    let employee_skill = fs::read_to_string(
+        workspace
+            .join(".agents/skills")
+            .join(&prepared.employee_name)
+            .join("SKILL.md"),
+    )
+    .expect("employee skill should be readable");
+    #[cfg(unix)]
+    assert!(fs::symlink_metadata(
+        workspace
+            .join(".agents/skills")
+            .join(&prepared.employee_name)
+    )
+    .expect("managed Skill link should exist")
+    .file_type()
+    .is_symlink());
     assert!(workspace
         .join(".agents/skills")
         .join(&prepared.profession_name)
@@ -155,9 +296,164 @@ fn control_session_loads_profession_skill_without_project_skill() {
     )
     .expect("control session skill should be readable");
     assert!(profession_skill.contains("软件工程师"));
+    assert!(employee_skill.contains("Relay 已认证身份"));
+    assert!(employee_skill.contains("岗位：`软件工程师`"));
+    assert!(employee_skill.contains("不得向 Human 或同事再次确认"));
+    assert!(employee_skill.contains("问题报告与任务化闭环"));
+    assert!(!employee_skill.contains("每轮先调用 `agent.bootstrap` 核对返回身份"));
+    assert!(!profession_skill.contains("Relay 已认证身份"));
     assert!(control_skill.contains("必须同时遵循职业 Skill"));
     assert!(prepared.project_name.is_none());
     assert!(!prepared.version_hash.is_empty());
+    fs::remove_dir_all(workspace).expect("test workspace should be removed");
+}
+
+#[test]
+fn prompts_treat_identity_as_authenticated_session_state() {
+    let now = now_utc();
+    let agent = AgentProfile {
+        id: Uuid::new_v4(),
+        owner_user_id: Uuid::new_v4(),
+        display_name: "Luna".into(),
+        handle: "luna-engineer".into(),
+        persona: "负责可靠交付".into(),
+        collaboration_preference: "available".into(),
+        status: AgentStatus::Active,
+        created_at: now,
+    };
+    let workspace = PreparedGitWorkspace {
+        path: PathBuf::from("/tmp/relay-agent"),
+        worktree_key: "project/agent".into(),
+        branch: "relay/agent/work".into(),
+        auth_environment: HashMap::new(),
+    };
+    let skills = PreparedRelaySkills {
+        employee_name: "relay-luna-employee".into(),
+        profession_name: "relay-luna-profession-software-engineer".into(),
+        session_name: "relay-luna-control".into(),
+        project_name: Some("relay-luna-project".into()),
+        staffing_name: None,
+        version_hash: "v1".into(),
+    };
+    let control_prompt = build_wakeup_prompt(WakeupPromptContext {
+        agent: &agent,
+        job_title: "软件工程师",
+        project_name: None,
+        pending_inbox_count: 0,
+        active_task_count: 1,
+        waiting_task_count: 0,
+        asset_refresh_due: false,
+        workspace: &workspace,
+        relay_skills: &skills,
+    });
+    assert!(control_prompt.contains("run token 固定并认证此身份"));
+    assert!(control_prompt.contains("不要向 Human、同事或其他工具重新询问或确认"));
+    assert!(control_prompt.contains("agent.bootstrap` 只用于刷新公司、权限、会话和工作状态"));
+    assert!(!control_prompt.contains("核对返回身份"));
+
+    let project = CompanyProject {
+        id: Uuid::new_v4(),
+        company_id: Uuid::new_v4(),
+        name: "Relay Web".into(),
+        description: "管理控制台".into(),
+        project_type: "software_development".into(),
+        project_type_source: "human".into(),
+        project_type_confidence: 100,
+        project_type_evidence: vec![],
+        status: "active".into(),
+        owner_agent_id: agent.id,
+        project_group_conversation_id: Uuid::new_v4(),
+        created_by_agent_id: agent.id,
+        updated_by_agent_id: None,
+        due_at: None,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    let intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: project.company_id,
+        agent_profile_id: agent.id,
+        project_id: project.id,
+        worker_session_id: None,
+        source_event_ids: vec![],
+        task_ids: vec![],
+        action_type: "execute".into(),
+        objective: "完成任务".into(),
+        acceptance_criteria: vec![],
+        priority: "normal".into(),
+        dedupe_key: "test".into(),
+        status: "pending".into(),
+        result_summary: String::new(),
+        error_message: None,
+        created_at: now,
+        claimed_at: None,
+        completed_at: None,
+    };
+    let worker_prompt = build_worker_prompt(WorkerPromptContext {
+        agent: &agent,
+        job_title: "软件工程师",
+        project: &project,
+        intent: &intent,
+        workspace: &workspace,
+        relay_skills: &skills,
+        previous_checkpoint: None,
+    });
+    assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
+    assert!(worker_prompt.contains("直接用 company.project get 和 company.task get/list"));
+    assert!(!worker_prompt.contains("先调用 agent.bootstrap"));
+}
+
+#[test]
+fn session_summary_replaces_workspace_and_redacts_host_username() {
+    let workspace = PathBuf::from("/Users/alice/.relay/worktrees/agent-1");
+    let summary = "Changed [/Users/alice/.relay/worktrees/agent-1/src/main.rs](/Users/alice/.relay/worktrees/agent-1/src/main.rs) and inspected /Users/alice/private.txt";
+    let sanitized = sanitize_workspace_output(summary, &workspace);
+    assert!(sanitized.contains("[./src/main.rs](./src/main.rs)"));
+    assert!(sanitized.contains("~/private.txt"));
+    assert!(!sanitized.contains("alice"));
+}
+
+#[test]
+fn project_worker_session_keeps_inbox_work_in_the_control_session() {
+    let chinese = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "zh-CN");
+    assert!(chinese.contains("忽略 `inbox_notice`"));
+    assert!(chinese.contains("不调用 `agent.inbox.wait`"));
+    assert!(chinese.contains("统一留给控制会话"));
+    assert!(chinese.contains("必须使用 Relay 托管的 `chrome-devtools` MCP"));
+    assert!(chinese.contains("`.relay/browser-artifacts/`"));
+    assert!(chinese.contains("不得改用 Codex 桌面 Browser/Chrome"));
+    assert!(chinese.contains("Relay 托管的 `$TMPDIR`"));
+    assert!(chinese.contains("禁止直接使用 `/tmp`、`/private/tmp`"));
+
+    let english = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "en");
+    assert!(english.contains("Ignore `inbox_notice`"));
+    assert!(english.contains("control session"));
+    assert!(english.contains("Relay-managed `chrome-devtools` MCP"));
+    assert!(english.contains("`.relay/browser-artifacts/`"));
+    assert!(english.contains("Do not use Codex desktop Browser/Chrome"));
+    assert!(english.contains("Relay-managed `$TMPDIR`"));
+    assert!(english.contains("Never address `/tmp`, `/private/tmp`"));
+
+    let control = session_skill_template(RELAY_SKILL_BUNDLE_CONTROL, "zh-CN");
+    assert!(control.contains("Relay 托管的 `$TMPDIR`"));
+}
+
+#[test]
+fn managed_browser_artifacts_are_excluded_from_project_git_status() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-browser-artifact-exclude-test-{}",
+        Uuid::new_v4()
+    ));
+    fs::create_dir_all(&workspace).expect("test workspace should be created");
+
+    exclude_managed_skills_from_git(&workspace, "relay-test-")
+        .expect("managed runtime paths should be excluded");
+
+    let exclude = fs::read_to_string(workspace.join(".relay-git/info/exclude"))
+        .expect("exclude file should exist");
+    assert!(exclude.contains("/.agents/skills/relay-test-*/"));
+    assert!(exclude.contains("/.relay/browser-artifacts/"));
     fs::remove_dir_all(workspace).expect("test workspace should be removed");
 }
 
@@ -201,7 +497,10 @@ fn english_relay_skills_are_materialized_without_chinese_operating_rules() {
             .join("SKILL.md"),
     )
     .expect("profession skill should be readable");
-    assert!(employee_skill.contains("Relay Account Binding"));
+    assert!(employee_skill.contains("Relay Authenticated Identity"));
+    assert!(employee_skill.contains("session invariant"));
+    assert!(employee_skill.contains("Task-ready Issue Handoff and Closure"));
+    assert!(!employee_skill.contains("first on every cycle"));
     assert!(profession_skill.contains("Shared Professional Operating Baseline"));
     assert!(profession_skill.contains("Security Engineer"));
     fs::remove_dir_all(workspace).expect("test workspace should be removed");
@@ -479,4 +778,24 @@ fn managed_batch_size_overrides_the_environment_default() {
         27
     );
     fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[test]
+fn browser_approval_remains_human_reviewed_when_general_approvals_are_disabled() {
+    assert_eq!(
+        automatic_codex_approval_decision(AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS, false),
+        None
+    );
+    assert_eq!(
+        automatic_codex_approval_decision(AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, false),
+        Some(CodexApprovalDecision::Decline)
+    );
+    assert_eq!(
+        automatic_codex_approval_decision("codex.command_execution", false),
+        Some(CodexApprovalDecision::Accept)
+    );
+    assert_eq!(
+        automatic_codex_approval_decision("codex.command_execution", true),
+        None
+    );
 }

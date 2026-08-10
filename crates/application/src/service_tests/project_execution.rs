@@ -1,6 +1,188 @@
 use super::*;
 
 #[test]
+fn managed_project_creation_validates_before_commit_and_stores_git_atomically() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "managed-project@example.com".into(),
+            display_name: "Managed Project Human".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Managed Project Company".into(),
+            slug: Some("managed-project-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let owner = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Managed Owner".into(),
+            handle: "managed-owner".into(),
+            persona: "负责托管项目".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("owner should be created");
+    let project_id = Uuid::new_v4();
+    let project_input = CreateCompanyProjectForHumanInput {
+        human_user_id: human.id,
+        company_id: company.company.id,
+        owner_agent_id: owner.agent_profile.id,
+        name: "Managed Relay".into(),
+        description: Some("托管 Harness 项目".into()),
+        member_agent_ids: Vec::new(),
+        project_type: Some("web_application".into()),
+        project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+        project_type_confidence: Some(100),
+        project_type_evidence: Vec::new(),
+        project_id: Some(project_id),
+    };
+
+    app.validate_company_project_creation_for_human(project_input.clone())
+        .expect("preflight should validate without writing");
+    assert!(app.repo.get_company_project(project_id).is_none());
+    assert!(app
+        .repo
+        .get_company_project_git_config(project_id)
+        .is_none());
+    let cleanup_job_id = Uuid::new_v4();
+    let cleanup_now = now_utc();
+    app.save_project_provisioning_cleanup_job(ProjectProvisioningCleanupJob {
+        id: cleanup_job_id,
+        human_user_id: human.id,
+        company_id: company.company.id,
+        project_id,
+        managed_local_path: format!("/tmp/relay-managed-projects/{project_id}"),
+        repository_identifier: format!("managed-{project_id}"),
+        access_token_identifier: format!("relay-project-{project_id}"),
+        status: "pending".into(),
+        attempts: 0,
+        next_attempt_at: cleanup_now,
+        lease_expires_at: None,
+        last_error: None,
+        created_at: cleanup_now,
+        updated_at: cleanup_now,
+        completed_at: None,
+    })
+    .expect("cleanup job should be durable before external provisioning");
+
+    let (project, git) = app
+        .create_managed_company_project_for_human(CreateManagedCompanyProjectForHumanInput {
+            project: project_input,
+            cleanup_job_id,
+            remote_url: "https://git.example.test/relay/managed.git".into(),
+            host_local_path: format!("/tmp/relay-managed-projects/{project_id}"),
+            default_branch: "main".into(),
+            auth_profile: format!("managed-git-token-{project_id}"),
+            allow_agent_push: true,
+            branch_prefix: "relay/".into(),
+        })
+        .expect("project and Git config should commit together");
+    assert_eq!(project.project.id, project_id);
+    assert_eq!(git.remote_url, "https://git.example.test/relay/managed.git");
+    assert!(app.repo.get_company_project(project_id).is_some());
+    assert!(app
+        .repo
+        .get_company_project_git_config(project_id)
+        .is_some());
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            cleanup_now + chrono::Duration::minutes(1),
+            cleanup_now + chrono::Duration::minutes(6),
+        )
+        .expect("completed project should not leave a cleanup job")
+        .is_none());
+}
+
+#[test]
+fn project_provisioning_cleanup_jobs_retry_with_a_lease_and_finish_idempotently() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "cleanup-retry@example.com".into(),
+            display_name: "Cleanup Retry Human".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Cleanup Retry Company".into(),
+            slug: Some("cleanup-retry-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let now = now_utc();
+    let provisioning_lease = now + chrono::Duration::minutes(1);
+    let job_id = Uuid::new_v4();
+    app.save_project_provisioning_cleanup_job(ProjectProvisioningCleanupJob {
+        id: job_id,
+        human_user_id: human.id,
+        company_id: company.company.id,
+        project_id: Uuid::new_v4(),
+        managed_local_path: "/tmp/relay-cleanup-retry".into(),
+        repository_identifier: "cleanup-retry".into(),
+        access_token_identifier: "relay-project-cleanup-retry".into(),
+        status: "running".into(),
+        attempts: 0,
+        next_attempt_at: now,
+        lease_expires_at: Some(provisioning_lease),
+        last_error: None,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    })
+    .expect("cleanup job should be saved");
+
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(now, now + chrono::Duration::minutes(5))
+        .expect("active provisioning lease should be checked")
+        .is_none());
+    let claimed = app
+        .claim_due_project_provisioning_cleanup_job(
+            provisioning_lease,
+            provisioning_lease + chrono::Duration::minutes(5),
+        )
+        .expect("cleanup job should be claimable")
+        .expect("expired provisioning lease should be recoverable");
+    assert_eq!(claimed.id, job_id);
+    assert_eq!(claimed.attempts, 1);
+
+    let retry_at = provisioning_lease + chrono::Duration::minutes(2);
+    app.retry_project_provisioning_cleanup_job(job_id, "Harness unavailable".into(), retry_at, now)
+        .expect("cleanup job should be rescheduled");
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            now + chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(6),
+        )
+        .expect("early retry lookup should succeed")
+        .is_none());
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            retry_at,
+            retry_at + chrono::Duration::minutes(5),
+        )
+        .expect("retry should become due")
+        .is_some());
+    app.complete_project_provisioning_cleanup_job(job_id, retry_at)
+        .expect("cleanup job should complete");
+    assert!(app
+        .claim_due_project_provisioning_cleanup_job(
+            retry_at + chrono::Duration::hours(1),
+            retry_at + chrono::Duration::hours(2),
+        )
+        .expect("completed cleanup should stay disarmed")
+        .is_none());
+}
+
+#[test]
 fn project_owner_transfer_is_atomic_and_keeps_previous_owner_as_member() {
     let app = PlatformApp::new(MemoryPlatformRepository::default());
     let human = app
@@ -222,7 +404,7 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
             })
             .expect("test should configure the Agent Codex trigger");
     }
-    let owner_broadcast = app
+    let _owner_broadcast = app
         .send_company_message(SendCompanyMessageInput {
             actor_agent_id: manager.agent_profile.id,
             company_id: company.company.id,
@@ -234,12 +416,9 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         .repo
         .get_agent_codex_trigger_config_by_agent(engineer.agent_profile.id)
         .expect("project member trigger should exist");
-    assert_eq!(
-        engineer_trigger.wake_requested_at,
-        Some(owner_broadcast.created_at)
-    );
-    assert_eq!(engineer_trigger.wake_reason.as_deref(), Some("message"));
-    assert!(engineer_trigger.next_run_at <= owner_broadcast.created_at);
+    assert!(engineer_trigger.wake_requested_at.is_none());
+    assert!(engineer_trigger.wake_reason.is_none());
+    assert_eq!(engineer_trigger.next_run_at, future_check);
     assert!(app
         .repo
         .get_agent_codex_trigger_config_by_agent(manager.agent_profile.id)
@@ -365,6 +544,29 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         })
         .expect("asset refresh schedule should be stored");
 
+    let pending_intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: company.company.id,
+        agent_profile_id: engineer.agent_profile.id,
+        project_id: project.project.id,
+        worker_session_id: None,
+        source_event_ids: Vec::new(),
+        task_ids: vec![task.id],
+        action_type: AGENT_EXECUTION_INTENT_ACTION_EXECUTE.into(),
+        objective: "暂停后保留并等待恢复".into(),
+        acceptance_criteria: vec!["恢复项目后继续执行".into()],
+        priority: "high".into(),
+        dedupe_key: "pause-preserves-pending-intent".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_PENDING.into(),
+        result_summary: String::new(),
+        error_message: None,
+        created_at: now_utc(),
+        claimed_at: None,
+        completed_at: None,
+    };
+    app.create_agent_execution_intent(pending_intent.clone())
+        .expect("active project should accept pending work");
+
     let paused = app
         .pause_company_project_for_human(SetCompanyProjectPauseForHumanInput {
             human_user_id: owner.id,
@@ -474,6 +676,14 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         .expect("paused project should produce a safe trigger decision");
     assert!(!paused_decision.should_run);
     assert!(paused_decision.project.is_none());
+    assert_eq!(paused_decision.pending_execution_intent_count, 0);
+    let mut paused_dispatch = pending_intent.clone();
+    paused_dispatch.id = Uuid::new_v4();
+    paused_dispatch.dedupe_key = "pause-rejects-new-intent".into();
+    assert!(matches!(
+        app.create_agent_execution_intent(paused_dispatch),
+        Err(AppError::Conflict(message)) if message.contains("project is paused")
+    ));
     let paused_refresh = app
         .repo
         .get_company_project_asset_refresh_config(project.project.id)
@@ -489,6 +699,11 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         })
         .expect("company owner should resume the project");
     assert_eq!(resumed.project.status, PROJECT_STATUS_ACTIVE);
+    let resumed_decision = app
+        .decide_agent_codex_work(&engineer_trigger)
+        .expect("resumed project should expose its pending work again");
+    assert!(resumed_decision.should_run);
+    assert_eq!(resumed_decision.pending_execution_intent_count, 1);
     app.send_human_company_message(SendHumanCompanyMessageInput {
         human_user_id: owner.id,
         company_id: company.company.id,

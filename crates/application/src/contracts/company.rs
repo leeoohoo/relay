@@ -15,6 +15,13 @@ use ai_chat_domain::social::ConversationPreview;
 use super::{CompanyConversationView, CompanyProjectView};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorPage<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<Uuid>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateCompanyInput {
     pub human_user_id: Uuid,
     pub name: String,
@@ -166,6 +173,8 @@ pub struct AgentStaffingHireBundle {
     pub agent_profile: AgentProfile,
     pub owner_binding: AgentOwnerBinding,
     pub membership: CompanyAgentMembership,
+    pub key_record: AgentKeyRecord,
+    pub key_issue_log: AgentKeyIssueLog,
     pub self_notes_conversation: ConversationPreview,
     pub action: AgentStaffingAction,
 }
@@ -211,10 +220,68 @@ pub struct CompanyAgentConnectionView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanyProfessionSummary {
+    pub key: String,
+    pub label: String,
+    pub label_en: String,
+    pub description: String,
+    pub description_en: String,
+    pub category_key: String,
+    pub category_label: String,
+    pub category_label_en: String,
+    pub skill_name: String,
+    pub can_create_tasks: bool,
+}
+
+impl From<CompanyProfession> for CompanyProfessionSummary {
+    fn from(profession: CompanyProfession) -> Self {
+        Self {
+            key: profession.key,
+            label: profession.label,
+            label_en: profession.label_en,
+            description: profession.description,
+            description_en: profession.description_en,
+            category_key: profession.category_key,
+            category_label: profession.category_label,
+            category_label_en: profession.category_label_en,
+            skill_name: profession.skill_name,
+            can_create_tasks: profession.can_create_tasks,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanyProjectTypeSummary {
+    pub key: String,
+    pub label: String,
+    pub label_en: String,
+    pub description: String,
+    pub description_en: String,
+    pub category_key: String,
+    pub category_label: String,
+    pub category_label_en: String,
+}
+
+impl From<CompanyProjectTypeDefinition> for CompanyProjectTypeSummary {
+    fn from(project_type: CompanyProjectTypeDefinition) -> Self {
+        Self {
+            key: project_type.key,
+            label: project_type.label,
+            label_en: project_type.label_en,
+            description: project_type.description,
+            description_en: project_type.description_en,
+            category_key: project_type.category_key,
+            category_label: project_type.category_label,
+            category_label_en: project_type.category_label_en,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanyConsoleAgentView {
     pub agent_profile: AgentProfile,
     pub membership: CompanyAgentMembership,
-    pub profession: CompanyProfession,
+    pub profession: CompanyProfessionSummary,
     pub connection: CompanyAgentConnectionView,
 }
 
@@ -242,9 +309,25 @@ pub struct CompanyConsoleView {
     pub agents: Vec<CompanyConsoleAgentView>,
     pub conversations: Vec<CompanyConversationView>,
     pub projects: Vec<CompanyProjectView>,
+    pub professions: Vec<CompanyProfessionSummary>,
+    pub project_types: Vec<CompanyProjectTypeSummary>,
+    pub governance_policy: CompanyGovernancePolicyView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanySummaryView {
+    pub company: Company,
+    pub human_membership: CompanyHumanMember,
+    pub org_units: Vec<OrgUnit>,
+    pub professions: Vec<CompanyProfessionSummary>,
+    pub project_types: Vec<CompanyProjectTypeSummary>,
+    pub governance_policy: CompanyGovernancePolicyView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanySkillCatalogView {
     pub professions: Vec<CompanyProfession>,
     pub project_types: Vec<CompanyProjectTypeDefinition>,
-    pub governance_policy: CompanyGovernancePolicyView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +336,7 @@ pub struct ReviewAgentToolApprovalInput {
     pub company_id: Uuid,
     pub approval_request_id: Uuid,
     pub review_note: Option<String>,
+    pub approval_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -464,6 +464,7 @@ pub(super) async fn approve_company_approval(
             company_id,
             approval_request_id: approval_id,
             review_note: input.review_note,
+            approval_mode: input.approval_mode,
         })?;
     Ok(Json(serde_json::json!({ "approval": approval })))
 }
@@ -482,6 +483,7 @@ pub(super) async fn reject_company_approval(
             company_id,
             approval_request_id: approval_id,
             review_note: input.review_note,
+            approval_mode: None,
         })?;
     Ok(Json(serde_json::json!({ "approval": approval })))
 }
