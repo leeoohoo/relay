@@ -4,7 +4,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration as StdDuration,
 };
 
@@ -142,6 +142,7 @@ struct PlatformCodexApprovalHandler {
     project_id: Option<Uuid>,
     expires_at: chrono::DateTime<chrono::Utc>,
     general_approval_required: bool,
+    session_website_grants: Arc<Mutex<HashSet<(String, String)>>>,
 }
 
 #[derive(Clone)]
@@ -230,18 +231,33 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
         {
             return Ok(decision);
         }
-        if let Some((approval_scope, approval_target)) = website_approval_grant_key(
+        let website_grant = website_approval_grant_key(
             &mut request.arguments,
             &request.tool_name,
             self.agent_id,
             self.project_id,
-        ) {
+        );
+        if let Some((approval_scope, approval_target)) = website_grant.as_ref() {
+            if session_website_grant_allowed(
+                &self.session_website_grants,
+                approval_scope,
+                approval_target,
+            ) {
+                record_run_activity(
+                    &self.platform,
+                    self.run_id,
+                    "running",
+                    &format!("已按本次会话的网站授权访问 {approval_target}"),
+                    None,
+                );
+                return Ok(CodexApprovalDecision::Accept);
+            }
             if self.platform.has_codex_always_allow_approval(
                 self.company_id,
                 self.agent_id,
                 &request.tool_name,
-                &approval_scope,
-                &approval_target,
+                approval_scope,
+                approval_target,
             )? {
                 record_run_activity(
                     &self.platform,
@@ -261,7 +277,7 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
                     self.company_id,
                     self.agent_id,
                     &request.tool_name,
-                    &approval_scope,
+                    approval_scope,
                     local_target,
                 )? {
                     record_run_activity(
@@ -313,6 +329,9 @@ impl CodexApprovalHandler for PlatformCodexApprovalHandler {
                 .get_codex_approval_request_for_runner(approval.id, self.run_id)?;
             match current.status.as_str() {
                 AGENT_TOOL_APPROVAL_STATUS_APPROVED | AGENT_TOOL_APPROVAL_STATUS_EXECUTED => {
+                    if let Some(grant) = website_grant.as_ref() {
+                        remember_session_website_grant(&self.session_website_grants, grant);
+                    }
                     record_run_activity(
                         &self.platform,
                         self.run_id,
@@ -379,6 +398,27 @@ fn website_approval_grant_key(
         );
     }
     Some((approval_scope, approval_target))
+}
+
+fn session_website_grant_allowed(
+    grants: &Mutex<HashSet<(String, String)>>,
+    approval_scope: &str,
+    approval_target: &str,
+) -> bool {
+    grants
+        .lock()
+        .expect("session website grants")
+        .contains(&(approval_scope.to_string(), approval_target.to_string()))
+}
+
+fn remember_session_website_grant(
+    grants: &Mutex<HashSet<(String, String)>>,
+    grant: &(String, String),
+) {
+    grants
+        .lock()
+        .expect("session website grants")
+        .insert(grant.clone());
 }
 
 fn localhost_approval_target(parsed: &reqwest::Url) -> Option<String> {

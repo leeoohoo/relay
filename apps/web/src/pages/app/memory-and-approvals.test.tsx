@@ -45,7 +45,7 @@ describe("ApprovalReviewActions", () => {
     const onReview = vi.fn(async () => undefined);
     render(<ApprovalReviewActions approval={approval()} onReview={onReview} onError={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "允许一次" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "本次会话允许" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "始终允许此网站" }));
 
     await waitFor(() => expect(onReview).toHaveBeenCalledWith("approval-1", "always_allow", ""));

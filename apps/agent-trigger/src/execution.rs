@@ -738,6 +738,7 @@ async fn run_codex_stage(
                         expires_at: now_utc()
                             + Duration::seconds(i64::from(trigger.max_run_seconds)),
                         general_approval_required: settings.approval_policy == "on-request",
+                        session_website_grants: Arc::new(Mutex::new(HashSet::new())),
                     }) as Arc<dyn CodexApprovalHandler>
                 }),
             progress_handler: Some(Arc::new(PlatformCodexProgressHandler {

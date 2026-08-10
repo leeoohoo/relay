@@ -38,6 +38,42 @@ fn website_always_allow_key_is_scoped_to_project_and_origin() {
 }
 
 #[test]
+fn website_session_grant_covers_the_same_origin_only() {
+    let agent_id = Uuid::new_v4();
+    let project_id = Uuid::new_v4();
+    let grants = Mutex::new(HashSet::new());
+    let mut first = serde_json::json!({ "url": "https://example.com/start" });
+    let grant = website_approval_grant_key(
+        &mut first,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("website grant");
+    remember_session_website_grant(&grants, &grant);
+
+    let mut same_origin = serde_json::json!({ "url": "https://example.com/next?step=2" });
+    let (scope, target) = website_approval_grant_key(
+        &mut same_origin,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("same-origin grant key");
+    assert!(session_website_grant_allowed(&grants, &scope, &target));
+
+    let mut another_origin = serde_json::json!({ "url": "https://other.example.com/" });
+    let (scope, target) = website_approval_grant_key(
+        &mut another_origin,
+        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        agent_id,
+        Some(project_id),
+    )
+    .expect("other-origin grant key");
+    assert!(!session_website_grant_allowed(&grants, &scope, &target));
+}
+
+#[test]
 fn website_always_allow_key_rejects_non_web_targets() {
     let mut arguments = serde_json::json!({ "url": "file:///tmp/report.html" });
     assert!(website_approval_grant_key(

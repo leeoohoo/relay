@@ -21,6 +21,35 @@ impl CodexApprovalHandler for CapturingApprovalHandler {
 }
 
 #[test]
+fn browser_page_state_operations_do_not_require_website_approval() {
+    for input in [
+        json!({ "type": "reload" }),
+        json!({ "type": "back" }),
+        json!({ "type": "forward" }),
+        json!({}),
+        json!({ "url": "about:blank" }),
+    ] {
+        assert!(!requires_browser_human_approval("navigate_page", &input));
+    }
+    assert!(!requires_browser_human_approval(
+        "new_page",
+        &json!({ "url": "about:blank" }),
+    ));
+    assert!(requires_browser_human_approval(
+        "navigate_page",
+        &json!({ "url": "https://example.com/dashboard" }),
+    ));
+    assert!(requires_browser_human_approval(
+        "new_page",
+        &json!({ "url": "https://example.com/report" }),
+    ));
+    assert!(requires_browser_human_approval(
+        "upload_file",
+        &json!({ "filePath": "report.pdf" }),
+    ));
+}
+
+#[test]
 fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
     let root = std::env::temp_dir().join(format!(
         "relay-browser-profile-test-{}",

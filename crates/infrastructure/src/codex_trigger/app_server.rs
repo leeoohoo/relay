@@ -553,7 +553,7 @@ where
         .map(|item| normalized_mcp_arguments(item.get("arguments")))
         .or_else(|| params.pointer("/_meta/tool_params").cloned())
         .unwrap_or_else(|| json!({}));
-    if !requires_browser_human_approval(&tool) {
+    if !requires_browser_human_approval(&tool, &input) {
         return send_approval_response(
             writer,
             rpc_id,
@@ -650,8 +650,17 @@ fn is_managed_browser_item(item: &Value) -> bool {
         && item.get("server").and_then(Value::as_str) == Some(MANAGED_BROWSER_MCP_NAME)
 }
 
-fn requires_browser_human_approval(tool: &str) -> bool {
-    matches!(tool, "navigate_page" | "new_page" | "upload_file")
+pub(super) fn requires_browser_human_approval(tool: &str, input: &Value) -> bool {
+    match tool {
+        "upload_file" => true,
+        "navigate_page" | "new_page" => {
+            input.get("url").and_then(Value::as_str).is_some_and(|url| {
+                let url = url.trim();
+                !url.is_empty() && !url.eq_ignore_ascii_case("about:blank")
+            })
+        }
+        _ => false,
+    }
 }
 
 fn mcp_tool_name_from_params(params: &Value) -> Option<String> {
