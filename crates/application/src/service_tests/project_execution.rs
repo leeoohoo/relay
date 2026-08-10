@@ -544,6 +544,29 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         })
         .expect("asset refresh schedule should be stored");
 
+    let pending_intent = AgentExecutionIntent {
+        id: Uuid::new_v4(),
+        company_id: company.company.id,
+        agent_profile_id: engineer.agent_profile.id,
+        project_id: project.project.id,
+        worker_session_id: None,
+        source_event_ids: Vec::new(),
+        task_ids: vec![task.id],
+        action_type: AGENT_EXECUTION_INTENT_ACTION_EXECUTE.into(),
+        objective: "暂停后保留并等待恢复".into(),
+        acceptance_criteria: vec!["恢复项目后继续执行".into()],
+        priority: "high".into(),
+        dedupe_key: "pause-preserves-pending-intent".into(),
+        status: AGENT_EXECUTION_INTENT_STATUS_PENDING.into(),
+        result_summary: String::new(),
+        error_message: None,
+        created_at: now_utc(),
+        claimed_at: None,
+        completed_at: None,
+    };
+    app.create_agent_execution_intent(pending_intent.clone())
+        .expect("active project should accept pending work");
+
     let paused = app
         .pause_company_project_for_human(SetCompanyProjectPauseForHumanInput {
             human_user_id: owner.id,
@@ -653,6 +676,14 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         .expect("paused project should produce a safe trigger decision");
     assert!(!paused_decision.should_run);
     assert!(paused_decision.project.is_none());
+    assert_eq!(paused_decision.pending_execution_intent_count, 0);
+    let mut paused_dispatch = pending_intent.clone();
+    paused_dispatch.id = Uuid::new_v4();
+    paused_dispatch.dedupe_key = "pause-rejects-new-intent".into();
+    assert!(matches!(
+        app.create_agent_execution_intent(paused_dispatch),
+        Err(AppError::Conflict(message)) if message.contains("project is paused")
+    ));
     let paused_refresh = app
         .repo
         .get_company_project_asset_refresh_config(project.project.id)
@@ -668,6 +699,11 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         })
         .expect("company owner should resume the project");
     assert_eq!(resumed.project.status, PROJECT_STATUS_ACTIVE);
+    let resumed_decision = app
+        .decide_agent_codex_work(&engineer_trigger)
+        .expect("resumed project should expose its pending work again");
+    assert!(resumed_decision.should_run);
+    assert_eq!(resumed_decision.pending_execution_intent_count, 1);
     app.send_human_company_message(SendHumanCompanyMessageInput {
         human_user_id: owner.id,
         company_id: company.company.id,

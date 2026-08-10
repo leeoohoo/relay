@@ -112,6 +112,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .claim_due_agent_codex_trigger_configs(lease_owner, now_utc(), limit.clamp(1, 100))
     }
 
+    pub fn is_agent_codex_trigger_active(&self, agent_id: Uuid) -> AppResult<bool> {
+        Ok(self
+            .repo
+            .get_agent_codex_trigger_config_by_agent_result(agent_id)?
+            .is_some_and(|config| config.status == AGENT_CODEX_TRIGGER_STATUS_ACTIVE))
+    }
+
     pub fn abandon_agent_codex_trigger_leases(&self, lease_owner: &str) -> AppResult<usize> {
         if lease_owner.trim().is_empty() || lease_owner.chars().count() > 120 {
             return Err(AppError::Validation(
@@ -298,6 +305,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let git = project
             .as_ref()
             .and_then(|project| self.repo.get_company_project_git_config(project.id));
+        let active_project_ids = projects
+            .iter()
+            .map(|project| project.id)
+            .collect::<HashSet<_>>();
         let pending_execution_intent_count = self
             .repo
             .list_agent_execution_intents(
@@ -305,7 +316,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
                 100,
             )
-            .len();
+            .into_iter()
+            .filter(|intent| active_project_ids.contains(&intent.project_id))
+            .count();
         let should_run = manual
             || !pending_events.is_empty()
             || !active_tasks.is_empty()
@@ -446,7 +459,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "Agent does not belong to the execution intent company".into(),
             ));
         }
-        self.ensure_company_project_access(
+        let project = self.ensure_company_project_access(
             intent.company_id,
             intent.project_id,
             intent.agent_profile_id,
@@ -457,6 +470,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         {
             return resolve_deduplicated_execution_intent(existing, &intent);
         }
+        self.ensure_project_not_paused(&project)?;
         match self.repo.insert_agent_execution_intent(intent.clone()) {
             Ok(()) => Ok(intent),
             Err(AppError::Conflict(_)) => {

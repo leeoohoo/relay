@@ -233,6 +233,10 @@ pub trait CodexProgressHandler: Send + Sync {
 
 pub trait CodexCancellationHandler: Send + Sync {
     fn should_cancel(&self) -> bool;
+
+    fn cancellation_reason(&self) -> String {
+        "Codex run cancelled because the project was paused".into()
+    }
 }
 
 async fn wait_for_cancellation(handler: Option<&Arc<dyn CodexCancellationHandler>>) {

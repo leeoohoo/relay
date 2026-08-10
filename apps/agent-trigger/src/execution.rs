@@ -134,6 +134,13 @@ pub(super) async fn execute_trigger(
     codex_control: &CodexControlStore,
     trigger: &AgentCodexTriggerConfig,
 ) -> AppResult<TriggerExecution> {
+    if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
+        return Ok(TriggerExecution {
+            succeeded: true,
+            error_message: None,
+            retry_after_seconds: None,
+        });
+    }
     let company_settings = codex_control.company_cli_settings(trigger.company_id)?;
     let effective_settings = resolve_effective_cli_settings(trigger, &company_settings);
     let decision = protect_trigger_decision(|| platform.decide_agent_codex_work(trigger))?;
@@ -270,6 +277,25 @@ pub(super) async fn execute_trigger(
         platform.update_agent_codex_trigger_run(run.clone())?;
         return Ok(trigger_execution_from_result(&control_result));
     }
+    if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
+        let _ = platform.revoke_agent_codex_run_tokens(run.id);
+        run.status = AGENT_CODEX_RUN_STATUS_CANCELLED.into();
+        run.finished_at = Some(now_utc());
+        run.error_message = Some("Agent Trigger was paused by Human".into());
+        platform.update_agent_codex_trigger_run(run.clone())?;
+        record_run_activity(
+            platform,
+            run.id,
+            "cancelled",
+            "Agent 已暂停，本轮已停止；待处理工作将在恢复后继续",
+            run.codex_thread_id.clone(),
+        );
+        return Ok(TriggerExecution {
+            succeeded: true,
+            error_message: None,
+            retry_after_seconds: None,
+        });
+    }
     let control_session = persist_codex_stage_session(
         platform,
         trigger.agent_profile_id,
@@ -297,6 +323,12 @@ pub(super) async fn execute_trigger(
         3,
     );
     for mut intent in intents {
+        if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
+            break;
+        }
+        if platform.is_company_project_paused(intent.project_id)? {
+            continue;
+        }
         intent.status = AGENT_EXECUTION_INTENT_STATUS_RUNNING.into();
         intent.claimed_at = Some(now_utc());
         platform.update_agent_execution_intent(intent.clone())?;
@@ -373,7 +405,9 @@ pub(super) async fn execute_trigger(
                 break;
             }
             Ok((result, session)) => {
-                intent.worker_session_id = Some(session.id);
+                if session.id != Uuid::nil() {
+                    intent.worker_session_id = Some(session.id);
+                }
                 intent.result_summary = result
                     .final_message
                     .as_deref()
@@ -407,14 +441,15 @@ pub(super) async fn execute_trigger(
                     break;
                 }
                 intent.status = if result.status == CodexRunStatus::Cancelled {
-                    AGENT_EXECUTION_INTENT_STATUS_CANCELLED
+                    AGENT_EXECUTION_INTENT_STATUS_PENDING
                 } else {
                     AGENT_EXECUTION_INTENT_STATUS_FAILED
                 }
                 .into();
                 intent.error_message = result.error_message.clone();
                 intent.result_summary = result.final_message.clone().unwrap_or_default();
-                intent.completed_at = Some(now_utc());
+                intent.claimed_at = None;
+                intent.completed_at = (result.status != CodexRunStatus::Cancelled).then(now_utc);
                 platform.update_agent_execution_intent(intent)?;
                 worker_failure = Some(result);
                 break;
@@ -709,12 +744,11 @@ async fn run_codex_stage(
                 platform: platform.clone(),
                 run_id: run.id,
             }) as Arc<dyn CodexProgressHandler>),
-            cancellation_handler: project_id.map(|project_id| {
-                Arc::new(PlatformProjectCancellationHandler {
-                    platform: platform.clone(),
-                    project_id,
-                }) as Arc<dyn CodexCancellationHandler>
-            }),
+            cancellation_handler: Some(Arc::new(PlatformRunCancellationHandler {
+                platform: platform.clone(),
+                agent_id: trigger.agent_profile_id,
+                project_id,
+            }) as Arc<dyn CodexCancellationHandler>),
         })
         .await?;
     if let Some(message) = result.final_message.as_mut() {

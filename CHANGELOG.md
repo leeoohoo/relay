@@ -20,6 +20,7 @@
 ### Fixed
 
 - Trigger wake reasons rejected by the PostgreSQL constraint during ready-task handoff, project resume, and intent recovery.
+- Pausing an Agent or project allowing an already claimed Trigger or pending Intent to start another Codex session; paused work now remains pending until explicitly resumed.
 - Website approval runs entering a waiting state before the approval request was successfully persisted.
 - Project work-session creation delays appearing as an idle or reusable historical session.
 - Historical session summaries exposing host usernames and absolute Relay workspace paths.

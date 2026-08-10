@@ -132,7 +132,7 @@ export function CodexTriggerPanel(props: {
       applyTrigger(response.trigger);
       props.onNotice(action === "run-now"
         ? wasRunningOrQueued ? "当前轮次结束后会再次唤醒，不会并发重复启动" : "已请求立即唤醒"
-        : action === "pause" ? "定时触发已暂停" : "定时触发已恢复");
+        : action === "pause" ? "Agent 已暂停，当前轮次正在停止；待处理工作会在恢复后继续" : "Agent 已恢复，将继续待处理工作");
     } catch (error) {
       props.onError(error);
     } finally {
@@ -219,7 +219,7 @@ export function CodexTriggerPanel(props: {
             ) : null}
           </div>
           <div className="codex-trigger-actions">
-            {trigger?.config.status === "active" ? <button className="button small" onClick={() => void triggerAction("pause")} disabled={busy}>暂停</button> : null}
+            {trigger?.config.status === "active" ? <button className="button small" onClick={() => void triggerAction("pause")} disabled={busy}>暂停运行</button> : null}
             {trigger && trigger.config.status !== "active" ? <button className="button small" onClick={() => void triggerAction("resume")} disabled={busy || !props.active}>恢复</button> : null}
             {trigger ? <button className="button small" onClick={() => void triggerAction("run-now")} disabled={busy || trigger.config.status !== "active" || !props.active}>{runningRun || trigger.config.lease_owner ? "本轮后再唤醒" : trigger.config.manual_run_requested_at ? "已排队，再次请求" : "立即唤醒"}</button> : null}
             <button className="button primary small" onClick={() => void saveTrigger()} disabled={busy || !props.active || !selectedProfileId}>{busy ? "处理中…" : trigger ? "保存选择" : "启用这个配置"}</button>

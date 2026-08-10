@@ -117,6 +117,10 @@ impl CodexCancellationHandler for AlwaysCancelHandler {
     fn should_cancel(&self) -> bool {
         true
     }
+
+    fn cancellation_reason(&self) -> String {
+        "Codex run cancelled because the Agent Trigger was paused by Human".into()
+    }
 }
 
 #[async_trait]
@@ -566,7 +570,7 @@ fn ordinary_codex_profile_still_uses_profile_argument() {
 
 #[cfg(unix)]
 #[test]
-fn running_codex_process_is_cancelled_when_the_project_pauses() {
+fn running_codex_process_uses_the_cancellation_handler_reason() {
     let workspace = std::env::temp_dir().join(format!(
         "relay-fake-codex-cancel-{}",
         uuid::Uuid::new_v4().simple()
@@ -616,7 +620,7 @@ fn running_codex_process_is_cancelled_when_the_project_pauses() {
     assert!(result
         .error_message
         .as_deref()
-        .is_some_and(|message| message.contains("project was paused")));
+        .is_some_and(|message| message.contains("Agent Trigger was paused")));
     std::fs::remove_dir_all(workspace).expect("cleanup");
 }
 

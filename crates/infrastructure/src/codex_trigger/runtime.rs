@@ -267,7 +267,7 @@ impl CodexTriggerRunner {
             error_message = Some(truncate(&sanitize_error(&stderr), 2_000));
         }
         if cancelled {
-            error_message = Some("Codex run cancelled because the project was paused".into());
+            error_message = Some(cancellation_reason(request.cancellation_handler.as_ref()));
         } else if timed_out {
             error_message = Some(format!(
                 "Codex run exceeded {} seconds",
@@ -444,7 +444,7 @@ impl CodexTriggerRunner {
                 thread_id: captured_app_server_thread_id(&thread_id_capture, resume_thread_id),
                 exit_code: None,
                 final_message: None,
-                error_message: Some("Codex run cancelled because the project was paused".into()),
+                error_message: Some(cancellation_reason(request.cancellation_handler.as_ref())),
                 turn_started: true,
             },
         };
@@ -564,6 +564,12 @@ impl CodexTriggerRunner {
             .filter_map(|line| first_section_name(&line[1..line.len() - 1], "mcp_servers."))
             .collect())
     }
+}
+
+fn cancellation_reason(handler: Option<&Arc<dyn CodexCancellationHandler>>) -> String {
+    handler
+        .map(|handler| handler.cancellation_reason())
+        .unwrap_or_else(|| "Codex run cancelled by Relay".into())
 }
 
 fn captured_app_server_thread_id(

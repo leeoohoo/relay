@@ -56,7 +56,7 @@ export function codexSessionTurnLabel(session: CodexSession) {
   if (status === "timed_out" && session.checkpoint_json.continuation_expected === true) return "上轮达到时限，已保留会话等待续跑";
   if (status === "succeeded") return "上轮已完成，会话可继续复用";
   if (status === "failed") return "上轮失败，会话仍保留用于诊断或恢复";
-  if (status === "cancelled") return "上轮因项目暂停而停止";
+  if (status === "cancelled") return "上轮因暂停而停止，恢复后可继续";
   return session.status === "active" ? "会话可复用，当前未必正在执行" : "历史会话";
 }
 export function Toast(props: { children: ReactNode; tone?: "error"; onClose: () => void }) { return <div className={`toast ${props.tone ?? ""}`}><span>{props.children}</span><button onClick={props.onClose}><Icon name="close" /></button></div>; }

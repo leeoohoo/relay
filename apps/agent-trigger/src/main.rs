@@ -34,13 +34,12 @@ use ai_chat_domain::{
         AGENT_CODEX_SANDBOX_READ_ONLY, AGENT_CODEX_SESSION_KIND_CONTROL,
         AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
         AGENT_CODEX_SESSION_STATUS_ARCHIVED, AGENT_CODEX_SETTING_INHERIT,
-        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_CANCELLED,
-        AGENT_EXECUTION_INTENT_STATUS_COMPLETED, AGENT_EXECUTION_INTENT_STATUS_FAILED,
-        AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
-        AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
-        AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
-        AGENT_TOOL_APPROVAL_STATUS_REJECTED, CODEX_PLUGIN_OPERATION_REFRESH,
-        COMPANY_SKILL_LANGUAGE_EN,
+        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_COMPLETED,
+        AGENT_EXECUTION_INTENT_STATUS_FAILED, AGENT_EXECUTION_INTENT_STATUS_PENDING,
+        AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
+        AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXPIRED,
+        AGENT_TOOL_APPROVAL_STATUS_FAILED, AGENT_TOOL_APPROVAL_STATUS_REJECTED,
+        CODEX_PLUGIN_OPERATION_REFRESH, COMPANY_SKILL_LANGUAGE_EN,
     },
 };
 use ai_chat_infrastructure::{
@@ -152,24 +151,51 @@ struct PlatformCodexProgressHandler {
 }
 
 #[derive(Clone)]
-struct PlatformProjectCancellationHandler {
+struct PlatformRunCancellationHandler {
     platform: TriggerPlatform,
-    project_id: Uuid,
+    agent_id: Uuid,
+    project_id: Option<Uuid>,
 }
 
-impl CodexCancellationHandler for PlatformProjectCancellationHandler {
+impl CodexCancellationHandler for PlatformRunCancellationHandler {
     fn should_cancel(&self) -> bool {
-        match self.platform.is_company_project_paused(self.project_id) {
+        match self.platform.is_agent_codex_trigger_active(self.agent_id) {
+            Ok(false) => return true,
+            Ok(true) => {}
+            Err(error) => {
+                tracing::error!(
+                    agent_id = %self.agent_id,
+                    error = %error,
+                    "failed to read Agent Trigger state; cancelling the Codex run defensively"
+                );
+                return true;
+            }
+        }
+        let Some(project_id) = self.project_id else {
+            return false;
+        };
+        match self.platform.is_company_project_paused(project_id) {
             Ok(paused) => paused,
             Err(error) => {
                 tracing::error!(
-                    project_id = %self.project_id,
+                    project_id = %project_id,
                     error = %error,
                     "failed to read project pause state; cancelling the Codex run defensively"
                 );
                 true
             }
         }
+    }
+
+    fn cancellation_reason(&self) -> String {
+        if self
+            .platform
+            .is_agent_codex_trigger_active(self.agent_id)
+            .is_ok_and(|active| !active)
+        {
+            return "Codex run cancelled because the Agent Trigger was paused by Human".into();
+        }
+        "Codex run cancelled because the project was paused".into()
     }
 }
 
