@@ -8,13 +8,14 @@ import { projectStatusLabel, projectTypeLabel } from "../app/shared";
 import { ProjectAssetsCard } from "./assets";
 import { CreateProjectDialog } from "./create-project-dialog";
 import { ProjectGitCard } from "./git";
+import { ProjectGatesCard } from "./gates";
 import { ProjectOwnerDialog } from "./owner-dialog";
 import { ProjectRepositoryBrowser } from "./repository";
 import { ProjectRuleCard } from "./rule";
 import { ProjectSessionsCard } from "./sessions";
 import { TasksView } from "./tasks";
 
-export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions";
+export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "gates" | "memories" | "sessions";
 
 export function ProjectsView(props: {
   consoleData: CompanyConsole;
@@ -102,6 +103,7 @@ export function ProjectsView(props: {
             <button className={activeTab === "rule" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "rule"} onClick={() => setActiveTab("rule")}>Rule</button>
             <button className={activeTab === "assets" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "assets"} onClick={() => setActiveTab("assets")}>项目资产 <span>{selectedProject.assets.length}</span></button>
             <button className={activeTab === "tasks" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "tasks"} onClick={() => setActiveTab("tasks")}>项目任务 <span>{selectedProject.tasks.length}</span></button>
+            <button className={activeTab === "gates" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "gates"} onClick={() => setActiveTab("gates")}>项目门禁</button>
             <button className={activeTab === "memories" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "memories"} onClick={() => setActiveTab("memories")}>项目记忆</button>
             <button className={activeTab === "sessions" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "sessions"} onClick={() => setActiveTab("sessions")}>Agent 会话</button>
           </div>
@@ -152,6 +154,16 @@ export function ProjectsView(props: {
               token={props.token}
               fixedProjectId={selectedProject.project.id}
               onChanged={props.onChanged}
+              onError={props.onError}
+              onNotice={props.onNotice}
+            />
+          ) : null}
+          {activeTab === "gates" ? (
+            <ProjectGatesCard
+              companyId={props.consoleData.company.id}
+              project={selectedProject}
+              token={props.token}
+              canManage={canManage && !projectPaused}
               onError={props.onError}
               onNotice={props.onNotice}
             />

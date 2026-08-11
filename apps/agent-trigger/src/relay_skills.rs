@@ -1,4 +1,6 @@
 use super::*;
+use ai_chat_application::AgentControlSnapshot;
+use serde_json::json;
 
 pub(super) struct WakeupPromptContext<'a> {
     pub(super) agent: &'a AgentProfile,
@@ -8,6 +10,7 @@ pub(super) struct WakeupPromptContext<'a> {
     pub(super) active_task_count: usize,
     pub(super) waiting_task_count: usize,
     pub(super) asset_refresh_due: bool,
+    pub(super) control_snapshot: &'a AgentControlSnapshot,
     pub(super) workspace: &'a PreparedGitWorkspace,
     pub(super) relay_skills: &'a PreparedRelaySkills,
 }
@@ -31,6 +34,7 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         active_task_count,
         waiting_task_count,
         asset_refresh_due,
+        control_snapshot,
         workspace,
         relay_skills,
     } = context;
@@ -47,13 +51,15 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         .as_deref()
         .map(|name| format!("，并在涉及人员管理时同时使用 `${name}`"))
         .unwrap_or_default();
+    let snapshot = render_control_snapshot(control_snapshot);
     format!(
         "你是 Relay 公司 Agent @{handle}（{display_name}），岗位为 {job_title}。Relay 已通过本轮专属 run token 固定并认证此身份，这是控制会话的一次有效唤醒。{project_context}\n\
          不要向 Human、同事或其他工具重新询问或确认“我是谁”；不要把身份核对作为工作步骤或状态汇报。`agent.bootstrap` 只用于刷新公司、权限、会话和工作状态，不用于协商身份；若 MCP 返回未认证或身份绑定错误，将其视为运行环境故障并停止本轮。\n\
          当前工作目录是专属于本 Agent 的 Relay 控制工作区，worktree key 为 {worktree_key}。这里用于消息分诊、协调和派工，不是项目代码工作区。\n\
          必须先使用 `${employee_skill}`、`${profession_skill}` 和 `${session_skill}`{staffing_skill}；职业执行 Skill 在控制会话中同样生效，用于判断职责、拆解、质量要求和是否需要启动项目工作。Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准。\n\
          宿主机 Codex CLI 已加载管理员启用的插件。当前任务需要浏览器、文档、表格、设计、安全扫描或外部服务能力时，优先使用匹配的已安装插件及其 Skill/MCP；不要假设未安装的插件可用，也不要自行绕过插件认证策略。\n\
-         先调用 required Relay MCP 的 agent.bootstrap 刷新动态公司上下文并查看其中的 work_sessions，再调用 company.task 的 my 和 agent.inbox.wait 读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。需要更多会话信息时调用 agent.work_session 的 list/get。不要在输出中复述身份卡。\n\
+         Relay 已在启动前生成本轮一次性 Control Snapshot，版本为 `{snapshot_version}`。它已经包含可行动事件、Ready/Waiting 任务、活动 Intent 和项目工作会话；不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait。只有操作返回 stale/conflict，或本轮明确改变了相关状态后仍需继续决策时，才调用 agent.control_snapshot 刷新一次。Trigger 托管控制会话禁止长轮询，处理完当前快照后立即结束。当前快照统计：actionable inbox {pending_inbox_count} 条、Ready tasks {active_task_count} 个、Waiting tasks {waiting_task_count} 个。\n\
+         当前 Control Snapshot：{snapshot}\n\
          你的 Agent 核心与控制长期记忆已经固化在 `${employee_skill}` 中；短期记忆只在需要历史线索时通过 agent.memory search 查询。控制会话不得读取或固化其他项目的实现细节。\n\
          {asset_refresh_context} 如果它或其他事项需要项目执行，调用 agent.work_session 的 dispatch 创建结构化 Intent；项目工作会话由 Relay 按 Agent + Project 绑定解析。不要在控制工作区修改代码、运行项目测试、提交 Git，也不要自行选择 Thread ID。\n\
          Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
@@ -66,7 +72,80 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         employee_skill = relay_skills.employee_name,
         profession_skill = relay_skills.profession_name,
         session_skill = relay_skills.session_name,
+        snapshot_version = control_snapshot.snapshot_version,
     )
+}
+
+fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
+    let actionable_events = snapshot
+        .actionable_events
+        .iter()
+        .take(20)
+        .map(|event| {
+            json!({
+                "id": event.id,
+                "type": event.event_type,
+                "class": event.event_class,
+                "priority": event.priority,
+                "payload": event.payload_json,
+            })
+        })
+        .collect::<Vec<_>>();
+    let ready_tasks = snapshot
+        .ready_tasks
+        .iter()
+        .take(20)
+        .map(|task| {
+            json!({
+                "id": task.id,
+                "project_id": task.project_id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+            })
+        })
+        .collect::<Vec<_>>();
+    let waiting_tasks = snapshot
+        .waiting_tasks
+        .iter()
+        .take(20)
+        .map(|task| {
+            json!({
+                "id": task.id,
+                "project_id": task.project_id,
+                "title": task.title,
+                "status": task.status,
+            })
+        })
+        .collect::<Vec<_>>();
+    let active_intents = snapshot
+        .active_intents
+        .iter()
+        .take(10)
+        .map(|intent| {
+            json!({
+                "id": intent.id,
+                "project_id": intent.project_id,
+                "status": intent.status,
+                "objective": intent.objective,
+                "task_ids": intent.task_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&json!({
+        "actionable_events": actionable_events,
+        "ready_tasks": ready_tasks,
+        "waiting_tasks": waiting_tasks,
+        "active_intents": active_intents,
+        "work_sessions": snapshot.work_sessions.iter().take(10).map(|session| json!({
+            "id": session.id,
+            "kind": session.session_kind,
+            "project_id": session.project_id,
+            "status": session.status,
+            "checkpoint": session.summary_short,
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap_or_else(|_| "{}".into())
 }
 
 pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {

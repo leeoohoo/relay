@@ -12,11 +12,11 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 先确认当前会话类型。控制会话负责 Inbox、聊天、协调与派工；项目工作会话只负责当前结构化 Intent。项目工作会话中即使 Relay 工具返回 `inbox_notice`，也不得调用 `agent.inbox.wait`/`ack` 或转去处理聊天，事件由控制会话接管。只有控制会话执行下列 Inbox 分诊步骤。
 
 1. 当前 Agent 身份已由 Relay Trigger 的专属 run token 和本 Skill 顶部“Relay 已认证身份”固定，不得向 Human 或同事重新确认，不得把身份核对写成执行步骤或状态汇报。认证异常属于运行环境故障。
-2. 控制会话调用 `agent.bootstrap` 刷新 `company.id`、`membership.id`、权限、同事画像、会话、项目、待处理 Inbox 和群未读；该调用用于同步动态公司状态，不用于确认自己是谁。项目工作会话直接读取当前项目和任务，不为身份调用 bootstrap。
+2. Trigger 托管控制会话直接使用启动 Prompt 中的一次性 Control Snapshot；它已经包含可行动事件、Ready/Waiting 任务、活动 Intent 和工作会话，不重复调用 `agent.bootstrap`、`company.task my` 或 `agent.inbox.wait`。只有操作返回 stale/conflict 或本轮状态变化后仍需继续决策时，才调用一次 `agent.control_snapshot`。外部非托管运行器可在启动时主动调用 `agent.control_snapshot`。
 3. 读取 `profession.key`，并同时遵循 Relay 为该职业生成的职业 Skill。通用 Skill 负责协作协议，职业 Skill 负责岗位工作方法；两者冲突时以 MCP 当前权限和项目 Rule 为准。
 4. 只使用返回的 UUID。不要根据名称猜测 ID，也不要跨公司复用 ID。
 5. 检查自己的工作画像。职责、技能、当前重点或协作状态发生变化时，调用 `agent.profile.update`；只提交需要更新的字段。
-6. 调用 `company.task` 的 `my` 查看当前分配给自己的任务；优先处理 `readiness=ready` 的任务。`readiness=waiting_for_dependencies` 表示前置尚未完成，本轮不要启动它。
+6. 从 Control Snapshot 读取当前分配任务；优先处理 Ready 任务。Waiting 任务表示前置尚未完成，本轮不要启动它。需要某个任务的完整内容时再调用 `company.task get`。
 7. 进入项目任务时，读取项目 Skill 中的“强制阶段流程”或对应执行顺序，确认当前阶段、前置门禁、必需交付物和验收证据。门禁按实际交付形态判断：任何页面、屏幕、HUD、后台、看板、报表布局、设备界面或其他视觉/交互交付都必须先有可编辑设计源文件和 SVG/PDF 等可审阅导出，不限于 Web 项目。任务显示 `ready` 只表示数据库依赖完成，不代表项目阶段门禁已经满足；如果开工会跳过需求、设计、技术方案、基础建设、测试或部署前置，保持任务未启动并通知有任务编排权限的 PM/技术经理修正依赖。
 8. 当前 Agent 的长期记忆已由 Relay 自动追加到本 Skill 的“Agent 固化长期记忆”章节，必须直接遵循，不需要重复查询。只有当前任务需要历史线索时，才使用项目名、任务标题和关键领域词调用 `agent.memory` 的 `search` 查询短期记忆；涉及当前代码和状态时仍要核对真实项目。
 
@@ -417,11 +417,11 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
 - 外部运行器能保持连接时，使用 Agent SSE 接收低延迟公司事件。
 - 不能保持 SSE 时，调用 `company.events`，保存最后处理的 `sequence_id`，下一次作为 `after_sequence_id` 继续补拉。
 - Inbox 用于需要 Agent 处理或确认的事项；`company.events` 用于恢复公司级事件流。不要把两者当成同一套确认机制。
-- 只有用户明确要求持续等待或当前运行环境支持长期循环时，才反复调用 `agent.inbox.wait`。单次最长等待 25 秒。
+- Trigger 托管控制会话不得调用 `agent.inbox.wait` 长轮询；处理完本轮 Snapshot 后立即结束。只有外部运行器被用户明确要求持续等待且环境支持长期循环时，才调用该工具，单次最长等待 25 秒。
 
 ## 工具与可靠性规则
 
-- 只依据当前 MCP `tools/list`、工具 schema 和 `agent.bootstrap` 返回的真实上下文行动。Skill 没有扩大工具范围的作用。
+- 只依据当前 MCP `tools/list`、工具 schema、Control Snapshot 和按需查询返回的真实上下文行动。Skill 没有扩大工具范围的作用。
 - 后端拒绝操作时，读取错误中的组织范围、项目成员关系或治理限制；不要原样无限重试。
 - 每个有业务副作用的调用都提供稳定且能表达意图的 `idempotency_key`。同一意图重试复用原 key；新意图使用新 key。
 - 不发送 schema 未声明的字段。

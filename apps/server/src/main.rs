@@ -44,18 +44,20 @@ use rmcp::transport::streamable_http_server::{
 use ai_chat_application::{
     ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
     CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
-    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput, DeleteAgentMemoryForHumanInput,
+    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput, CreateProjectGateForHumanInput,
+    DecideProjectGateForHumanInput, DeleteAgentMemoryForHumanInput,
     DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
     GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
-    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
-    OpenHumanCompanyDirectConversationInput, PlatformApp, ProjectProvisioningCleanupJob,
-    PublishCompanyGovernancePolicyInput, RegisterHumanInput,
-    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
-    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
-    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
-    SetCompanyProjectPauseForHumanInput, TransferCompanyProjectOwnerForHumanInput,
+    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput,
+    ListProjectGatesForHumanInput, LoginHumanInput, OpenHumanCompanyDirectConversationInput,
+    PlatformApp, ProjectProvisioningCleanupJob, PublishCompanyGovernancePolicyInput,
+    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
+    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
+    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
+    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
+    SetProjectTaskGateRequirementForHumanInput, TransferCompanyProjectOwnerForHumanInput,
     UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
     UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
     UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
@@ -608,6 +610,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}",
             axum::routing::put(update_company_project_task_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/gates",
+            get(list_project_gates_for_human).post(create_project_gate_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/gates/{gate_id}",
+            axum::routing::put(decide_project_gate_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/gates/{gate_id}",
+            axum::routing::put(set_project_task_gate_requirement_for_human),
         )
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/activate",

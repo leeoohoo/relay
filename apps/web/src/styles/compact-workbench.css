@@ -104,3 +104,22 @@
   .approval-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .approval-actions input { grid-column: 1 / -1; }
 }
+.project-gates-layout { display: grid; gap: 14px; padding: 18px; }
+.project-gate-create { display: grid; gap: 12px; border: 1px solid var(--relay-line); border-radius: 12px; padding: 14px; background: rgba(255,255,255,.025); }
+.project-gate-list { display: grid; gap: 10px; }
+.project-gate-card { display: grid; gap: 11px; border: 1px solid var(--relay-line); border-left: 3px solid #596777; border-radius: 11px; padding: 13px 14px; background: rgba(255,255,255,.018); }
+.project-gate-card.passed { border-left-color: var(--relay-lime); }
+.project-gate-card.failed { border-left-color: var(--relay-danger); }
+.project-gate-card.waived { border-left-color: var(--relay-warning); }
+.project-gate-card.evaluating { border-left-color: var(--relay-cyan); }
+.project-gate-card header { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; }
+.project-gate-card header strong { color: var(--relay-text); font-size: 13px; }
+.project-gate-card header small { color: var(--relay-muted); font-size: 10px; }
+.project-gate-card ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.project-gate-card li, .project-gate-tasks span { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--relay-line); border-radius: 999px; padding: 4px 8px; color: #aebbc7; background: rgba(255,255,255,.025); font-size: 9px; }
+.project-gate-tasks { display: flex; flex-wrap: wrap; gap: 6px; }
+.project-gate-tasks svg { width: 11px; height: 11px; color: var(--relay-cyan); }
+.project-gate-decision { margin: 0; color: #aab7c2; font-size: 11px; line-height: 1.6; }
+.project-gate-actions { display: grid; grid-template-columns: minmax(180px,1fr) auto auto auto; gap: 7px; }
+.project-gate-actions input { min-width: 0; }
+@media (max-width: 760px) { .project-gate-card header { grid-template-columns: auto minmax(0,1fr); } .project-gate-card header small { grid-column: 2; } .project-gate-actions { grid-template-columns: 1fr 1fr 1fr; } .project-gate-actions input { grid-column: 1 / -1; } }

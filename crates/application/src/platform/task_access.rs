@@ -291,6 +291,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             {
                 continue;
             }
+            if !self.project_task_gate_requirements_satisfied(project.id, task.id) {
+                continue;
+            }
             let Some(assignee_agent_id) = task.assignee_agent_id else {
                 continue;
             };

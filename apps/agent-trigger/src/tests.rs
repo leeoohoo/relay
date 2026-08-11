@@ -335,6 +335,17 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         staffing_name: None,
         version_hash: "v1".into(),
     };
+    let control_snapshot = ai_chat_application::AgentControlSnapshot {
+        agent_profile_id: agent.id,
+        company_id: Uuid::new_v4(),
+        generated_at: now,
+        snapshot_version: "snapshot-v1".into(),
+        actionable_events: Vec::new(),
+        ready_tasks: Vec::new(),
+        waiting_tasks: Vec::new(),
+        active_intents: Vec::new(),
+        work_sessions: Vec::new(),
+    };
     let control_prompt = build_wakeup_prompt(WakeupPromptContext {
         agent: &agent,
         job_title: "软件工程师",
@@ -343,12 +354,15 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         active_task_count: 1,
         waiting_task_count: 0,
         asset_refresh_due: false,
+        control_snapshot: &control_snapshot,
         workspace: &workspace,
         relay_skills: &skills,
     });
     assert!(control_prompt.contains("run token 固定并认证此身份"));
     assert!(control_prompt.contains("不要向 Human、同事或其他工具重新询问或确认"));
-    assert!(control_prompt.contains("agent.bootstrap` 只用于刷新公司、权限、会话和工作状态"));
+    assert!(control_prompt
+        .contains("不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait"));
+    assert!(control_prompt.contains("snapshot-v1"));
     assert!(!control_prompt.contains("核对返回身份"));
 
     let project = CompanyProject {

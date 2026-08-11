@@ -235,6 +235,32 @@ pub(super) struct UpdateCompanyProjectTaskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct CreateProjectGateRequest {
+    pub(super) gate_key: String,
+    pub(super) gate_type: String,
+    pub(super) title: String,
+    pub(super) related_task_id: Option<Uuid>,
+    #[serde(default)]
+    pub(super) required_evidence: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct DecideProjectGateRequest {
+    pub(super) status: String,
+    pub(super) decision_summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SetProjectTaskGateRequirementRequest {
+    #[serde(default = "default_gate_required_status")]
+    pub(super) required_status: String,
+}
+
+fn default_gate_required_status() -> String {
+    "passed".into()
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct UpsertCompanyAgentCodexTriggerRequest {
     pub(super) interval_seconds: Option<i32>,
     pub(super) codex_profile: Option<String>,

@@ -23,7 +23,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
             .list_agent_inbox_events(agent_id, true, 10_000)
             .ok()?
             .into_iter()
-            .filter(|event| event.event_type == "message.received" && event.available_at <= now)
+            .filter(|event| {
+                event.requires_action
+                    && event.event_type == "message.received"
+                    && event.available_at <= now
+            })
             .collect::<Vec<_>>();
         if messages.is_empty() {
             return None;
@@ -168,7 +172,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                     ),
             )
             .with_instructions(
-                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. The credential already fixes the Agent identity; do not ask a Human to reconfirm it or call agent.bootstrap merely to discover who you are. Control sessions use agent.bootstrap to refresh dynamic company, permission, coworker, session, project, and inbox state. Project worker sessions may read their bound project and tasks directly. Each Agent owns an isolated memory set. Long-term memories are injected into that Agent's generated Skill on every wake-up; short-term memories are retrieved on demand with agent.memory search. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets, and search by topic before remembering. Relay tool responses may include inbox_notice when new messages are pending. In a control session, attention_required=true is an interrupt: call agent.inbox.wait, handle the messages, then call agent.inbox.ack. In a project worker session, ignore inbox_notice and keep executing the current Intent; Inbox and chat remain owned by the control session. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
+                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. The credential already fixes the Agent identity; do not ask a Human to reconfirm it. Trigger-managed control sessions receive a one-shot Control Snapshot and must not repeat bootstrap/task-my/inbox-wait polling; refresh once with agent.control_snapshot only after a stale-state conflict. Project worker sessions read their bound project and tasks directly and never triage Inbox. Each Agent owns an isolated memory set. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets. Relay tool responses include inbox_notice only for actionable messages. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
             )
     }
 
@@ -187,7 +191,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
         let mut tools = standard_mcp_tools();
         if project_worker_session {
             tools.retain(|tool| {
-                !matches!(tool.name.as_ref(), "agent.inbox.wait" | "agent.inbox.ack")
+                !matches!(
+                    tool.name.as_ref(),
+                    "agent.control_snapshot" | "agent.inbox.wait" | "agent.inbox.ack"
+                )
             });
         }
         if let Ok(membership) = self
@@ -304,12 +311,14 @@ pub(super) fn filter_inbox_events(
     events: Vec<ai_chat_domain::agent_identity::AgentInboxEvent>,
     event_types: Option<&[String]>,
 ) -> Vec<ai_chat_domain::agent_identity::AgentInboxEvent> {
-    let Some(event_types) = event_types.filter(|items| !items.is_empty()) else {
-        return events;
-    };
     events
         .into_iter()
-        .filter(|event| event_types.iter().any(|item| item == &event.event_type))
+        .filter(|event| event.requires_action)
+        .filter(|event| {
+            event_types
+                .filter(|items| !items.is_empty())
+                .is_none_or(|types| types.iter().any(|item| item == &event.event_type))
+        })
         .collect()
 }
 

@@ -978,6 +978,56 @@ apps/web/src/pages/projects/sessions.tsx
 | Stale Running 状态发现时间 | 小于 60 秒 |
 | 项目状态重复广播 | 降低 80% |
 
+## 22. 实施进度（2026-08-12）
+
+本轮完成了可独立上线验证的第一批闭环，范围为事件路由、一次性控制快照和项目 Gate。Phase 3 至 Phase 5 仍按本方案继续推进，不能把本节视为整份方案已经全部完成。
+
+### 22.1 已完成
+
+- [x] 数据库迁移 `0065_actionable_event_routing`：补齐事件分类、行动标记、唤醒策略、去重/合并键、因果链和处理 Run 字段。
+- [x] Event Router：普通 Agent 项目群消息和尚未确认 Ready 的任务分配不唤醒；明确 `@`、Human 私聊、审批、失败和 Ready 任务按策略进入 actionable Inbox。
+- [x] 活动事件去重：内存仓库和 PostgreSQL 均保证同一 Agent 的活动 `dedupe_key` 唯一。
+- [x] `agent.control_snapshot`：一次返回 actionable events、Ready/Waiting tasks、活动 Intent、项目工作会话和快照版本。
+- [x] Trigger 决策改用 Control Snapshot，`requires_action=false` 的事件不再启动 Codex。
+- [x] 控制 Prompt 与 Skill 删除每轮强制 `agent.bootstrap -> company.task my -> agent.inbox.wait`，禁止 Trigger 托管控制会话长轮询。
+- [x] 数据库迁移 `0066_project_gates`：新增 Project Gate 与 Task Gate Requirement。
+- [x] Gate 的 Human REST、Agent MCP 和应用服务入口。
+- [x] 统一任务 Readiness 的依赖与 Gate 判断；未满足 Gate 时拒绝进入 `in_progress/done`。
+- [x] Gate 通过或豁免后重新计算任务，只创建一条带稳定去重键的 `task_ready` 事件。
+- [x] 项目详情增加“项目门禁”Tab，支持创建、绑定任务、证据要求、通过、豁免和不通过。
+
+### 22.2 自动化验证
+
+- [x] `cargo test -q --workspace --no-fail-fast`：全部通过。
+- [x] `pnpm --filter @ai-chat/web test`：16 个测试文件、40 个测试全部通过。
+- [x] `pnpm --filter @ai-chat/web build`：生产构建通过。
+- [x] `scripts/test_migration_atomicity.sh`：失败迁移的 schema 变更与迁移记录均成功回滚。
+- [x] Rust 格式检查与 `git diff --check` 通过。
+- [x] 新增 Gate 集成测试覆盖“未通过不能开始、通过后 Ready、重复决策只生成一条 Ready Event”。
+- [x] 消息路由集成测试覆盖“普通 Agent 群消息不唤醒”和“明确 `@` 只唤醒目标 Agent”。
+
+### 22.3 真实 E2E 结果
+
+通过 `http://127.0.0.1:45274` 的真实浏览器界面完成：
+
+1. 注册 Human 并创建公司。
+2. 创建项目经理与软件工程师两名托管 Agent。
+3. 从本机共享工作区导入最小项目，并验证 Harness 仓库成功创建。
+4. 创建并分配任务。
+5. 创建“交互设计评审”Gate，绑定任务并声明设计证据。
+6. Gate 为 `pending` 时将任务改为 `in_progress`，服务端正确返回 `task_gate_unresolved`，任务保持 `todo`。
+7. Human 通过 Gate 后，数据库只存在一条 `company.project.task_ready`，其分类为 `execution_ready`、`requires_action=true`、`wake_policy=immediate`。
+8. 再次启动任务成功，任务进入 `in_progress`。
+9. 使用最终重建镜像再次创建并分配任务，数据库确认 `company.project.task_assigned` 为 `informational`、`requires_action=false`、`wake_policy=never`；是否执行由实时 Ready Snapshot 决定。
+
+### 22.4 待继续实施
+
+- [ ] Phase 0 剩余项：Feature Flag、唤醒决策指标与整改前后指标面板。
+- [ ] Phase 3：Project Environment、Task Attempt、Blocker、Relation 与 Evidence Registry。
+- [ ] Phase 4：记忆治理、注入预算、角色事件订阅与负载预警。
+- [ ] Phase 5：Run 心跳、Watchdog、运行状态投影、讨论线程和摘要卡片。
+- [ ] 五 Agent、环境 Revision、QA Retest 的完整最终 E2E；本轮 E2E 只验收 Phase 1 至 Phase 2 的闭环。
+
 ## 22. 风险与回滚
 
 ### 22.1 过度降噪导致漏通知

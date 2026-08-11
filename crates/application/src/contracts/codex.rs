@@ -2,9 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use ai_chat_domain::agent_identity::AgentInboxEvent;
 use ai_chat_domain::company::{
-    AgentCodexRunToken, AgentCodexTriggerConfig, AgentCodexTriggerRun, CodexPluginCatalogSnapshot,
-    CodexPluginOperation, CompanyCodexRunnerProfile, CompanyProject, CompanyProjectGitConfig,
+    AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
+    AgentExecutionIntent, CodexPluginCatalogSnapshot, CodexPluginOperation,
+    CompanyCodexRunnerProfile, CompanyProject, CompanyProjectGitConfig, CompanyProjectTask,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +153,20 @@ pub struct AgentCodexWorkDecision {
     pub waiting_task_count: usize,
     pub asset_refresh_due: bool,
     pub pending_execution_intent_count: usize,
+    pub control_snapshot: AgentControlSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentControlSnapshot {
+    pub agent_profile_id: Uuid,
+    pub company_id: Uuid,
+    pub generated_at: DateTime<Utc>,
+    pub snapshot_version: String,
+    pub actionable_events: Vec<AgentInboxEvent>,
+    pub ready_tasks: Vec<CompanyProjectTask>,
+    pub waiting_tasks: Vec<CompanyProjectTask>,
+    pub active_intents: Vec<AgentExecutionIntent>,
+    pub work_sessions: Vec<AgentCodexSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

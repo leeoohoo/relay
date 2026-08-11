@@ -4,15 +4,16 @@ use ai_chat_application::{
     AddCompanyProjectMemberInput, AgentStaffingHireInput, AgentStaffingStatusInput,
     BatchUpdateCompanyProjectTasksInput, ChangeCompanyProjectTaskDependencyInput,
     CompanyProjectAssetInput, CreateCompanyGroupConversationInput, CreateCompanyProjectInput,
-    CreateCompanyProjectStatusUpdateInput, CreateCompanyProjectTaskInput, GetAgentMemoryInput,
-    GetCompanyAgentContextInput, GetCompanyProjectInput, ListCompanyGroupUnreadInput,
+    CreateCompanyProjectStatusUpdateInput, CreateCompanyProjectTaskInput, CreateProjectGateInput,
+    DecideProjectGateInput, GetAgentMemoryInput, GetCompanyAgentContextInput,
+    GetCompanyProjectInput, ListCompanyGroupUnreadInput, ListProjectGatesInput,
     MarkCompanyGroupReadInput, MarkInboxEventProcessedInput, OpenCompanyDirectConversationInput,
     OwnershipProofVerifier, PlatformApp, PlatformRepository, RememberAgentMemoryInput,
     RemoveCompanyProjectMemberInput, ReplaceCompanyProjectAssetsInput,
     ReplyCompanyInboxMessageInput, SearchAgentMemoriesInput, SendCompanyMessageWithMentionsInput,
-    SetAgentMemoryStateInput, TransferCompanyProjectOwnerInput, UpdateAgentMemoryInput,
-    UpdateCompanyAgentWorkProfileInput, UpdateCompanyProjectInput, UpdateCompanyProjectRuleInput,
-    UpdateCompanyProjectTaskInput, UpsertCompanyProjectGitInput,
+    SetAgentMemoryStateInput, SetProjectTaskGateRequirementInput, TransferCompanyProjectOwnerInput,
+    UpdateAgentMemoryInput, UpdateCompanyAgentWorkProfileInput, UpdateCompanyProjectInput,
+    UpdateCompanyProjectRuleInput, UpdateCompanyProjectTaskInput, UpsertCompanyProjectGitInput,
 };
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
@@ -64,6 +65,7 @@ pub struct McpGateway<R: PlatformRepository, V: OwnershipProofVerifier> {
 mod dispatch;
 mod dispatch_agent;
 mod dispatch_chat;
+mod dispatch_gate;
 mod dispatch_legacy;
 mod dispatch_project;
 mod dispatch_staff;
@@ -525,6 +527,52 @@ enum CompanyTaskOperation {
         task_id: Uuid,
         depends_on_task_id: Uuid,
     },
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CompanyGateToolInput {
+    #[serde(flatten)]
+    operation: CompanyGateOperation,
+    #[schemars(description = "Optional retry key for mutating Gate actions.")]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum CompanyGateOperation {
+    List {
+        company_id: Uuid,
+        project_id: Uuid,
+    },
+    Create {
+        company_id: Uuid,
+        project_id: Uuid,
+        gate_key: String,
+        gate_type: String,
+        title: String,
+        related_task_id: Option<Uuid>,
+        #[serde(default)]
+        required_evidence: Vec<String>,
+    },
+    Decide {
+        company_id: Uuid,
+        project_id: Uuid,
+        gate_id: Uuid,
+        status: String,
+        decision_summary: String,
+    },
+    RequirementSet {
+        company_id: Uuid,
+        project_id: Uuid,
+        task_id: Uuid,
+        gate_id: Uuid,
+        #[serde(default = "default_gate_required_status")]
+        required_status: String,
+    },
+}
+
+fn default_gate_required_status() -> String {
+    "passed".into()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

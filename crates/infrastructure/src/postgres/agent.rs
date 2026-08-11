@@ -660,18 +660,32 @@ impl AgentPlatformRepository for PostgresPlatformRepository {
             client.execute(
                 r#"
                 INSERT INTO agent_event_inbox (
-                    id, agent_profile_id, event_type, payload_json,
-                    priority, available_at, processed_at, status, created_at
+                    id, agent_profile_id, event_type, event_class, requires_action,
+                    wake_policy, dedupe_key, coalesce_key, causation_id, correlation_id,
+                    payload_json, priority, available_at, expires_at, handled_by_run_id,
+                    processed_at, status, created_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                ON CONFLICT (agent_profile_id, dedupe_key)
+                    WHERE dedupe_key IS NOT NULL AND status IN ('pending', 'processing')
+                DO NOTHING
                 "#,
                 &[
                     &event.id,
                     &event.agent_profile_id,
                     &event.event_type,
+                    &event.event_class,
+                    &event.requires_action,
+                    &event.wake_policy,
+                    &event.dedupe_key,
+                    &event.coalesce_key,
+                    &event.causation_id,
+                    &event.correlation_id,
                     &Json(event.payload_json.clone()),
                     &event.priority,
                     &event.available_at,
+                    &event.expires_at,
+                    &event.handled_by_run_id,
                     &event.processed_at,
                     &agent_inbox_event_status_to_str(&event.status),
                     &event.created_at,
@@ -691,8 +705,10 @@ impl AgentPlatformRepository for PostgresPlatformRepository {
             if let Some(status) = status.as_ref() {
                 client.query(
                     r#"
-                    SELECT id, agent_profile_id, event_type, payload_json,
-                           priority, available_at, processed_at, status, created_at
+                    SELECT id, agent_profile_id, event_type, event_class, requires_action,
+                           wake_policy, dedupe_key, coalesce_key, causation_id, correlation_id,
+                           payload_json, priority, available_at, expires_at, handled_by_run_id,
+                           processed_at, status, created_at
                     FROM agent_event_inbox
                     WHERE agent_profile_id = $1
                       AND status = $2
@@ -708,8 +724,10 @@ impl AgentPlatformRepository for PostgresPlatformRepository {
             } else {
                 client.query(
                     r#"
-                    SELECT id, agent_profile_id, event_type, payload_json,
-                           priority, available_at, processed_at, status, created_at
+                    SELECT id, agent_profile_id, event_type, event_class, requires_action,
+                           wake_policy, dedupe_key, coalesce_key, causation_id, correlation_id,
+                           payload_json, priority, available_at, expires_at, handled_by_run_id,
+                           processed_at, status, created_at
                     FROM agent_event_inbox
                     WHERE agent_profile_id = $1
                     ORDER BY priority ASC, created_at DESC
@@ -729,8 +747,10 @@ impl AgentPlatformRepository for PostgresPlatformRepository {
         self.with_client(|client| {
             client.query_opt(
                 r#"
-                SELECT id, agent_profile_id, event_type, payload_json,
-                       priority, available_at, processed_at, status, created_at
+                SELECT id, agent_profile_id, event_type, event_class, requires_action,
+                       wake_policy, dedupe_key, coalesce_key, causation_id, correlation_id,
+                       payload_json, priority, available_at, expires_at, handled_by_run_id,
+                       processed_at, status, created_at
                 FROM agent_event_inbox
                 WHERE id = $1
                 "#,
@@ -748,19 +768,37 @@ impl AgentPlatformRepository for PostgresPlatformRepository {
                 r#"
                 UPDATE agent_event_inbox
                 SET event_type = $2,
-                    payload_json = $3,
-                    priority = $4,
-                    available_at = $5,
-                    processed_at = $6,
-                    status = $7
+                    event_class = $3,
+                    requires_action = $4,
+                    wake_policy = $5,
+                    dedupe_key = $6,
+                    coalesce_key = $7,
+                    causation_id = $8,
+                    correlation_id = $9,
+                    payload_json = $10,
+                    priority = $11,
+                    available_at = $12,
+                    expires_at = $13,
+                    handled_by_run_id = $14,
+                    processed_at = $15,
+                    status = $16
                 WHERE id = $1
                 "#,
                 &[
                     &event.id,
                     &event.event_type,
+                    &event.event_class,
+                    &event.requires_action,
+                    &event.wake_policy,
+                    &event.dedupe_key,
+                    &event.coalesce_key,
+                    &event.causation_id,
+                    &event.correlation_id,
                     &Json(event.payload_json.clone()),
                     &event.priority,
                     &event.available_at,
+                    &event.expires_at,
+                    &event.handled_by_run_id,
                     &event.processed_at,
                     &agent_inbox_event_status_to_str(&event.status),
                 ],

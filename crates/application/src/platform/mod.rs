@@ -93,6 +93,9 @@ mod codex_profiles;
 mod codex_runtime;
 mod company;
 mod company_paging;
+mod control_snapshot;
+mod event_routing;
+mod gates;
 mod memory;
 mod ownership;
 mod project;
@@ -114,6 +117,7 @@ pub struct PlatformApp<
 }
 
 struct MessageDeliveryPolicy<'a> {
+    project_id: Option<Uuid>,
     mentioned_agent_ids: &'a [Uuid],
     mention_all: bool,
     wake_recipient_agent_ids: &'a [Uuid],

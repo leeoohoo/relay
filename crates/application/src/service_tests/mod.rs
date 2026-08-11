@@ -82,6 +82,7 @@ mod chat;
 mod codex_approvals;
 mod codex_sessions;
 mod company_console;
+mod gates;
 mod git;
 mod governance_language;
 mod memory;

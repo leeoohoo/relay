@@ -148,37 +148,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|company| company.status == "active")
             .ok_or_else(|| AppError::NotFound("active company not found".into()))?;
         let now = now_utc();
-        let mut pending_events = Vec::new();
-        for event in self.repo.list_agent_inbox_events(
-            config.agent_profile_id,
-            Some(AgentInboxEventStatus::Pending),
-            1_000,
-        ) {
-            if event.available_at > now {
-                continue;
-            }
-            let mut project_id = payload_uuid_field_optional(&event.payload_json, "project_id");
-            if project_id.is_none() {
-                if let Some(conversation_id) =
-                    payload_uuid_field_optional(&event.payload_json, "conversation_id")
-                {
-                    project_id = self
-                        .repo
-                        .get_conversation_context_result(conversation_id)?
-                        .and_then(|context| context.project_id);
-                }
-            }
-            let project_is_active = match project_id {
-                Some(project_id) => self
-                    .repo
-                    .get_company_project_result(project_id)?
-                    .is_none_or(|project| project.status != PROJECT_STATUS_PAUSED),
-                None => true,
-            };
-            if project_is_active {
-                pending_events.push(event);
-            }
-        }
+        let mut control_snapshot =
+            self.agent_control_snapshot(config.agent_profile_id, config.company_id)?;
         let projects = self
             .repo
             .list_company_projects_result(config.company_id)?
@@ -191,44 +162,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         .is_some_and(|member| member.left_at.is_none())
             })
             .collect::<Vec<_>>();
-        let mut active_tasks = Vec::new();
-        let mut waiting_task_count = 0;
-        for project in &projects {
-            let tasks = self.repo.list_company_project_tasks_result(project.id)?;
-            let dependencies = self.repo.list_company_project_task_dependencies(project.id);
-            for task in tasks.iter().filter(|task| {
-                task.assignee_agent_id == Some(config.agent_profile_id)
-                    && matches!(
-                        task.status.as_str(),
-                        PROJECT_TASK_STATUS_TODO | PROJECT_TASK_STATUS_IN_PROGRESS
-                    )
-            }) {
-                let has_unresolved_dependency = dependencies
-                    .iter()
-                    .filter(|dependency| dependency.task_id == task.id)
-                    .any(|dependency| {
-                        tasks
-                            .iter()
-                            .find(|candidate| candidate.id == dependency.depends_on_task_id)
-                            .is_some_and(|dependency_task| {
-                                !ai_chat_domain::company::project_task_dependency_satisfied(
-                                    &dependency.dependency_condition,
-                                    &dependency_task.status,
-                                )
-                            })
-                    });
-                if has_unresolved_dependency {
-                    waiting_task_count += 1;
-                } else {
-                    active_tasks.push(task.clone());
-                }
-            }
-        }
-        let in_progress_task_ids = active_tasks
+        let in_progress_task_ids = control_snapshot
+            .ready_tasks
             .iter()
             .filter(|task| task.status == PROJECT_TASK_STATUS_IN_PROGRESS)
             .map(|task| task.id)
             .collect::<HashSet<_>>();
+        let mut recovered_intent = false;
         if !in_progress_task_ids.is_empty() {
             for intent in self.repo.list_agent_execution_intents(
                 config.agent_profile_id,
@@ -241,11 +181,19 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .any(|task_id| in_progress_task_ids.contains(task_id))
                 {
                     let failure = intent.error_message.clone().unwrap_or_default();
-                    let _ = self
-                        .requeue_agent_execution_intent_after_retryable_failure(intent, &failure)?;
+                    recovered_intent |= self
+                        .requeue_agent_execution_intent_after_retryable_failure(intent, &failure)?
+                        .is_some();
                 }
             }
         }
+        if recovered_intent {
+            control_snapshot =
+                self.agent_control_snapshot(config.agent_profile_id, config.company_id)?;
+        }
+        let pending_events = control_snapshot.actionable_events.clone();
+        let active_tasks = control_snapshot.ready_tasks.clone();
+        let waiting_task_count = control_snapshot.waiting_tasks.len();
         let manual = config.manual_run_requested_at.is_some();
         let can_refresh_assets = membership
             .permissions
@@ -345,6 +293,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             waiting_task_count,
             asset_refresh_due: asset_refresh.is_some(),
             pending_execution_intent_count,
+            control_snapshot,
         })
     }
 

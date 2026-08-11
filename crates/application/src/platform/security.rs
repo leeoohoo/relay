@@ -1,3 +1,4 @@
+use super::event_routing::route_agent_event;
 use super::*;
 use ai_chat_domain::company::AGENT_CODEX_WAKE_REASON_MESSAGE;
 
@@ -259,13 +260,24 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         payload_json: serde_json::Value,
         priority: i32,
     ) -> AppResult<()> {
+        let event_type = event_type.into();
+        let routing = route_agent_event(&event_type, &payload_json);
         self.repo.insert_agent_inbox_event(AgentInboxEvent {
             id: Uuid::new_v4(),
             agent_profile_id,
-            event_type: event_type.into(),
+            event_type,
+            event_class: routing.event_class.into(),
+            requires_action: routing.requires_action,
+            wake_policy: routing.wake_policy.into(),
+            dedupe_key: routing.dedupe_key,
+            coalesce_key: routing.coalesce_key,
+            causation_id: routing.causation_id,
+            correlation_id: routing.correlation_id,
             payload_json,
             priority,
             available_at: now_utc(),
+            expires_at: None,
+            handled_by_run_id: None,
             processed_at: None,
             status: AgentInboxEventStatus::Pending,
             created_at: now_utc(),
@@ -286,6 +298,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 json!({
                     "message_id": message.id,
                     "conversation_id": message.conversation_id,
+                    "project_id": policy.project_id,
                     "sender_agent_id": message.sender_agent_id,
                     "sender_human_user_id": message.sender_human_user_id,
                     "content": message.content,
@@ -294,7 +307,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     "mentioned_agent_ids": policy.mentioned_agent_ids,
                     "mention_all": policy.mention_all,
                     "mentioned": policy.mention_all || policy.mentioned_agent_ids.contains(&recipient_agent_id),
-                    "project_owner_followup": policy.project_owner_followup_agent_id == Some(recipient_agent_id)
+                    "project_owner_followup": policy.project_owner_followup_agent_id == Some(recipient_agent_id),
+                    "delivery_requires_action": policy.wake_recipient_agent_ids.contains(&recipient_agent_id)
                 }),
                 10,
             )?;

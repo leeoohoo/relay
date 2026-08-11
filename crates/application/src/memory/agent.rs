@@ -229,6 +229,18 @@ impl AgentPlatformRepository for MemoryPlatformRepository {
 
     fn insert_agent_inbox_event(&self, event: AgentInboxEvent) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        if event.dedupe_key.as_ref().is_some_and(|dedupe_key| {
+            guard.inbox_events.values().any(|existing| {
+                existing.agent_profile_id == event.agent_profile_id
+                    && existing.dedupe_key.as_ref() == Some(dedupe_key)
+                    && matches!(
+                        existing.status,
+                        AgentInboxEventStatus::Pending | AgentInboxEventStatus::Processing
+                    )
+            })
+        }) {
+            return Ok(());
+        }
         guard.inbox_events.insert(event.id, event);
         Ok(())
     }

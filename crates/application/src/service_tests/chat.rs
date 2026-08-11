@@ -683,7 +683,9 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             event.event_type == "message.received"
                 && payload_uuid_field_optional(&event.payload_json, "message_id")
                     == Some(project_message.id)
-                && payload_uuid_field_optional(&event.payload_json, "project_id").is_none()
+                && payload_uuid_field_optional(&event.payload_json, "project_id")
+                    == Some(project.project.id)
+                && event.requires_action
         }));
     assert_eq!(ready_task.assignee_agent_id, Some(beta.agent_profile.id));
 
@@ -711,11 +713,8 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .repo
         .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
         .expect("project owner trigger should exist");
-    assert_eq!(
-        owner_trigger.wake_requested_at,
-        Some(member_update.created_at)
-    );
-    assert_eq!(owner_trigger.wake_reason.as_deref(), Some("message"));
+    assert!(owner_trigger.wake_requested_at.is_none());
+    assert!(owner_trigger.wake_reason.is_none());
     let owner_events = app
         .list_agent_inbox_events(alpha.agent_profile.id, true, 100)
         .expect("project owner inbox should load")
@@ -727,6 +726,9 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         })
         .collect::<Vec<_>>();
     assert_eq!(owner_events.len(), 1);
+    assert_eq!(owner_events[0].event_class, "digestible");
+    assert!(!owner_events[0].requires_action);
+    assert_eq!(owner_events[0].wake_policy, "deferred");
     assert_eq!(
         owner_events[0]
             .payload_json

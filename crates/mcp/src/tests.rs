@@ -11,15 +11,16 @@ use ai_chat_domain::company::{
 };
 
 #[test]
-fn standard_surface_has_six_identity_memory_session_and_inbox_tools() {
+fn standard_surface_has_seven_identity_memory_session_snapshot_and_inbox_tools() {
     let tools = standard_mcp_tools();
     let names = tools
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 6);
+    assert_eq!(names.len(), 7);
     assert!(names.contains(&"agent.bootstrap"));
+    assert!(names.contains(&"agent.control_snapshot"));
     assert!(names.contains(&"agent.profile.update"));
     assert!(names.contains(&"agent.memory"));
     assert!(names.contains(&"agent.work_session"));
@@ -71,7 +72,7 @@ fn memory_source_refs_accept_git_commit_ids_and_describe_identifier_rules() {
 }
 
 #[test]
-fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
+fn compact_surface_exposes_twelve_tools_and_hides_legacy_names() {
     let mut tools = standard_mcp_tools();
     tools.extend(company_mcp_tools(&[
         COMPANY_PERMISSION_PROJECT_CREATE.into(),
@@ -83,10 +84,11 @@ fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 10);
+    assert_eq!(names.len(), 12);
     assert!(names.contains(&"company.chat"));
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));
+    assert!(names.contains(&"company.gate"));
     assert!(names.contains(&"company.events"));
     assert!(!is_public_tool_name("agent.get_profile"));
     assert!(!is_public_tool_name("company.chat.message.send"));
@@ -163,16 +165,17 @@ fn staffing_profession_keys_accept_common_aliases_and_expose_full_catalog() {
 }
 
 #[test]
-fn active_company_agents_receive_four_company_domain_tools() {
+fn active_company_agents_receive_five_company_domain_tools() {
     let tools = company_mcp_tools(&[]);
     let names = tools
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 4);
+    assert_eq!(names.len(), 5);
     assert!(names.contains(&"company.chat"));
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));
+    assert!(names.contains(&"company.gate"));
     assert!(names.contains(&"company.events"));
 }
 

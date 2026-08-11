@@ -15,10 +15,10 @@ use ai_chat_application::{
     CompanyAgentMembershipUpdateBundle, CompanyConversationCreationBundle, CompanyCreationBundle,
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
     CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput, CursorPage,
-    GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
-    ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, MessagePageView,
-    ProjectPlatformRepository, ProjectProvisioningCleanupJob, RegistrationCompletionBundle,
-    TaskPlatformRepository,
+    GatePlatformRepository, GovernancePlatformRepository,
+    HumanCompanyDirectConversationCreationBundle, ManagedCompanyProjectCreationBundle,
+    MemoryPlatformRepositoryPort, MessagePageView, ProjectPlatformRepository,
+    ProjectProvisioningCleanupJob, RegistrationCompletionBundle, TaskPlatformRepository,
 };
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,
@@ -36,7 +36,7 @@ use ai_chat_domain::company::{
     CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig,
     CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
     CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRealtimeEvent, OrgUnit,
-    COMPANY_AGENT_ROLE_MANAGER,
+    ProjectGate, ProjectTaskGateRequirement, COMPANY_AGENT_ROLE_MANAGER,
 };
 use ai_chat_domain::social::{
     ConversationContext, ConversationPreview, ConversationType, MessageView,
@@ -49,6 +49,7 @@ mod chat;
 mod codex_control;
 mod codex_runtime;
 mod company;
+mod gate;
 mod governance;
 mod mapping;
 mod memory;

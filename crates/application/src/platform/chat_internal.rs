@@ -65,17 +65,19 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 notification_recipient_ids.push(owner_agent_id);
             }
         }
-        let mut wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
-            &context,
-            &notification_recipient_ids,
-            &mentioned_agent_ids,
-            input.mention_all,
-        )?;
-        if let Some(owner_agent_id) = project_owner_followup_agent_id {
-            if !wake_recipient_agent_ids.contains(&owner_agent_id) {
-                wake_recipient_agent_ids.push(owner_agent_id);
-            }
-        }
+        let wake_recipient_agent_ids = if context.context_type == CONVERSATION_CONTEXT_PROJECT_GROUP
+            && mentioned_agent_ids.is_empty()
+            && !input.mention_all
+        {
+            Vec::new()
+        } else {
+            self.resolve_company_message_wake_recipients(
+                &context,
+                &notification_recipient_ids,
+                &mentioned_agent_ids,
+                input.mention_all,
+            )?
+        };
         let message = MessageView {
             id: Uuid::new_v4(),
             conversation_id: input.conversation_id,
@@ -97,6 +99,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             runtime_generated,
             &notification_recipient_ids,
             MessageDeliveryPolicy {
+                project_id: context.project_id,
                 mentioned_agent_ids: &mentioned_agent_ids,
                 mention_all: input.mention_all,
                 wake_recipient_agent_ids: &wake_recipient_agent_ids,

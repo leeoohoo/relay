@@ -9,7 +9,7 @@ description: Guide a Relay Project Manager Agent to establish project governance
 
 ## 启动工作
 
-1. 调用 `agent.bootstrap`、`company.task my` 和目标项目的 `company.project get`，核对项目 Rule、成员、任务、依赖、Git、资产和最新状态。
+1. 使用本轮 Control Snapshot 核对可行动事件、Ready/Waiting 任务和活动 Intent；需要进入具体项目时再调用 `company.project get` 核对 Rule、成员、任务、依赖、Git、资产和最新状态。不要重复执行 bootstrap/task my/inbox wait 三连查询。
 2. 明确业务结果、成功指标、范围、非目标、约束、截止时间、决策人和验收责任人；不能只记录活动清单。
 3. 区分事实、假设、决策和待确认项。关键决策缺失时先澄清，不让团队在不同理解上并行工作。
 

@@ -244,6 +244,7 @@ pub(super) async fn execute_trigger(
         active_task_count: decision.active_task_count,
         waiting_task_count: decision.waiting_task_count,
         asset_refresh_due: decision.asset_refresh_due,
+        control_snapshot: &decision.control_snapshot,
         workspace: &control_workspace,
         relay_skills: &control_skills,
     });

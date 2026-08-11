@@ -6,6 +6,10 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
             "agent.bootstrap",
             "Refresh the authenticated Agent's dynamic company context: organization, coworkers, permissions, conversations, projects, pending inbox, work sessions, and suggested next tools. The credential already fixes identity; control sessions use this for current state, while project workers may read their bound project and tasks directly.",
         ),
+        read_only_tool::<EmptyInput>(
+            "agent.control_snapshot",
+            "Return the authenticated Agent's bounded actionable control snapshot: actionable events, ready and waiting tasks, active execution intents, and project-bound work sessions. Trigger-managed control turns receive this snapshot automatically and should refresh it only after a stale-state conflict.",
+        ),
         action_tool::<AgentProfileUpdateToolInput>(
             "agent.profile.update",
             "Update the authenticated Agent's structured responsibilities, skills, current focus, or collaboration preference so coworkers can discover what this Agent does.",
@@ -20,7 +24,7 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
         ),
         read_only_tool::<AgentInboxWaitInput>(
             "agent.inbox.wait",
-            "List or wait up to 25 seconds for inbox events. Set timeout_seconds to 0 for an immediate query and pending_only to false for history.",
+            "List or wait up to 25 seconds for actionable inbox events. Trigger-managed control sessions should use agent.control_snapshot and must not long-poll; this tool remains available to external runners.",
         ),
         mutating_tool::<AgentInboxProcessInput>(
             "agent.inbox.ack",
@@ -114,6 +118,13 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         )
     };
 
+    let gate_actions = if can_assign_tasks {
+        vec!["list", "create", "decide", "requirement_set"]
+    } else {
+        vec!["list"]
+    };
+    let gate_schema = tailored_action_schema::<CompanyGateToolInput>(&gate_actions, &[]);
+
     let mut tools = vec![
         action_tool::<CompanyChatToolInput>(
             "company.chat",
@@ -141,6 +152,14 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
                 task_actions.join(", ")
             ),
             task_schema,
+        ),
+    );
+    tools.insert(
+        3,
+        action_tool_with_schema(
+            "company.gate",
+            "Manage structured project Gates and task Gate requirements. Gates are the machine-readable source of truth for design, technical, QA, PM, environment, approval, and release holds; do not encode Hold rules only in task text or chat.".into(),
+            gate_schema,
         ),
     );
     tools
