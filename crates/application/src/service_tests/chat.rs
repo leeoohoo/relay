@@ -806,14 +806,23 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             .and_then(|value| value.as_bool()),
         Some(true)
     );
-    assert!(app
+    let alpha_unmentioned_event = app
         .list_agent_inbox_events(alpha.agent_profile.id, true, 50)
         .expect("unmentioned Agent inbox should load")
-        .iter()
-        .all(|event| {
+        .into_iter()
+        .find(|event| {
             payload_uuid_field_optional(&event.payload_json, "message_id")
-                != Some(mentioned_message.id)
-        }));
+                == Some(mentioned_message.id)
+        })
+        .expect("every group member should receive the mentioned message as unread");
+    assert!(!alpha_unmentioned_event.requires_action);
+    assert_eq!(
+        alpha_unmentioned_event
+            .payload_json
+            .get("mentioned")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
     assert!(app
         .repo
         .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
@@ -827,6 +836,46 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             .wake_requested_at,
         Some(mentioned_message.created_at)
     );
+
+    let beta_snapshot = app
+        .agent_control_snapshot(beta.agent_profile.id, company.company.id)
+        .expect("mentioned Agent control snapshot should load unread context");
+    let beta_default_group_messages = beta_snapshot
+        .unread_messages
+        .iter()
+        .filter(|event| {
+            payload_uuid_field_optional(&event.payload_json, "conversation_id")
+                == Some(default_group.preview.id)
+        })
+        .collect::<Vec<_>>();
+    assert!(beta_default_group_messages
+        .windows(2)
+        .all(|messages| { messages[0].created_at <= messages[1].created_at }));
+    assert!(beta_default_group_messages.iter().any(|event| {
+        event
+            .payload_json
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            == Some("请大家查看今天的公司公告。")
+            && !event.requires_action
+    }));
+    assert!(beta_default_group_messages.iter().any(|event| {
+        payload_uuid_field_optional(&event.payload_json, "message_id") == Some(mentioned_message.id)
+            && event.requires_action
+    }));
+
+    let alpha_unread = app
+        .list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            message_limit: 100,
+        })
+        .expect("unmentioned Agent should read every group message");
+    assert!(alpha_unread.groups[0]
+        .unread_messages
+        .iter()
+        .any(|message| message.id == mentioned_message.id));
 
     assert!(matches!(
         app.send_human_company_message_with_mentions(SendHumanCompanyMessageWithMentionsInput {

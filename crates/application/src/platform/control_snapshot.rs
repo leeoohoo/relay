@@ -37,14 +37,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .map(|project| project.id)
             .collect::<HashSet<_>>();
 
+        let mut unread_messages = Vec::new();
         let mut actionable_events = Vec::new();
         for event in self.repo.list_agent_inbox_events(
             agent_profile_id,
             Some(AgentInboxEventStatus::Pending),
             1_000,
         ) {
-            if !event.requires_action
-                || event.available_at > now
+            if event.available_at > now
                 || event.expires_at.is_some_and(|expires_at| expires_at <= now)
             {
                 continue;
@@ -54,8 +54,20 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     continue;
                 }
             }
-            actionable_events.push(event);
+            if event.event_type == "message.received"
+                && self.event_belongs_to_company(&event, company_id)?
+            {
+                unread_messages.push(event.clone());
+            }
+            if event.requires_action {
+                actionable_events.push(event);
+            }
         }
+        unread_messages.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         actionable_events.sort_by(|left, right| {
             left.priority
                 .cmp(&right.priority)
@@ -124,8 +136,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
 
         let work_sessions = self.repo.list_agent_codex_sessions(agent_profile_id, 50);
         let snapshot_version = format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             now.timestamp_millis(),
+            unread_messages.len(),
             actionable_events.len(),
             ready_tasks.len(),
             waiting_tasks.len(),
@@ -136,6 +149,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             company_id,
             generated_at: now,
             snapshot_version,
+            unread_messages,
             actionable_events,
             ready_tasks,
             waiting_tasks,
@@ -157,5 +171,21 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
         }
         Ok(project_id)
+    }
+
+    fn event_belongs_to_company(
+        &self,
+        event: &AgentInboxEvent,
+        company_id: Uuid,
+    ) -> AppResult<bool> {
+        let Some(conversation_id) =
+            payload_uuid_field_optional(&event.payload_json, "conversation_id")
+        else {
+            return Ok(false);
+        };
+        Ok(self
+            .repo
+            .get_conversation_context_result(conversation_id)?
+            .is_some_and(|context| context.company_id == Some(company_id)))
     }
 }

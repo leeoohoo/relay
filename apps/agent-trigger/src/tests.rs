@@ -340,6 +340,7 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         company_id: Uuid::new_v4(),
         generated_at: now,
         snapshot_version: "snapshot-v1".into(),
+        unread_messages: Vec::new(),
         actionable_events: Vec::new(),
         ready_tasks: Vec::new(),
         waiting_tasks: Vec::new(),
@@ -363,6 +364,8 @@ fn prompts_treat_identity_as_authenticated_session_state() {
     assert!(control_prompt
         .contains("不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait"));
     assert!(control_prompt.contains("snapshot-v1"));
+    assert!(control_prompt.contains("unread_messages"));
+    assert!(control_prompt.contains("先按时间顺序理解该会话内更早的全部未读消息"));
     assert!(!control_prompt.contains("核对返回身份"));
 
     let project = CompanyProject {

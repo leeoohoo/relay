@@ -58,12 +58,12 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
          当前工作目录是专属于本 Agent 的 Relay 控制工作区，worktree key 为 {worktree_key}。这里用于消息分诊、协调和派工，不是项目代码工作区。\n\
          必须先使用 `${employee_skill}`、`${profession_skill}` 和 `${session_skill}`{staffing_skill}；职业执行 Skill 在控制会话中同样生效，用于判断职责、拆解、质量要求和是否需要启动项目工作。Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准。\n\
          宿主机 Codex CLI 已加载管理员启用的插件。当前任务需要浏览器、文档、表格、设计、安全扫描或外部服务能力时，优先使用匹配的已安装插件及其 Skill/MCP；不要假设未安装的插件可用，也不要自行绕过插件认证策略。\n\
-         Relay 已在启动前生成本轮一次性 Control Snapshot，版本为 `{snapshot_version}`。它已经包含可行动事件、Ready/Waiting 任务、活动 Intent 和项目工作会话；不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait。只有操作返回 stale/conflict，或本轮明确改变了相关状态后仍需继续决策时，才调用 agent.control_snapshot 刷新一次。Trigger 托管控制会话禁止长轮询，处理完当前快照后立即结束。当前快照统计：actionable inbox {pending_inbox_count} 条、Ready tasks {active_task_count} 个、Waiting tasks {waiting_task_count} 个。\n\
+         Relay 已在启动前生成本轮一次性 Control Snapshot，版本为 `{snapshot_version}`。它已经包含属于你的未读消息、可行动事件、Ready/Waiting 任务、活动 Intent 和项目工作会话；不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait。只有操作返回 stale/conflict，或本轮明确改变了相关状态后仍需继续决策时，才调用 agent.control_snapshot 刷新一次。Trigger 托管控制会话禁止长轮询，处理完当前快照后立即结束。当前快照统计：unread messages {unread_message_count} 条、actionable inbox {pending_inbox_count} 条、Ready tasks {active_task_count} 个、Waiting tasks {waiting_task_count} 个。\n\
          当前 Control Snapshot：{snapshot}\n\
          你的 Agent 核心与控制长期记忆已经固化在 `${employee_skill}` 中；短期记忆只在需要历史线索时通过 agent.memory search 查询。控制会话不得读取或固化其他项目的实现细节。\n\
          {asset_refresh_context} 如果它或其他事项需要项目执行，调用 agent.work_session 的 dispatch 创建结构化 Intent；项目工作会话由 Relay 按 Agent + Project 绑定解析。不要在控制工作区修改代码、运行项目测试、提交 Git，也不要自行选择 Thread ID。\n\
-         Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
-         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
+         处理消息时必须先阅读 `unread_messages`：如果一条 @、私聊或可行动消息属于某个会话，先按时间顺序理解该会话内更早的全部未读消息，不能只按最后一条 @ 判断需求。Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
+         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。处理完某个群会话在本轮快照中的未读上下文后，调用 `company.chat mark_read` 标记该会话已读；Relay 会保护本轮启动后新到达的消息，不会被旧一轮误清除。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
          如果没有分配给你的可执行工作、依赖尚未完成或还没有轮到你，不发送 Relay 消息，直接结束本轮。切勿操作当前工作目录之外的项目。",
         handle = agent.handle.trim_start_matches('@'),
         display_name = agent.display_name,
@@ -73,10 +73,29 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         profession_skill = relay_skills.profession_name,
         session_skill = relay_skills.session_name,
         snapshot_version = control_snapshot.snapshot_version,
+        unread_message_count = control_snapshot.unread_messages.len(),
     )
 }
 
 fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
+    let unread_messages = snapshot
+        .unread_messages
+        .iter()
+        .take(50)
+        .map(|event| {
+            json!({
+                "event_id": event.id,
+                "created_at": event.created_at,
+                "conversation_id": event.payload_json.get("conversation_id"),
+                "message_id": event.payload_json.get("message_id"),
+                "sender_agent_id": event.payload_json.get("sender_agent_id"),
+                "sender_human_user_id": event.payload_json.get("sender_human_user_id"),
+                "content": event.payload_json.get("content"),
+                "mentioned": event.payload_json.get("mentioned"),
+                "requires_action": event.requires_action,
+            })
+        })
+        .collect::<Vec<_>>();
     let actionable_events = snapshot
         .actionable_events
         .iter()
@@ -133,6 +152,7 @@ fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&json!({
+        "unread_messages": unread_messages,
         "actionable_events": actionable_events,
         "ready_tasks": ready_tasks,
         "waiting_tasks": waiting_tasks,

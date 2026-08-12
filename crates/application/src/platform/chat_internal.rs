@@ -155,14 +155,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ));
         }
 
-        let mut recipients = if context.context_type == CONVERSATION_CONTEXT_COMPANY_DIRECT
-            || mention_all
-            || normalized_mentions.is_empty()
-        {
-            participants
-        } else {
-            normalized_mentions.clone()
-        };
+        // Delivery and wake-up are deliberately separate concerns. Every
+        // conversation member receives an Inbox event for every message so
+        // their unread view is complete. Mentions only narrow the set that is
+        // woken immediately in `resolve_company_message_wake_recipients`.
+        let mut recipients = participants;
         if let Some(sender_agent_id) = sender_agent_id {
             recipients.retain(|agent_id| *agent_id != sender_agent_id);
         }

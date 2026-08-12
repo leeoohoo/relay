@@ -166,6 +166,10 @@ pub struct AgentControlSnapshot {
     pub company_id: Uuid,
     pub generated_at: DateTime<Utc>,
     pub snapshot_version: String,
+    /// Pending message events visible to this Agent, including informational
+    /// group messages that must not wake the Agent on their own.
+    #[serde(default)]
+    pub unread_messages: Vec<AgentInboxEvent>,
     pub actionable_events: Vec<AgentInboxEvent>,
     pub ready_tasks: Vec<CompanyProjectTask>,
     pub waiting_tasks: Vec<CompanyProjectTask>,
