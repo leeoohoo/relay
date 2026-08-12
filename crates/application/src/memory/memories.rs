@@ -57,6 +57,29 @@ impl MemoryPlatformRepositoryPort for MemoryPlatformRepository {
         memories
     }
 
+    fn archive_expired_agent_memories(
+        &self,
+        company_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let mut archived = 0;
+        for memory in guard.agent_memories.values_mut() {
+            if memory.company_id == company_id
+                && memory.status == AGENT_MEMORY_STATUS_ACTIVE
+                && memory
+                    .expires_at
+                    .is_some_and(|expires_at| expires_at <= now)
+            {
+                memory.status = AGENT_MEMORY_STATUS_ARCHIVED.into();
+                memory.archived_at = Some(now);
+                memory.updated_at = now;
+                archived += 1;
+            }
+        }
+        Ok(archived)
+    }
+
     fn delete_agent_memory(&self, memory_id: Uuid) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
         guard.agent_memories.remove(&memory_id);

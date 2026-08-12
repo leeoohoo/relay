@@ -139,6 +139,9 @@
 .memory-facts span { min-width: 0; display: flex; flex-direction: column; gap: 2px; border-left: 1px solid #e5ebe7; padding: 8px 9px; color: #8a968f; font-size: 7px; }
 .memory-facts span:first-child { border-left: 0; }
 .memory-facts strong { overflow: hidden; color: #3b5245; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.memory-governance-note { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; color: #79877f; font-size: 8px; }
+.memory-governance-note strong { color: #4b6254; white-space: nowrap; }
+.memory-governance-note small { color: #8b978f; white-space: nowrap; }
 .memory-card > footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; border-top: 1px solid #e8ede9; padding-top: 12px; }
 .memory-card > footer > div:first-child { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .memory-card > footer > div:first-child > span:last-child { min-width: 0; display: flex; flex-direction: column; gap: 2px; }

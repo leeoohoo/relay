@@ -427,6 +427,11 @@ pub(super) fn append_agent_long_term_memories(
     memories: &[AgentMemory],
     skill_language: &str,
 ) -> String {
+    let safety_limit = std::env::var("RELAY_MEMORY_INJECTION_SAFETY_LIMIT_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value >= 4_000)
+        .unwrap_or(32_000);
     if skill_language == COMPANY_SKILL_LANGUAGE_EN {
         let mut section = String::from(
             "\n\n## Distilled Long-term Agent Memory\n\nThese entries belong only to the current Agent and are loaded on every Codex wake-up. Use them as durable guidance. If they conflict with the latest Human instruction, project Rule, repository state, or MCP state, follow current verified facts and update the memory after validation.\n",
@@ -446,8 +451,8 @@ pub(super) fn append_agent_long_term_memories(
                     memory.confidence,
                     if memory.tags.is_empty() { String::new() } else { format!("; tags: {}", memory.tags.join(", ")) }
                 );
-                if used_characters + entry.chars().count() > 12_000 {
-                    section.push_str("\nAdditional long-term memories were omitted because of the context budget. Archive low-value entries or reduce long-term memory volume.\n");
+                if !memory.pinned && used_characters + entry.chars().count() > safety_limit {
+                    section.push_str("\nAdditional lower-priority memories were moved to on-demand retrieval because the configurable safety limit was reached. Pinned memories are never omitted by this guard.\n");
                     break;
                 }
                 used_characters += entry.chars().count();
@@ -483,9 +488,9 @@ pub(super) fn append_agent_long_term_memories(
                 }
             );
             let entry_characters = entry.chars().count();
-            if used_characters + entry_characters > 12_000 {
+            if !memory.pinned && used_characters + entry_characters > safety_limit {
                 section.push_str(
-                    "\n其余长期记忆因上下文预算未注入；请归档低价值记忆或降低长期记忆数量。\n",
+                    "\n其余低优先级记忆因达到可配置安全上限，已转为按需检索；Pinned 记忆不会被该保护规则省略。\n",
                 );
                 break;
             }

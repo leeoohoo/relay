@@ -552,6 +552,9 @@ export type AgentMemory = {
   session_id: string | null;
   memory_tier: "short_term" | "long_term";
   injection_mode: "always" | "on_demand";
+  classification_reason: string;
+  estimated_ttl_days: number | null;
+  injection_cost_chars: number;
   visibility: "control" | "worker" | "both";
   memory_type: "fact" | "decision" | "lesson" | "preference" | "procedure" | "relationship" | "handoff";
   topic_key: string;
@@ -566,6 +569,7 @@ export type AgentMemory = {
   source_refs: Array<{ source_type: string; source_id: string; label: string | null }>;
   supersedes_memory_id: string | null;
   expires_at: string | null;
+  archived_at: string | null;
   verified_by_agent_id: string | null;
   verified_by_human_user_id: string | null;
   verified_at: string | null;

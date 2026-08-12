@@ -519,8 +519,8 @@ injection_cost_chars
 ### 12.3 默认预算
 
 ```text
-控制会话长期记忆：3,000 chars
-项目工作会话长期记忆：4,000 chars
+控制会话长期记忆：使用可配置软目标，不设 3,000 chars 硬截断
+项目工作会话长期记忆：使用可配置软目标，Pinned 与高价值记忆允许超出
 短期记忆：默认不自动注入
 ```
 
@@ -893,7 +893,7 @@ apps/web/src/pages/projects/sessions.tsx
 
 验收：
 
-- 单个项目长期记忆默认注入不超过预算。
+- 单个项目长期记忆超出软目标时优先裁剪低价值项，并显示负载预警；不机械截断 Pinned 与高价值记忆。
 - BA 在无需求变化时不被 QA/Runtime 状态唤醒。
 - 项目日常问题不同时唤醒公司管理 Agent 和项目 Owner。
 
@@ -939,7 +939,7 @@ apps/web/src/pages/projects/sessions.tsx
 7. Gate 通过后只唤醒一次负责人。
 8. QA 环境 Revision 不匹配时保持 waiting_environment。
 9. Attempt 失败后 Task 不被错误改写为终态 failed。
-10. 长期记忆超预算时按优先级裁剪。
+10. 长期记忆超出软目标时按优先级治理，Pinned 与高价值项仍可注入，并产生可观察的负载预警。
 
 ### 20.3 E2E
 
@@ -974,7 +974,7 @@ apps/web/src/pages/projects/sessions.tsx
 | 普通群消息引起的无关 Agent Wake | 0 |
 | Gate 状态与任务 Ready 冲突 | 0 |
 | QA 因已知环境不匹配启动后再 Block | 降低 90% |
-| 单项目长期记忆默认注入 | 不超过 4,000 chars |
+| 单项目长期记忆注入 | 使用可配置软目标；过载可观察且优先降级低价值项 |
 | Stale Running 状态发现时间 | 小于 60 秒 |
 | 项目状态重复广播 | 降低 80% |
 

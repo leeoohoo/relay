@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use postgres::types::Json;
 use postgres::{Client, GenericClient, NoTls, Row};
 use r2d2::Pool;

@@ -127,6 +127,80 @@ pub(crate) fn normalize_agent_memory_summary(value: String) -> AppResult<String>
     Ok(value)
 }
 
+pub(crate) struct AgentMemoryClassification {
+    pub(crate) memory_tier: String,
+    pub(crate) reason: String,
+    pub(crate) estimated_ttl_days: Option<i32>,
+    pub(crate) injection_cost_chars: i32,
+}
+
+pub(crate) fn classify_agent_memory(
+    requested_tier: &str,
+    memory_type: &str,
+    title: &str,
+    summary: &str,
+    when_to_use: &str,
+) -> AgentMemoryClassification {
+    let text = format!("{title}\n{summary}\n{when_to_use}").to_lowercase();
+    let transient_markers = [
+        "当前任务",
+        "当前阶段",
+        "目前",
+        "今天",
+        "本次",
+        "临时",
+        "进行中",
+        "等待审批",
+        "等待环境",
+        "等待依赖",
+        "已完成",
+        "本轮",
+        "current task",
+        "current phase",
+        "today",
+        "temporary",
+        "in progress",
+        "waiting for",
+        "this run",
+        "this attempt",
+        "http://",
+        "https://",
+        "commit ",
+        "revision ",
+        "branch ",
+    ];
+    let has_iso_date = text.as_bytes().windows(10).any(|window| {
+        window[0..4].iter().all(u8::is_ascii_digit)
+            && window[4] == b'-'
+            && window[5..7].iter().all(u8::is_ascii_digit)
+            && window[7] == b'-'
+            && window[8..10].iter().all(u8::is_ascii_digit)
+    });
+    let transient = has_iso_date || transient_markers.iter().any(|marker| text.contains(marker));
+    let memory_tier = if requested_tier == AGENT_MEMORY_TIER_LONG_TERM && transient {
+        AGENT_MEMORY_TIER_SHORT_TERM
+    } else {
+        requested_tier
+    };
+    let reason = if requested_tier == AGENT_MEMORY_TIER_LONG_TERM && transient {
+        "downgraded to short_term because the content contains temporary status, runtime coordinates, or handoff context"
+    } else if memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
+        "accepted as long_term because the content describes reusable guidance without temporary execution state"
+    } else {
+        "classified as short_term because it is intended for on-demand or time-bounded context"
+    };
+    AgentMemoryClassification {
+        memory_tier: memory_tier.into(),
+        reason: reason.into(),
+        estimated_ttl_days: (memory_tier == AGENT_MEMORY_TIER_SHORT_TERM)
+            .then_some(if memory_type == "handoff" { 14 } else { 30 }),
+        injection_cost_chars: (title.chars().count()
+            + summary.chars().count()
+            + when_to_use.chars().count()
+            + 96) as i32,
+    }
+}
+
 pub(crate) fn normalize_agent_memory_optional_text(
     value: String,
     max_characters: usize,
