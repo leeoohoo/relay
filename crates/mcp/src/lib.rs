@@ -363,11 +363,24 @@ enum CompanyChatOperation {
     Unread {
         company_id: Uuid,
         conversation_id: Option<Uuid>,
+        #[schemars(
+            description = "Exclusive unread message cursor returned by the previous page. Requires conversation_id."
+        )]
+        after_message_id: Option<Uuid>,
         message_limit: Option<usize>,
     },
     MarkRead {
         company_id: Uuid,
         conversation_id: Uuid,
+        #[serde(default)]
+        #[schemars(
+            description = "When true, quickly mark the conversation read only if no unread mention remains after reviewed_through_message_id."
+        )]
+        only_if_no_mentions: bool,
+        #[schemars(
+            description = "Last reviewed unread message. Earlier mentions do not block quick mark-read; later mentions do."
+        )]
+        reviewed_through_message_id: Option<Uuid>,
     },
 }
 
@@ -619,6 +632,10 @@ struct CompanyGroupUnreadListToolInput {
     company_id: Uuid,
     #[schemars(description = "Optionally limit unread results to one company or project group.")]
     conversation_id: Option<Uuid>,
+    #[schemars(
+        description = "Exclusive unread message cursor returned by the previous page. Requires conversation_id."
+    )]
+    after_message_id: Option<Uuid>,
     #[schemars(description = "Maximum unread messages returned per group; defaults to 20.")]
     message_limit: Option<usize>,
 }
@@ -628,6 +645,9 @@ struct CompanyGroupUnreadListToolInput {
 struct CompanyGroupReadToolInput {
     company_id: Uuid,
     conversation_id: Uuid,
+    #[serde(default)]
+    only_if_no_mentions: bool,
+    reviewed_through_message_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

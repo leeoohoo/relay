@@ -507,6 +507,7 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
             actor_agent_id: manager.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(project.project.project_group_conversation_id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("project group member should see unread group messages");

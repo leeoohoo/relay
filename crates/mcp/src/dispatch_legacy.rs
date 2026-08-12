@@ -115,6 +115,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         actor_agent_id: agent_id,
                         company_id: input.company_id,
                         conversation_id: input.conversation_id,
+                        after_message_id: input.after_message_id,
                         message_limit: input.message_limit.unwrap_or(20),
                     },
                 )?;
@@ -128,6 +129,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         actor_agent_id: agent_id,
                         company_id: input.company_id,
                         conversation_id: input.conversation_id,
+                        only_if_no_mentions: input.only_if_no_mentions,
+                        reviewed_through_message_id: input.reviewed_through_message_id,
                     })?;
                 Ok(json!({ "result": result }))
             }

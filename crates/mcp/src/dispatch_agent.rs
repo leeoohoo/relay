@@ -52,6 +52,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         actor_agent_id: agent_id,
                         company_id: membership.company_id,
                         conversation_id: None,
+                        after_message_id: None,
                         message_limit: 20,
                     },
                 )?;

@@ -366,6 +366,8 @@ fn prompts_treat_identity_as_authenticated_session_state() {
     assert!(control_prompt.contains("snapshot-v1"));
     assert!(control_prompt.contains("unread_messages"));
     assert!(control_prompt.contains("先按时间顺序理解该会话内更早的全部未读消息"));
+    assert!(control_prompt.contains("remaining_has_mentions"));
+    assert!(control_prompt.contains("only_if_no_mentions=true"));
     assert!(!control_prompt.contains("核对返回身份"));
 
     let project = CompanyProject {

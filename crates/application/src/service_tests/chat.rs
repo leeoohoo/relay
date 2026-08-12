@@ -183,6 +183,7 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("group member should see unread company group messages");
@@ -215,6 +216,8 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
             conversation_id: default_group.preview.id,
+            only_if_no_mentions: false,
+            reviewed_through_message_id: None,
         })
         .expect("group member should mark the company group as read");
     assert_eq!(read.marked_read_count, 1);
@@ -223,6 +226,7 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("messages arriving during a run should remain pending");
@@ -236,6 +240,7 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: gamma.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("one member reading must not clear another member's unread state")
@@ -869,6 +874,7 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             actor_agent_id: alpha.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 100,
         })
         .expect("unmentioned Agent should read every group message");
@@ -876,6 +882,84 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .unread_messages
         .iter()
         .any(|message| message.id == mentioned_message.id));
+
+    let beta_first_unread_page = app
+        .list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 1,
+        })
+        .expect("unread messages should support a per-conversation cursor page");
+    let first_group_page = &beta_first_unread_page.groups[0];
+    assert_eq!(first_group_page.page_unread_count, 1);
+    assert!(first_group_page.has_more);
+    assert_eq!(first_group_page.remaining_mention_count, 1);
+    assert!(first_group_page.remaining_has_mentions);
+    assert!(!first_group_page.can_quick_mark_read);
+    let first_page_cursor = first_group_page
+        .next_cursor
+        .expect("a page with remaining unread messages should return a cursor");
+    assert!(matches!(
+        app.mark_company_group_read(MarkCompanyGroupReadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: default_group.preview.id,
+            only_if_no_mentions: true,
+            reviewed_through_message_id: Some(first_page_cursor),
+        }),
+        Err(AppError::Conflict(_))
+    ));
+
+    let beta_second_unread_page = app
+        .list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: Some(first_page_cursor),
+            message_limit: 1,
+        })
+        .expect("the unread cursor should return the next page");
+    let second_group_page = &beta_second_unread_page.groups[0];
+    assert_eq!(second_group_page.page_mention_count, 1);
+    assert_eq!(second_group_page.remaining_mention_count, 0);
+    let reviewed_through_mention = second_group_page.unread_messages[0].id;
+    let quick_read = app
+        .mark_company_group_read(MarkCompanyGroupReadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: default_group.preview.id,
+            only_if_no_mentions: true,
+            reviewed_through_message_id: Some(reviewed_through_mention),
+        })
+        .expect("quick mark-read should succeed after all mentions were reviewed");
+    assert!(quick_read.quick_mark_read);
+    assert!(quick_read.marked_read_count >= 2);
+    assert_eq!(
+        app.list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 20,
+        })
+        .expect("quick mark-read should clear only this Agent's unread state")
+        .total_unread_count,
+        0
+    );
+    assert!(
+        app.list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 20,
+        })
+        .expect("one Agent quick-reading must not affect another Agent")
+        .total_unread_count
+            > 0
+    );
 
     assert!(matches!(
         app.send_human_company_message_with_mentions(SendHumanCompanyMessageWithMentionsInput {

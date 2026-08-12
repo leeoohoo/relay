@@ -62,8 +62,8 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
          当前 Control Snapshot：{snapshot}\n\
          你的 Agent 核心与控制长期记忆已经固化在 `${employee_skill}` 中；短期记忆只在需要历史线索时通过 agent.memory search 查询。控制会话不得读取或固化其他项目的实现细节。\n\
          {asset_refresh_context} 如果它或其他事项需要项目执行，调用 agent.work_session 的 dispatch 创建结构化 Intent；项目工作会话由 Relay 按 Agent + Project 绑定解析。不要在控制工作区修改代码、运行项目测试、提交 Git，也不要自行选择 Thread ID。\n\
-         处理消息时必须先阅读 `unread_messages`：如果一条 @、私聊或可行动消息属于某个会话，先按时间顺序理解该会话内更早的全部未读消息，不能只按最后一条 @ 判断需求。Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
-         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。处理完某个群会话在本轮快照中的未读上下文后，调用 `company.chat mark_read` 标记该会话已读；Relay 会保护本轮启动后新到达的消息，不会被旧一轮误清除。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
+         处理消息时必须先阅读 `unread_messages`：如果一条 @、私聊或可行动消息属于某个会话，先按时间顺序理解该会话内更早的全部未读消息，不能只按最后一条 @ 判断需求。快照最多直接展示前 50 条；`unread_messages_truncated=true` 时，用 `company.chat unread` 按会话分页继续读取。每页都要检查 `remaining_has_mentions` 和 `remaining_mention_count`。Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
+         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。处理完某个群会话在本轮快照中的未读上下文后，调用 `company.chat mark_read` 标记该会话已读。如果分页结果 `can_quick_mark_read=true`，可以传 `only_if_no_mentions=true` 和本页 `next_cursor` 作为 `reviewed_through_message_id` 快速清理余下无 @ 消息；后端发现后续仍有 @ 时会拒绝。Relay 会保护本轮启动后新到达的消息，不会被旧一轮误清除。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
          如果没有分配给你的可执行工作、依赖尚未完成或还没有轮到你，不发送 Relay 消息，直接结束本轮。切勿操作当前工作目录之外的项目。",
         handle = agent.handle.trim_start_matches('@'),
         display_name = agent.display_name,
@@ -152,6 +152,8 @@ fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&json!({
+        "unread_messages_total": snapshot.unread_messages.len(),
+        "unread_messages_truncated": snapshot.unread_messages.len() > 50,
         "unread_messages": unread_messages,
         "actionable_events": actionable_events,
         "ready_tasks": ready_tasks,

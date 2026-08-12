@@ -150,7 +150,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
     let mut tools = vec![
         action_tool::<CompanyChatToolInput>(
             "company.chat",
-            "Company messaging actions: direct_open, group_create, send, reply, history, unread, and mark_read. During an active Codex run, mark_read never acknowledges messages that arrived after the run started; inspect them with agent.inbox.wait and acknowledge each handled event with agent.inbox.ack.",
+            "Company messaging actions: direct_open, group_create, send, reply, history, unread, and mark_read. unread is per-Agent and cursor-paginated; every page reports whether later unread messages still mention this Agent. When later unread has no mentions, mark_read with only_if_no_mentions=true and reviewed_through_message_id for a guarded quick clear. During an active Codex run, mark_read never acknowledges messages that arrived after the run started.",
         ),
         action_tool_with_schema(
             "company.project",
