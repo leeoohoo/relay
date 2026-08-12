@@ -226,94 +226,104 @@ pub(super) async fn execute_trigger(
             return Err(error);
         }
     };
-    let mut control_settings = effective_settings.clone();
-    control_settings.sandbox_mode = AGENT_CODEX_SANDBOX_READ_ONLY.into();
-    control_settings.approval_policy = AGENT_CODEX_APPROVAL_POLICY_NEVER.into();
-    control_settings.network_access = false;
-    control_settings.web_search = "disabled".into();
-    control_settings.feature_multi_agent = false;
-    control_settings.feature_shell_tool = false;
-    let control_prompt = build_wakeup_prompt(WakeupPromptContext {
-        agent: &agent,
-        job_title: &membership.job_title,
-        project_name: decision
-            .project
-            .as_ref()
-            .map(|project| project.name.as_str()),
-        pending_inbox_count: decision.pending_inbox_count,
-        active_task_count: decision.active_task_count,
-        waiting_task_count: decision.waiting_task_count,
-        asset_refresh_due: decision.asset_refresh_due,
-        control_snapshot: &decision.control_snapshot,
-        workspace: &control_workspace,
-        relay_skills: &control_skills,
-    });
-    let control_result = run_codex_stage(
-        platform,
-        codex_runner,
-        trigger,
-        &run,
-        &control_workspace,
-        "control",
-        None,
-        control_prompt,
-        &control_skills,
-        &control_memories,
-        &control_settings,
-        &token.plaintext_token,
-        false,
-    )
-    .await;
-    let control_result = match control_result {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = platform.revoke_agent_codex_run_tokens(run.id);
-            fail_run(platform, &mut run, None, error.to_string())?;
-            return Err(error);
-        }
-    };
-    if control_result.status != CodexRunStatus::Succeeded {
-        let _ = platform.revoke_agent_codex_run_tokens(run.id);
-        apply_codex_result_to_run(&mut run, &control_result);
-        platform.update_agent_codex_trigger_run(run.clone())?;
-        return Ok(trigger_execution_from_result(&control_result));
-    }
-    if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
-        let _ = platform.revoke_agent_codex_run_tokens(run.id);
-        run.status = AGENT_CODEX_RUN_STATUS_CANCELLED.into();
-        run.finished_at = Some(now_utc());
-        run.error_message = Some("Agent Trigger was paused by Human".into());
-        platform.update_agent_codex_trigger_run(run.clone())?;
+    if decision.resume_existing_intents_directly {
         record_run_activity(
             platform,
             run.id,
-            "cancelled",
-            "Agent 已暂停，本轮已停止；待处理工作将在恢复后继续",
-            run.codex_thread_id.clone(),
+            "continuing",
+            "已有项目工作已完成分诊，正在从原工作会话继续",
+            None,
         );
-        return Ok(TriggerExecution {
-            succeeded: true,
-            error_message: None,
-            retry_after_seconds: None,
+    } else {
+        let mut control_settings = effective_settings.clone();
+        control_settings.sandbox_mode = AGENT_CODEX_SANDBOX_READ_ONLY.into();
+        control_settings.approval_policy = AGENT_CODEX_APPROVAL_POLICY_NEVER.into();
+        control_settings.network_access = false;
+        control_settings.web_search = "disabled".into();
+        control_settings.feature_multi_agent = false;
+        control_settings.feature_shell_tool = false;
+        let control_prompt = build_wakeup_prompt(WakeupPromptContext {
+            agent: &agent,
+            job_title: &membership.job_title,
+            project_name: decision
+                .project
+                .as_ref()
+                .map(|project| project.name.as_str()),
+            pending_inbox_count: decision.pending_inbox_count,
+            active_task_count: decision.active_task_count,
+            waiting_task_count: decision.waiting_task_count,
+            asset_refresh_due: decision.asset_refresh_due,
+            control_snapshot: &decision.control_snapshot,
+            workspace: &control_workspace,
+            relay_skills: &control_skills,
         });
+        let control_result = run_codex_stage(
+            platform,
+            codex_runner,
+            trigger,
+            &run,
+            &control_workspace,
+            "control",
+            None,
+            control_prompt,
+            &control_skills,
+            &control_memories,
+            &control_settings,
+            &token.plaintext_token,
+            false,
+        )
+        .await;
+        let control_result = match control_result {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = platform.revoke_agent_codex_run_tokens(run.id);
+                fail_run(platform, &mut run, None, error.to_string())?;
+                return Err(error);
+            }
+        };
+        if control_result.status != CodexRunStatus::Succeeded {
+            let _ = platform.revoke_agent_codex_run_tokens(run.id);
+            apply_codex_result_to_run(&mut run, &control_result);
+            platform.update_agent_codex_trigger_run(run.clone())?;
+            return Ok(trigger_execution_from_result(&control_result));
+        }
+        if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
+            let _ = platform.revoke_agent_codex_run_tokens(run.id);
+            run.status = AGENT_CODEX_RUN_STATUS_CANCELLED.into();
+            run.finished_at = Some(now_utc());
+            run.error_message = Some("Agent Trigger was paused by Human".into());
+            platform.update_agent_codex_trigger_run(run.clone())?;
+            record_run_activity(
+                platform,
+                run.id,
+                "cancelled",
+                "Agent 已暂停，本轮已停止；待处理工作将在恢复后继续",
+                run.codex_thread_id.clone(),
+            );
+            return Ok(TriggerExecution {
+                succeeded: true,
+                error_message: None,
+                retry_after_seconds: None,
+            });
+        }
+        let control_session = persist_codex_stage_session(
+            platform,
+            trigger.agent_profile_id,
+            "control",
+            AGENT_CODEX_SESSION_KIND_CONTROL,
+            None,
+            &control_workspace,
+            &control_skills,
+            &control_memories,
+            &control_result,
+            false,
+        )?;
+        run.codex_thread_id = Some(control_session.codex_thread_id.clone());
+        run.final_message_summary = control_result
+            .final_message
+            .as_deref()
+            .map(|message| truncate(message, 2_000));
     }
-    let control_session = persist_codex_stage_session(
-        platform,
-        trigger.agent_profile_id,
-        "control",
-        AGENT_CODEX_SESSION_KIND_CONTROL,
-        None,
-        &control_workspace,
-        &control_skills,
-        &control_memories,
-        &control_result,
-        false,
-    )?;
-    run.codex_thread_id = Some(control_session.codex_thread_id.clone());
-    run.final_message_summary = control_result
-        .final_message
-        .as_deref()
-        .map(|message| truncate(message, 2_000));
 
     let mut worker_failure = None;
     let mut worker_retry_requested = false;
@@ -964,28 +974,4 @@ pub(super) fn fail_run(
         run.codex_thread_id.clone(),
     );
     Ok(())
-}
-
-pub(super) fn record_run_activity(
-    platform: &TriggerPlatform,
-    run_id: Uuid,
-    phase: &str,
-    summary: &str,
-    codex_thread_id: Option<String>,
-) {
-    if let Err(error) = platform.append_agent_codex_trigger_run_activity(
-        run_id,
-        AgentCodexRunActivity {
-            at: now_utc(),
-            phase: phase.into(),
-            summary: truncate(&sanitize_error(summary), 500),
-        },
-        codex_thread_id,
-    ) {
-        tracing::warn!(
-            run_id = %run_id,
-            error = %sanitize_error(&error.to_string()),
-            "failed to persist Codex activity"
-        );
-    }
 }

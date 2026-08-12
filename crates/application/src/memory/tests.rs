@@ -281,7 +281,7 @@ fn message_wake_requested_during_a_run_is_preserved_for_the_next_cycle() {
 }
 
 #[test]
-fn trigger_shutdown_marks_owned_running_cycles_as_lease_lost() {
+fn trigger_shutdown_marks_owned_running_cycles_as_restart_handoffs() {
     let repo = MemoryPlatformRepository::default();
     let agent_id = Uuid::new_v4();
     let config_id = Uuid::new_v4();
@@ -387,9 +387,10 @@ fn trigger_shutdown_marks_owned_running_cycles_as_lease_lost() {
         .agent_codex_trigger_runs
         .get(&run_id)
         .expect("trigger run");
-    assert_eq!(run.status, AGENT_CODEX_RUN_STATUS_LEASE_LOST);
+    assert_eq!(run.status, AGENT_CODEX_RUN_STATUS_RESTARTED);
     assert_eq!(run.finished_at, Some(stopped_at));
-    assert_eq!(run.activity_phase, "lease_lost");
+    assert_eq!(run.activity_phase, "continuing");
+    assert!(run.error_message.is_none());
     let intent = guard
         .agent_execution_intents
         .get(&intent_id)

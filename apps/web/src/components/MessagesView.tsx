@@ -490,7 +490,7 @@ function Dialog(props: { title: string; description?: string; onClose: () => voi
 }
 
 function StatusBadge({ value }: { value: string }) {
-  const label = { active: "可连接", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value;
+  const label = { active: "可连接", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "异常中断", restarted: "已接续", approved: "已批准", rejected: "已拒绝" }[value] ?? value;
   return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>;
 }
 

@@ -13,6 +13,8 @@ use ai_chat_domain::company::{
 pub struct CompanyAgentCodexTriggerView {
     pub config: AgentCodexTriggerConfig,
     pub recent_runs: Vec<AgentCodexTriggerRun>,
+    pub active_intents: Vec<AgentExecutionIntent>,
+    pub recent_sessions: Vec<AgentCodexSession>,
     pub runner_profile_id: Option<Uuid>,
 }
 
@@ -153,6 +155,7 @@ pub struct AgentCodexWorkDecision {
     pub waiting_task_count: usize,
     pub asset_refresh_due: bool,
     pub pending_execution_intent_count: usize,
+    pub resume_existing_intents_directly: bool,
     pub control_snapshot: AgentControlSnapshot,
 }
 

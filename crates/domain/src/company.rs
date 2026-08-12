@@ -214,6 +214,7 @@ pub const AGENT_CODEX_RUN_STATUS_FAILED: &str = "failed";
 pub const AGENT_CODEX_RUN_STATUS_TIMED_OUT: &str = "timed_out";
 pub const AGENT_CODEX_RUN_STATUS_CANCELLED: &str = "cancelled";
 pub const AGENT_CODEX_RUN_STATUS_LEASE_LOST: &str = "lease_lost";
+pub const AGENT_CODEX_RUN_STATUS_RESTARTED: &str = "restarted";
 pub const AGENT_CODEX_SESSION_KIND_CONTROL: &str = "control";
 pub const AGENT_CODEX_SESSION_KIND_PROJECT: &str = "project";
 pub const AGENT_CODEX_SESSION_STATUS_ACTIVE: &str = "active";

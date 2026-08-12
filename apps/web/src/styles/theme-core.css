@@ -261,6 +261,7 @@ input::placeholder, textarea::placeholder { color: #50606e; }
 .status-badge.active, .status-badge.connected, .status-badge.succeeded { color: #b6ff83; background: rgba(168, 255, 96, .1); }
 .status-badge.running { color: #7deaff; background: rgba(77, 226, 255, .1); }
 .status-badge.failed, .status-badge.timed_out, .status-badge.lease_lost, .status-badge.terminated { color: #ff9ca4; background: rgba(255, 125, 135, .1); }
+.status-badge.restarted { color: #ffc76f; background: rgba(255, 199, 111, .09); }
 .status-badge.paused, .status-badge.provisioning, .status-badge.queued { color: #ffd087; background: rgba(255, 197, 109, .1); }
 .status-badge.not_connected, .status-badge.no_key { color: #98a8b5; background: rgba(122, 143, 160, .11); }
 .status-badge.key_expired, .status-badge.key_revoked, .status-badge.suspended { color: #ffd087; background: rgba(255, 197, 109, .1); }

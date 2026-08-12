@@ -261,14 +261,11 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 ),
                 abandoned_runs AS (
                     UPDATE agent_codex_trigger_runs run
-                    SET status = 'lease_lost',
+                    SET status = 'restarted',
                         finished_at = $2,
-                        error_message = COALESCE(
-                            run.error_message,
-                            'Codex trigger process stopped before the run completed'
-                        ),
-                        activity_phase = 'lease_lost',
-                        activity_summary = 'Trigger 进程中断，本轮已停止',
+                        error_message = NULL,
+                        activity_phase = 'continuing',
+                        activity_summary = 'Trigger 服务重启，本轮工作已保存并等待接续',
                         last_activity_at = $2
                     WHERE run.status = 'running'
                       AND run.trigger_config_id IN (SELECT id FROM abandoned_configs)

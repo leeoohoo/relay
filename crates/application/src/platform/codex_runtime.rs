@@ -46,9 +46,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         config.updated_at = now;
         self.repo.save_agent_codex_trigger_config(config.clone())?;
         Ok(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs: self.recent_agent_codex_runs_for_human(input.agent_id, 20)?,
+            active_intents: self.active_agent_execution_intents(input.agent_id),
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
@@ -65,9 +65,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             input.company_id,
             input.agent_id,
         )?;
-        Ok(self
-            .repo
-            .list_agent_codex_trigger_runs(input.agent_id, input.limit.clamp(1, 100)))
+        self.recent_agent_codex_runs_for_human(input.agent_id, input.limit)
     }
 
     pub fn list_company_agent_codex_sessions_for_human(
@@ -96,6 +94,49 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .map(sanitize_codex_session_for_human)
             .collect();
         Ok(sessions)
+    }
+
+    pub(super) fn active_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+    ) -> Vec<AgentExecutionIntent> {
+        let mut intents = self.repo.list_agent_execution_intents(
+            agent_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_RUNNING),
+            20,
+        );
+        intents.extend(self.repo.list_agent_execution_intents(
+            agent_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+            20,
+        ));
+        intents.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        intents
+    }
+
+    pub(super) fn recent_agent_codex_sessions_for_human(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentCodexSession> {
+        self.repo
+            .list_agent_codex_sessions(agent_id, limit.clamp(1, 100))
+            .into_iter()
+            .map(sanitize_codex_session_for_human)
+            .collect()
+    }
+
+    pub(super) fn recent_agent_codex_runs_for_human(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> AppResult<Vec<AgentCodexTriggerRun>> {
+        Ok(self
+            .repo
+            .list_agent_codex_trigger_runs_result(agent_id, limit.clamp(1, 100))?
+            .into_iter()
+            .map(sanitize_codex_run_for_human)
+            .collect())
     }
 
     pub fn claim_due_agent_codex_triggers(
@@ -267,6 +308,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .into_iter()
             .filter(|intent| active_project_ids.contains(&intent.project_id))
             .count();
+        let covered_task_ids = control_snapshot
+            .active_intents
+            .iter()
+            .flat_map(|intent| intent.task_ids.iter().copied())
+            .collect::<HashSet<_>>();
+        let resume_existing_intents_directly = !manual
+            && pending_events.is_empty()
+            && asset_refresh.is_none()
+            && pending_execution_intent_count > 0
+            && active_tasks
+                .iter()
+                .all(|task| covered_task_ids.contains(&task.id));
         let should_run = manual
             || !pending_events.is_empty()
             || !active_tasks.is_empty()
@@ -293,6 +346,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             waiting_task_count,
             asset_refresh_due: asset_refresh.is_some(),
             pending_execution_intent_count,
+            resume_existing_intents_directly,
             control_snapshot,
         })
     }
@@ -607,6 +661,22 @@ fn sanitize_codex_session_for_human(mut session: AgentCodexSession) -> AgentCode
     session
 }
 
+fn sanitize_codex_run_for_human(mut run: AgentCodexTriggerRun) -> AgentCodexTriggerRun {
+    if let Some(summary) = run.final_message_summary.as_mut() {
+        *summary = redact_host_home_path(summary);
+    }
+    if let Some(error) = run.error_message.as_mut() {
+        *error = redact_host_home_path(error);
+    }
+    if let Some(summary) = run.activity_summary.as_mut() {
+        *summary = redact_host_home_path(summary);
+    }
+    for activity in &mut run.activity_log {
+        activity.summary = redact_host_home_path(&activity.summary);
+    }
+    run
+}
+
 fn redact_json_host_paths(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(text) => *text = redact_host_home_path(text),
@@ -625,7 +695,31 @@ fn redact_json_host_paths(value: &mut serde_json::Value) {
 }
 
 fn redact_host_home_path(value: &str) -> String {
-    redact_unix_home_segment(&redact_unix_home_segment(value, "/Users/"), "/home/")
+    let redacted = redact_unix_home_segment(&redact_unix_home_segment(value, "/Users/"), "/home/");
+    redact_relay_workspace_path(&redacted)
+}
+
+fn redact_relay_workspace_path(value: &str) -> String {
+    let mut output = value.to_string();
+    let mut search_from = 0;
+    while let Some(relative_start) = output[search_from..].find(".relay-workspace/") {
+        let marker_start = search_from + relative_start;
+        let path_start = output[..marker_start]
+            .rfind(['(', ' ', '\n', '\t'])
+            .map_or(0, |index| index + 1);
+        let Some(relative_worktree_end) = output[marker_start..].find("/.relay/worktrees/") else {
+            search_from = marker_start + 1;
+            continue;
+        };
+        let worktree_marker = marker_start + relative_worktree_end + "/.relay/worktrees/".len();
+        let Some(relative_agent_end) = output[worktree_marker..].find('/') else {
+            break;
+        };
+        let repository_path_start = worktree_marker + relative_agent_end + 1;
+        output.replace_range(path_start..repository_path_start, "./");
+        search_from = path_start + 2;
+    }
+    output
 }
 
 fn redact_unix_home_segment(value: &str, prefix: &str) -> String {
@@ -642,4 +736,18 @@ fn redact_unix_home_segment(value: &str, prefix: &str) -> String {
         search_from = start + 1;
     }
     output
+}
+
+#[cfg(test)]
+mod runtime_projection_tests {
+    use super::redact_host_home_path;
+
+    #[test]
+    fn relay_worktree_links_are_exposed_as_project_relative_paths() {
+        let value = "[evidence](/Users/alice/work/relay/.relay-workspace/companies/company/project/.relay/worktrees/agent/docs/evidence/report.md)";
+        assert_eq!(
+            redact_host_home_path(value),
+            "[evidence](./docs/evidence/report.md)"
+        );
+    }
 }

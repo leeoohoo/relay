@@ -479,7 +479,8 @@ button.message-entity-reference:focus-visible {
 .runtime-facts small,
 .runtime-task-section h4,
 .runtime-process-section h4,
-.runtime-history-section h4 {
+.runtime-history-section h4,
+.runtime-intent-section h4 {
   margin: 0;
   color: #617582;
   font-size: 7px;
@@ -496,10 +497,21 @@ button.message-entity-reference:focus-visible {
 }
 .runtime-task-section,
 .runtime-process-section,
-.runtime-history-section {
+.runtime-history-section,
+.runtime-intent-section {
   display: grid;
   gap: 6px;
 }
+.runtime-intent-section {
+  border: 1px solid rgba(77, 226, 255, .1);
+  border-radius: 7px;
+  padding: 7px 8px;
+  background: rgba(77, 226, 255, .025);
+}
+.runtime-intent-section h4 { margin: 0; color: #6f8794; font-size: 7px; text-transform: uppercase; }
+.runtime-intent-section > strong { color: #c5d4dc; font-size: 8px; line-height: 1.45; }
+.runtime-intent-section > small { color: #72909f; font-size: 7px; }
+.runtime-intent-section > p { margin: 0; color: #91a6b1; font-size: 7px; line-height: 1.5; }
 .runtime-task {
   display: grid;
   width: 100%;
@@ -543,6 +555,8 @@ button.message-entity-reference:focus-visible {
 .runtime-history-state.lease_lost { color: #ff9a92; background: rgba(255, 112, 120, .09); }
 .runtime-history-state.succeeded,
 .task-state.done { color: #73e3d4; background: rgba(77, 226, 255, .08); }
+.runtime-history-state.restarted,
+.runtime-history-state.pending { color: #ffc76f; background: rgba(255, 199, 111, .09); }
 .runtime-process-head {
   display: flex;
   align-items: center;

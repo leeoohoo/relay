@@ -61,6 +61,8 @@ const trigger: CodexTriggerView = {
       { at: "2026-08-07T03:02:00Z", phase: "files", summary: "修改库存页面" },
     ],
   }],
+  active_intents: [],
+  recent_sessions: [],
 };
 
 const consoleData: CompanyConsole = {
@@ -337,8 +339,59 @@ describe("MessagesView group member runtime drawer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
     expect(await screen.findByText("待继续")).toBeInTheDocument();
-    expect(screen.getByText("等待下一轮继续 · 实现库存工作台")).toBeInTheDocument();
+    expect(screen.getByText("任务尚未完成，等待接续或外部条件 · 实现库存工作台")).toBeInTheDocument();
     expect(screen.queryByText("空闲")).not.toBeInTheDocument();
+  });
+
+  it("shows active intent details and restart handoffs without treating them as failures", async () => {
+    const resumedTrigger: CodexTriggerView = {
+      ...trigger,
+      recent_runs: [{
+        ...trigger.recent_runs[0],
+        status: "restarted",
+        finished_at: "2026-08-07T03:05:00Z",
+        activity_phase: "continuing",
+        activity_summary: "Trigger 服务重启，本轮工作已交由后续运行接续",
+      }],
+      active_intents: [{
+        id: "intent-1",
+        project_id: "project-1",
+        worker_session_id: "session-1",
+        task_ids: [taskId],
+        action_type: "execute",
+        objective: "继续完成库存页面并提交验证证据",
+        status: "pending",
+        result_summary: "",
+        error_message: null,
+        created_at: "2026-08-07T03:00:00Z",
+        claimed_at: null,
+      }],
+      recent_sessions: [],
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger: resumedTrigger };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /群成员/ }));
+    fireEvent.click((await screen.findByText("前端 Agent")).closest("summary")!);
+
+    expect(await screen.findByText("继续完成库存页面并提交验证证据")).toBeInTheDocument();
+    expect(screen.getByText("已接续")).toBeInTheDocument();
+    expect(screen.queryByText("已中断")).not.toBeInTheDocument();
   });
 
   it("shows the same Agent runtime details in a direct conversation", async () => {

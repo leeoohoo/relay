@@ -398,9 +398,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             return Ok(None);
         };
         Ok(Some(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs: self.recent_agent_codex_runs_for_human(input.agent_id, 20)?,
+            active_intents: self.active_agent_execution_intents(input.agent_id),
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
@@ -635,9 +635,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             )?;
         }
         Ok(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs: self.recent_agent_codex_runs_for_human(input.agent_id, 20)?,
+            active_intents: self.active_agent_execution_intents(input.agent_id),
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),

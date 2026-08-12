@@ -48,7 +48,7 @@ export function Metric(props: { label: string; value: string; detail: string; on
     ? <button type="button" className={`metric interactive ${props.active ? "active" : ""}`} aria-pressed={props.active} onClick={props.onClick}>{content}</button>
     : <div className="metric">{content}</div>;
 }
-export function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "租约丢失", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
+export function StatusBadge({ value }: { value: string }) { const label = { active: "可用", connected: "已连接", not_connected: "待连接", awaiting_activation: "待激活", provisioning: "待激活", pending: "待处理", deleting: "删除中", idle: "就绪", install_pending: "等待安装", installing: "安装中", update_pending: "等待更新", updating: "更新中", suspended: "已暂停", terminated: "已裁撤", key_revoked: "Key 已撤销", key_expired: "Key 已过期", no_key: "无 Key", running: "运行中", succeeded: "成功", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "异常中断", restarted: "已接续", approved: "已批准", rejected: "已拒绝" }[value] ?? value; return <span className={`status-badge ${value}`}><span className="status-dot" />{label}</span>; }
 export function codexSessionTurnLabel(session: CodexSession) {
   const status = typeof session.checkpoint_json.last_turn_status === "string"
     ? session.checkpoint_json.last_turn_status
@@ -175,7 +175,7 @@ export function toDateTimeLocalValue(value: string | null) {
 export function collaborationPreferenceLabel(value: AgentProfile["collaboration_preference"]) { return { available: "可协作", low_cost_only: "仅接受低成本请求", unavailable: "暂不接受请求" }[value] ?? value; }
 export function codexTriggerStatusLabel(value: CodexTriggerView["config"]["status"]) { return { active: "已启用", paused: "已暂停", error: "错误" }[value]; }
 export function codexOperationalStatusLabel(value: string) { return { running: "执行中", queued: "排队中", idle: "等待检查", paused: "已暂停", error: "错误" }[value] ?? value; }
-export function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "进度说明", continuing: "保存进度", finishing: "收尾", waiting_approval: "等待审批", approval_delivery_failed: "审批投递失败", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value; }
+export function codexActivityPhaseLabel(value: string) { return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "进度说明", dispatching: "进入项目工作", retrying: "准备重试", continuing: "接续工作", finishing: "收尾", waiting_approval: "等待审批", approval_delivery_failed: "审批投递失败", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value; }
 export function codexTriggerTypeLabel(value: string) { return { scheduled: "定时", manual: "手动", run_now: "手动", message: "消息", task: "任务", asset_refresh: "资产维护" }[value] ?? value; }
 export function codexPluginOperationStatusLabel(value: CodexPluginOperation["status"]) { return { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败" }[value]; }
 export function codexRunDisplayMessage(run: CodexTriggerRun) {
@@ -186,7 +186,8 @@ export function codexRunDisplayMessage(run: CodexTriggerRun) {
     succeeded: "Codex 已完成本轮",
     timed_out: "本轮运行超时",
     cancelled: "本轮已取消",
-    lease_lost: "本轮租约已失效",
+    lease_lost: "Trigger 异常退出，工作等待恢复",
+    restarted: "Trigger 服务重启，工作已由后续运行接续",
     failed: "本轮运行失败",
   }[run.status] ?? "等待运行结果";
 }

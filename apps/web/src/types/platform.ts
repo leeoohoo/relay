@@ -329,6 +329,20 @@ export type CodexTriggerView = {
     consecutive_failure_count: number;
   };
   recent_runs: CodexTriggerRun[];
+  active_intents: Array<{
+    id: string;
+    project_id: string;
+    worker_session_id: string | null;
+    task_ids: string[];
+    action_type: string;
+    objective: string;
+    status: "pending" | "running";
+    result_summary: string;
+    error_message: string | null;
+    created_at: string;
+    claimed_at: string | null;
+  }>;
+  recent_sessions: CodexSession[];
 };
 
 export type CodexRunnerProfileView = {

@@ -110,6 +110,10 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
   const runningRun = props.runtime.trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const latestRun = runningRun ?? props.runtime.trigger?.recent_runs[0] ?? null;
   const currentTask = props.tasks.find((task) => task.status === "in_progress") ?? props.tasks[0] ?? null;
+  const currentIntent = props.runtime.trigger?.active_intents.find((intent) => intent.status === "running")
+    ?? props.runtime.trigger?.active_intents[0]
+    ?? null;
+  const projectSession = props.runtime.trigger?.recent_sessions.find((session) => session.session_kind === "project") ?? null;
   const summary = props.agent.membership.employment_status === "active"
     ? runtimeSummary(props.runtime, latestRun, currentTask, operationalStatus)
     : "该 Agent 已暂停工作";
@@ -140,6 +144,8 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
           </section>
         ) : null}
 
+        {currentIntent ? <IntentProgress intent={currentIntent} tasks={props.tasks} session={projectSession} /> : null}
+
         {props.runtime.loading ? <div className="runtime-empty"><span className="loader" /> 正在读取运行情况…</div> : null}
         {props.runtime.error ? <div className="runtime-error"><Icon name="alert" /> <span><strong>运行信息读取失败</strong><small>{props.runtime.error}</small></span></div> : null}
         {!props.runtime.loading && !props.runtime.error && !props.runtime.trigger ? <div className="runtime-empty">这个 Agent 尚未启用 Codex Trigger。</div> : null}
@@ -158,6 +164,27 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
         ) : null}
       </div>
     </details>
+  );
+}
+
+function IntentProgress(props: {
+  intent: CodexTriggerView["active_intents"][number];
+  tasks: CompanyProjectTask[];
+  session: CodexTriggerView["recent_sessions"][number] | null;
+}) {
+  const taskNames = props.intent.task_ids
+    .map((taskId) => props.tasks.find((task) => task.id === taskId)?.title)
+    .filter((title): title is string => Boolean(title));
+  return (
+    <section className="runtime-intent-section">
+      <div className="runtime-process-head">
+        <h4>当前项目工作</h4>
+        <span className={`runtime-history-state ${props.intent.status}`}>{props.intent.status === "running" ? "工作中" : "待接续"}</span>
+      </div>
+      <strong>{props.intent.objective}</strong>
+      {taskNames.length ? <small>关联任务 · {taskNames.join("、")}</small> : null}
+      {props.session?.summary_short ? <p>{summaryPreview(props.session.summary_short)}</p> : <p>项目工作会话已建立，等待产生第一条成果总结。</p>}
+    </section>
   );
 }
 
@@ -206,7 +233,9 @@ function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: Compan
   const trigger = runtime.trigger;
   if (!trigger) return agent.connection.status === "connected" ? "idle" : "offline";
   if (trigger.config.status !== "active") return trigger.config.status;
+  if (trigger.active_intents?.some((intent) => intent.status === "running")) return "running";
   if (trigger.recent_runs.some((run) => run.status === "running")) return "running";
+  if (trigger.active_intents?.length) return "continuing";
   if (trigger.config.lease_owner || trigger.config.manual_run_requested_at || trigger.config.wake_requested_at) return "queued";
   if (tasks.some((task) => task.status === "in_progress")) return "continuing";
   return "idle";
@@ -216,7 +245,7 @@ function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task
   if (runtime.loading) return "正在同步运行数据";
   if (runtime.error) return "无法读取运行详情";
   if (operationalStatus === "queued") return "任务已进入执行队列";
-  if (operationalStatus === "continuing" && task) return `等待下一轮继续 · ${task.title}`;
+  if (operationalStatus === "continuing" && task) return `任务尚未完成，等待接续或外部条件 · ${task.title}`;
   if (operationalStatus === "paused") return "Trigger 已暂停";
   if (operationalStatus === "error") return runtime.trigger?.config.last_error ?? "Trigger 运行异常";
   if (run?.status === "running") return run.activity_summary ?? "Codex 正在执行任务";
@@ -230,7 +259,7 @@ function runtimeStatusLabel(value: string) {
 }
 
 function runStatusLabel(value: string) {
-  return ({ running: "运行中", succeeded: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "已中断" } as Record<string, string>)[value] ?? value;
+  return ({ running: "运行中", succeeded: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "异常中断", restarted: "已接续" } as Record<string, string>)[value] ?? value;
 }
 
 function connectionLabel(value: string) {
@@ -251,13 +280,18 @@ function triggerTypeLabel(value: string) {
 }
 
 function activityPhaseLabel(value: string) {
-  return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "进度说明", continuing: "保存进度", finishing: "收尾", waiting_approval: "等待审批", approval_delivery_failed: "审批投递失败", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value;
+  return ({ preparing: "准备工作区", starting: "启动 Codex", session: "连接会话", thinking: "分析", planning: "规划", tool: "调用工具", command: "执行命令", files: "修改文件", searching: "搜索", reporting: "进度说明", dispatching: "进入项目工作", retrying: "准备重试", continuing: "接续工作", finishing: "收尾", waiting_approval: "等待审批", approval_delivery_failed: "审批投递失败", approval_rejected: "审批未通过", running: "执行中", completed: "已完成", failed: "失败", timed_out: "超时", cancelled: "已取消", lease_lost: "进程中断" } as Record<string, string>)[value] ?? value;
 }
 
 function runDisplayMessage(run: CodexTriggerRun) {
   if (run.final_message_summary) return run.final_message_summary;
   if (run.error_message) return run.error_message;
-  return ({ running: "本轮仍在执行", succeeded: "Codex 已完成本轮", timed_out: "本轮运行超时", cancelled: "本轮已取消", lease_lost: "本轮运行中断", failed: "本轮运行失败" } as Record<string, string>)[run.status] ?? "等待运行结果";
+  return ({ running: "本轮仍在执行", succeeded: "Codex 已完成本轮", timed_out: "本轮运行超时", cancelled: "本轮已取消", lease_lost: "Trigger 异常退出，工作等待恢复", restarted: "Trigger 服务重启，工作已由后续运行接续", failed: "本轮运行失败" } as Record<string, string>)[run.status] ?? "等待运行结果";
+}
+
+function summaryPreview(value: string) {
+  const plain = value.replace(/\[[^\]]+\]\([^\)]+\)/g, "").replace(/[#*_`>-]/g, " ").replace(/\s+/g, " ").trim();
+  return plain.length > 220 ? `${plain.slice(0, 220)}…` : plain;
 }
 
 function formatTime(value: string) {

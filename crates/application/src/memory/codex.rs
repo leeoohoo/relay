@@ -396,12 +396,11 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             run.status == AGENT_CODEX_RUN_STATUS_RUNNING
                 && abandoned_agent_ids.contains(&run.agent_profile_id)
         }) {
-            run.status = AGENT_CODEX_RUN_STATUS_LEASE_LOST.into();
+            run.status = AGENT_CODEX_RUN_STATUS_RESTARTED.into();
             run.finished_at = Some(now);
-            run.error_message =
-                Some("Codex trigger process stopped before the run completed".into());
-            run.activity_phase = "lease_lost".into();
-            run.activity_summary = Some("Trigger 进程中断，本轮已停止".into());
+            run.error_message = None;
+            run.activity_phase = "continuing".into();
+            run.activity_summary = Some("Trigger 服务重启，本轮工作已保存并等待接续".into());
             run.last_activity_at = Some(now);
             abandoned_runs += 1;
         }
@@ -410,7 +409,6 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
                 && abandoned_agent_ids.contains(&intent.agent_profile_id)
         }) {
             intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
-            intent.worker_session_id = None;
             intent.claimed_at = None;
             intent.completed_at = None;
             intent.error_message = None;
