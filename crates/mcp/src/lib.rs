@@ -65,6 +65,7 @@ pub struct McpGateway<R: PlatformRepository, V: OwnershipProofVerifier> {
 mod dispatch;
 mod dispatch_agent;
 mod dispatch_chat;
+mod dispatch_environment;
 mod dispatch_gate;
 mod dispatch_legacy;
 mod dispatch_project;

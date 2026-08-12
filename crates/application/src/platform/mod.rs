@@ -26,7 +26,8 @@ use ai_chat_domain::company::{
     CompanyGovernancePolicySettings, CompanyGovernancePolicyVersion, CompanyHumanMember,
     CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig,
     CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
-    CompanyProjectTaskDependency, CompanyRealtimeEvent, OrgUnit,
+    CompanyProjectTaskDependency, CompanyRealtimeEvent, OrgUnit, ProjectEnvironment,
+    ProjectEnvironmentService, ProjectTaskEnvironmentRequirement,
     AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY, AGENT_CODEX_APPROVAL_POLICY_NEVER,
     AGENT_CODEX_APPROVAL_POLICY_ON_REQUEST, AGENT_CODEX_APPROVAL_SCOPE_KEY,
     AGENT_CODEX_APPROVAL_TARGET_KEY, AGENT_CODEX_APPROVAL_TOOL_COMMAND,
@@ -94,6 +95,7 @@ mod codex_runtime;
 mod company;
 mod company_paging;
 mod control_snapshot;
+mod environments;
 mod event_routing;
 mod gates;
 mod memory;

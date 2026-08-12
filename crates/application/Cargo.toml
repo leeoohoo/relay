@@ -9,6 +9,7 @@ argon2.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
 serde.workspace = true
+schemars.workspace = true
 serde_json.workspace = true
 url.workspace = true
 uuid.workspace = true

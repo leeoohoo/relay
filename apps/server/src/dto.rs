@@ -261,6 +261,39 @@ fn default_gate_required_status() -> String {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct CreateProjectEnvironmentRequest {
+    pub(super) environment_key: String,
+    pub(super) display_name: String,
+    pub(super) desired_revision: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ObserveProjectEnvironmentRequest {
+    pub(super) status: String,
+    pub(super) desired_revision: Option<String>,
+    pub(super) observed_revision: Option<String>,
+    pub(super) configuration_fingerprint: Option<String>,
+    #[serde(default)]
+    pub(super) health_summary: serde_json::Value,
+    pub(super) observed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(super) services: Vec<ProjectEnvironmentServiceObservationInput>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SetProjectTaskEnvironmentRequirementRequest {
+    pub(super) required_revision: Option<String>,
+    #[serde(default)]
+    pub(super) required_services: Vec<String>,
+    #[serde(default = "default_true")]
+    pub(super) require_healthy: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct UpsertCompanyAgentCodexTriggerRequest {
     pub(super) interval_seconds: Option<i32>,
     pub(super) codex_profile: Option<String>,

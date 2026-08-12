@@ -122,6 +122,7 @@ fn failed_registration_completion_does_not_leave_half_written_agent() {
     }
 
     impl GatePlatformRepository for FailingCompletionRepo {}
+    impl EnvironmentPlatformRepository for FailingCompletionRepo {}
 
     impl AuthPlatformRepository for FailingCompletionRepo {
         fn find_human_user_by_email(&self, email: &str) -> Option<HumanUser> {

@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub mod environments;
 pub mod gates;
+pub use environments::*;
 pub use gates::*;
 
 pub const COMPANY_ROLE_OWNER: &str = "owner";

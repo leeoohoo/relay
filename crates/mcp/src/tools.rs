@@ -124,6 +124,14 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         vec!["list"]
     };
     let gate_schema = tailored_action_schema::<CompanyGateToolInput>(&gate_actions, &[]);
+    let environment_actions = if can_assign_tasks {
+        vec!["list", "create", "observe", "requirement_set"]
+    } else {
+        vec!["list"]
+    };
+    let environment_schema = tailored_action_schema::<
+        dispatch_environment::CompanyEnvironmentToolInput,
+    >(&environment_actions, &[]);
 
     let mut tools = vec![
         action_tool::<CompanyChatToolInput>(
@@ -156,6 +164,14 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
     );
     tools.insert(
         3,
+        action_tool_with_schema(
+            "company.environment",
+            "Observe project environments and bind task environment requirements. Tasks stay waiting until the required revision, services, and health state are observed.".into(),
+            environment_schema,
+        ),
+    );
+    tools.insert(
+        4,
         action_tool_with_schema(
             "company.gate",
             "Manage structured project Gates and task Gate requirements. Gates are the machine-readable source of truth for design, technical, QA, PM, environment, approval, and release holds; do not encode Hold rules only in task text or chat.".into(),

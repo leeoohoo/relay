@@ -42,6 +42,7 @@ mod auth;
 mod chat;
 mod codex;
 mod company;
+mod environment;
 mod gate;
 mod governance;
 mod memory;
@@ -55,6 +56,7 @@ pub use codex::{
     CodexControlPlatformRepository, CodexPlatformRepository, CodexRuntimePlatformRepository,
 };
 pub use company::CompanyPlatformRepository;
+pub use environment::EnvironmentPlatformRepository;
 pub use gate::GatePlatformRepository;
 pub use governance::GovernancePlatformRepository;
 pub use memory::MemoryPlatformRepositoryPort;
@@ -75,6 +77,7 @@ pub trait PlatformRepository:
     + CodexPlatformRepository
     + TaskPlatformRepository
     + GovernancePlatformRepository
+    + EnvironmentPlatformRepository
     + GatePlatformRepository
 {
 }
@@ -93,6 +96,7 @@ impl<T> PlatformRepository for T where
         + CodexPlatformRepository
         + TaskPlatformRepository
         + GovernancePlatformRepository
+        + EnvironmentPlatformRepository
         + GatePlatformRepository
 {
 }

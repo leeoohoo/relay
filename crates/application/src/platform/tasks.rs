@@ -346,6 +346,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ) {
                 self.ensure_project_task_dependencies_resolved(project.id, task.id)?;
                 self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+                self.ensure_project_task_environment_ready(project.id, task.id)?;
             }
             status_changed = task.status != status;
             task.status = status;
@@ -437,6 +438,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ) {
                 self.ensure_project_task_dependency_ids_resolved(&dependency_ids)?;
                 self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+                self.ensure_project_task_environment_ready(project.id, task.id)?;
             }
             status_changed = task.status != status;
             task.status = status;
@@ -473,6 +475,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         ) {
             self.ensure_project_task_dependency_ids_resolved(&dependency_ids)?;
             self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+            self.ensure_project_task_environment_ready(project.id, task.id)?;
         }
         self.repo.update_company_project_task(task.clone())?;
         self.sync_project_task_dependencies_for_human(
@@ -721,6 +724,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 ) {
                     self.ensure_project_task_dependencies_resolved(project.id, task.id)?;
                     self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+                    self.ensure_project_task_environment_ready(project.id, task.id)?;
                 }
                 if task.status != status {
                     task.status = status.to_string();

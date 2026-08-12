@@ -980,7 +980,7 @@ apps/web/src/pages/projects/sessions.tsx
 
 ## 22. 实施进度（2026-08-12）
 
-本轮完成了可独立上线验证的第一批闭环，范围为事件路由、一次性控制快照和项目 Gate。Phase 3 至 Phase 5 仍按本方案继续推进，不能把本节视为整份方案已经全部完成。
+本轮完成了事件路由、一次性控制快照、项目 Gate，以及 Phase 3 的第一块 Project Environment。Task Attempt、Blocker、Relation、Evidence 和 Phase 4 至 Phase 5 仍按本方案继续推进，不能把本节视为整份方案已经全部完成。
 
 ### 22.1 已完成
 
@@ -995,6 +995,10 @@ apps/web/src/pages/projects/sessions.tsx
 - [x] 统一任务 Readiness 的依赖与 Gate 判断；未满足 Gate 时拒绝进入 `in_progress/done`。
 - [x] Gate 通过或豁免后重新计算任务，只创建一条带稳定去重键的 `task_ready` 事件。
 - [x] 项目详情增加“项目门禁”Tab，支持创建、绑定任务、证据要求、通过、豁免和不通过。
+- [x] 数据库迁移 `0067_project_environments`：新增 Project Environment、服务观测和 Task Environment Requirement。
+- [x] 环境 Human REST、Agent MCP 和应用服务入口；项目详情新增“项目环境”Tab。
+- [x] Readiness 同时校验依赖、Gate 和环境；Revision、环境健康或必需服务不满足时拒绝任务进入 `in_progress/done`。
+- [x] 环境或服务观测真正变化后重新计算任务，满足条件时只生成一条带稳定去重键的 `task_ready`。
 
 ### 22.2 自动化验证
 
@@ -1005,6 +1009,7 @@ apps/web/src/pages/projects/sessions.tsx
 - [x] Rust 格式检查与 `git diff --check` 通过。
 - [x] 新增 Gate 集成测试覆盖“未通过不能开始、通过后 Ready、重复决策只生成一条 Ready Event”。
 - [x] 消息路由集成测试覆盖“普通 Agent 群消息不唤醒”和“明确 `@` 只唤醒目标 Agent”。
+- [x] 环境集成测试覆盖“服务不健康不能开始、服务恢复后 Ready、重复观测只生成一条 Ready Event”。
 
 ### 22.3 真实 E2E 结果
 
@@ -1019,11 +1024,13 @@ apps/web/src/pages/projects/sessions.tsx
 7. Human 通过 Gate 后，数据库只存在一条 `company.project.task_ready`，其分类为 `execution_ready`、`requires_action=true`、`wake_policy=immediate`。
 8. 再次启动任务成功，任务进入 `in_progress`。
 9. 使用最终重建镜像再次创建并分配任务，数据库确认 `company.project.task_assigned` 为 `informational`、`requires_action=false`、`wake_policy=never`；是否执行由实时 Ready Snapshot 决定。
+10. 创建 `staging-e2e` 环境并把任务绑定到 `rev-2`；环境为 `degraded/rev-1` 时启动任务，服务端正确返回 `task_environment_not_ready`。
+11. 把环境更新为 `ready/rev-2` 且 `web` 服务健康后，任务自动 Ready 并可进入 `in_progress`；数据库确认只存在一条对应 `task_ready`，浏览器控制台无错误。
 
 ### 22.4 待继续实施
 
 - [ ] Phase 0 剩余项：Feature Flag、唤醒决策指标与整改前后指标面板。
-- [ ] Phase 3：Project Environment、Task Attempt、Blocker、Relation 与 Evidence Registry。
+- [ ] Phase 3 剩余：Task Attempt、Blocker、Relation 与 Evidence Registry；Project Environment 已完成。
 - [ ] Phase 4：记忆治理、注入预算、角色事件订阅与负载预警。
 - [ ] Phase 5：Run 心跳、Watchdog、运行状态投影、讨论线程和摘要卡片。
 - [ ] 五 Agent、环境 Revision、QA Retest 的完整最终 E2E；本轮 E2E 只验收 Phase 1 至 Phase 2 的闭环。
@@ -1102,7 +1109,7 @@ apps/web/src/pages/projects/sessions.tsx
 
 ### 第二批
 
-- [ ] 0067 Project Environment
+- [x] 0067 Project Environment
 - [ ] 0068 Task Attempt / Blocker / Relation
 - [ ] 0069 Evidence Registry
 - [ ] 自动项目状态投影

@@ -24,16 +24,16 @@ use ai_chat_domain::company::{
     CompanyHumanMember, CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig,
     CompanyProjectGitConfig, CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate,
     CompanyProjectTask, CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, OrgUnit,
-    ProjectGate, ProjectTaskGateRequirement, AGENT_CODEX_RUN_STATUS_LEASE_LOST,
-    AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_TRIGGER_STATUS_ACTIVE,
-    AGENT_CODEX_TRIGGER_STATUS_ERROR, AGENT_EXECUTION_INTENT_STATUS_PENDING,
-    AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_TOOL_APPROVAL_MODE_ALWAYS,
-    AGENT_TOOL_APPROVAL_SOURCE_CODEX, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
-    AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_PENDING,
-    CODEX_PLUGIN_OPERATION_STATUS_FAILED, CODEX_PLUGIN_OPERATION_STATUS_QUEUED,
-    CODEX_PLUGIN_OPERATION_STATUS_RUNNING, CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED,
-    COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE, COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED,
-    PROJECT_STATUS_PAUSED,
+    ProjectEnvironment, ProjectEnvironmentService, ProjectGate, ProjectTaskEnvironmentRequirement,
+    ProjectTaskGateRequirement, AGENT_CODEX_RUN_STATUS_LEASE_LOST, AGENT_CODEX_RUN_STATUS_RUNNING,
+    AGENT_CODEX_TRIGGER_STATUS_ACTIVE, AGENT_CODEX_TRIGGER_STATUS_ERROR,
+    AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
+    AGENT_TOOL_APPROVAL_MODE_ALWAYS, AGENT_TOOL_APPROVAL_SOURCE_CODEX,
+    AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
+    AGENT_TOOL_APPROVAL_STATUS_PENDING, CODEX_PLUGIN_OPERATION_STATUS_FAILED,
+    CODEX_PLUGIN_OPERATION_STATUS_QUEUED, CODEX_PLUGIN_OPERATION_STATUS_RUNNING,
+    CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED, COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE,
+    COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED, PROJECT_STATUS_PAUSED,
 };
 use ai_chat_domain::social::{
     ConversationContext, ConversationPreview, MessageView, CONVERSATION_CONTEXT_PROJECT_GROUP,
@@ -48,10 +48,11 @@ use crate::service::{
     CodexRuntimePlatformRepository, CompanyAgentActivationBundle, CompanyAgentCreationBundle,
     CompanyAgentMembershipUpdateBundle, CompanyConversationCreationBundle, CompanyCreationBundle,
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
-    CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput, GatePlatformRepository,
-    GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
-    ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, ProjectPlatformRepository,
-    RegistrationCompletionBundle, TaskPlatformRepository,
+    CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
+    EnvironmentPlatformRepository, GatePlatformRepository, GovernancePlatformRepository,
+    HumanCompanyDirectConversationCreationBundle, ManagedCompanyProjectCreationBundle,
+    MemoryPlatformRepositoryPort, ProjectPlatformRepository, RegistrationCompletionBundle,
+    TaskPlatformRepository,
 };
 
 #[derive(Default, Serialize, Deserialize)]
@@ -108,6 +109,9 @@ struct MemoryState {
     company_project_status_updates: HashMap<Uuid, Vec<CompanyProjectStatusUpdate>>,
     project_gates: HashMap<Uuid, ProjectGate>,
     project_task_gate_requirements: HashMap<(Uuid, Uuid), ProjectTaskGateRequirement>,
+    project_environments: HashMap<Uuid, ProjectEnvironment>,
+    project_environment_services: HashMap<Uuid, ProjectEnvironmentService>,
+    project_task_environment_requirements: HashMap<(Uuid, Uuid), ProjectTaskEnvironmentRequirement>,
     company_governance_policy_versions: HashMap<Uuid, CompanyGovernancePolicyVersion>,
     agent_tool_approval_requests: HashMap<Uuid, AgentToolApprovalRequest>,
 }
@@ -341,6 +345,7 @@ mod auth;
 mod chat;
 mod codex;
 mod company;
+mod environment;
 mod gate;
 mod governance;
 mod memories;

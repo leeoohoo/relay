@@ -44,19 +44,22 @@ use rmcp::transport::streamable_http_server::{
 use ai_chat_application::{
     ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
     CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
-    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput, CreateProjectGateForHumanInput,
+    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput,
+    CreateProjectEnvironmentForHumanInput, CreateProjectGateForHumanInput,
     DecideProjectGateForHumanInput, DeleteAgentMemoryForHumanInput,
     DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
     GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
     ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput,
-    ListProjectGatesForHumanInput, LoginHumanInput, OpenHumanCompanyDirectConversationInput,
-    PlatformApp, ProjectProvisioningCleanupJob, PublishCompanyGovernancePolicyInput,
-    RegisterHumanInput, RequestCodexPluginOperationForHumanInput,
-    RequestCompanyProjectRuleGenerationForHumanInput, ResetHumanPasswordInput,
-    ReviewAgentToolApprovalInput, SendHumanCompanyMessageWithAttachmentsInput,
-    SetCompanyAgentCodexTriggerStatusForHumanInput, SetCompanyProjectPauseForHumanInput,
+    ListProjectEnvironmentsForHumanInput, ListProjectGatesForHumanInput, LoginHumanInput,
+    ObserveProjectEnvironmentForHumanInput, OpenHumanCompanyDirectConversationInput, PlatformApp,
+    ProjectEnvironmentServiceObservationInput, ProjectProvisioningCleanupJob,
+    PublishCompanyGovernancePolicyInput, RegisterHumanInput,
+    RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
+    ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
+    SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
+    SetCompanyProjectPauseForHumanInput, SetProjectTaskEnvironmentRequirementForHumanInput,
     SetProjectTaskGateRequirementForHumanInput, TransferCompanyProjectOwnerForHumanInput,
     UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
     UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
@@ -182,6 +185,7 @@ mod chat;
 mod codex;
 mod company;
 mod dto;
+mod environments;
 mod project_files;
 mod project_repository;
 mod projects;
@@ -193,6 +197,7 @@ use chat::*;
 use codex::*;
 use company::*;
 use dto::*;
+use environments::*;
 use project_files::*;
 use project_repository::*;
 use projects::*;
@@ -622,6 +627,18 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/gates/{gate_id}",
             axum::routing::put(set_project_task_gate_requirement_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/environments",
+            get(list_project_environments_for_human).post(create_project_environment_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/environments/{environment_id}",
+            axum::routing::put(observe_project_environment_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/environments/{environment_id}",
+            axum::routing::put(set_project_task_environment_requirement_for_human),
         )
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/activate",
