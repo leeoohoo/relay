@@ -173,6 +173,22 @@ pub trait CodexRuntimePlatformRepository: Send + Sync {
             "Codex trigger run activity is not supported by this repository".into(),
         ))
     }
+    fn heartbeat_agent_codex_trigger_run(
+        &self,
+        _run_id: Uuid,
+        _heartbeat_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "Codex trigger run heartbeat is not supported by this repository".into(),
+        ))
+    }
+    fn watchdog_stale_agent_codex_trigger_runs(
+        &self,
+        _now: DateTime<Utc>,
+        _stale_before: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        Ok(0)
+    }
     fn list_agent_codex_trigger_runs(
         &self,
         _agent_id: Uuid,

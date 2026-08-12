@@ -980,7 +980,7 @@ apps/web/src/pages/projects/sessions.tsx
 
 ## 22. 实施进度（2026-08-12）
 
-本轮已完成事件路由、一次性控制快照、项目 Gate，以及完整的 Phase 3：Project Environment、Task Attempt、Blocker、Task Relation 与 Evidence Registry。Phase 4 至 Phase 5 仍按本方案继续推进，不能把本节视为整份方案已经全部完成。
+本轮已完成事件路由、一次性控制快照、项目 Gate、完整的 Phase 3，以及 Phase 4–5 的角色订阅、负载预警、Run 心跳、Watchdog、运行状态投影、讨论线程和 Gate 摘要卡片。Phase 0 的 Feature Flag/指标面板和最终五 Agent 压力场景仍作为后续专项，不阻塞 Phase 4–5 交付。
 
 ### 22.1 已完成
 
@@ -1005,6 +1005,16 @@ apps/web/src/pages/projects/sessions.tsx
 - [x] 数据库迁移 `0069_project_evidence`：新增结构化 Evidence 与项目内 `dedupe_key` 幂等约束。
 - [x] Human REST 与 Agent MCP 已提供 execution、attempt、blocker、relation 和 evidence 操作。
 - [x] 任务编辑详情按需加载执行记录，展示 Attempt 时间线、Blocker、Relation 与 Evidence，不把长列表塞回 Company Console 聚合响应。
+- [x] 数据库迁移 `0070_role_subscriptions`：新增项目成员事件订阅；项目创建和新增成员时按职业初始化 immediate/digest/on-demand/muted 策略。
+- [x] 项目消息唤醒按职责订阅过滤；BA 不再因 QA/Runtime 事件启动，技术负责人、QA、PM/Product 仅接收职责相关事件。
+- [x] 项目负载预警：单 Agent 持有超过 50% 未完成任务、Ready Task 超过 30 分钟、连续运行失败三次以上会在项目详情展示。
+- [x] 数据库迁移 `0071_run_heartbeat_runtime_projection`：Run 增加进程实例、心跳、状态原因、当前 Intent/Task、等待对象、会话类型和恢复来源。
+- [x] Trigger 运行中每 5 秒持久化心跳；Watchdog 每 10 秒检查，30 秒无心跳时回收 Run、释放租约并把运行中的 Intent 恢复为 pending。
+- [x] 统一 Agent Runtime Projection：前端可区分空闲、分诊、执行、依赖/环境/审批/Human 等待、汇报、恢复、失败和暂停。
+- [x] 数据库迁移 `0072_project_discussion_threads`：支持 Task、Blocker 和 Gate 讨论线程；线程创建后进入公司聊天列表。
+- [x] 项目暂停后禁止创建讨论线程或在任一项目会话继续发送消息。
+- [x] Gate 进入终态后由程序向项目群写简短摘要卡片，不通过全员唤醒来重复广播。
+- [x] 所有手写 Rust/TypeScript/CSS 源码保持不超过 1,000 行；Server 项目处理已拆出独立讨论线程模块。
 
 ### 22.2 自动化验证
 
@@ -1019,6 +1029,9 @@ apps/web/src/pages/projects/sessions.tsx
 - [x] Execution 集成测试覆盖“单任务单活动 Attempt、Attempt 失败不改写 Task、Blocker 门禁、Relation、Evidence 幂等与执行详情聚合”。
 - [x] MCP Schema 测试覆盖新增执行动作，并验证 Agent 任务状态只允许直接推进 `in_progress/done`。
 - [x] `0068/0069` 使用迁移执行器统一登记版本，避免 SQL 与执行器重复写入 `schema_migrations` 导致产品启动失败。
+- [x] Role Subscription 与 Runtime Projection 单元测试通过。
+- [x] Watchdog 单元测试覆盖失去心跳后 Run `lease_lost`、Trigger 租约释放和 Intent 恢复 pending。
+- [x] `0070/0071/0072` 已在真实 Docker PostgreSQL 应用，最终 Server 镜像和宿主机 Trigger 均已重建/重启。
 
 ### 22.3 真实 E2E 结果
 
@@ -1039,13 +1052,16 @@ apps/web/src/pages/projects/sessions.tsx
 13. Human 解决 Blocker 后任务可再次推进；执行详情保留 resolved Blocker 的时间线。
 14. 通过真实页面登记 `Phase 3 浏览器 E2E` Evidence，执行详情立即显示 1 条结构化证据；数据库确认任务仍为 `in_progress`，Blocker 与 Evidence 各保留一条。
 15. 浏览器 E2E 发现并修复执行面板按钮继承外层表单提交语义的问题，创建 Evidence、创建/解决 Blocker 均不会再意外保存任务或离开当前详情。
+16. 使用最终 Phase 4–5 镜像打开成员运行详情，确认可直接看到投影状态、当前任务、最近执行过程与历史 Run；宿主机绝对路径在摘要中已转为项目相对路径。
+17. 项目详情的 Task、Blocker、Gate 讨论入口和新讨论会话接口已通过真实页面/API 验证；重复打开同一对象会复用同一会话。
+18. 新 Trigger 启动日志确认 Watchdog 所在的最终二进制正常运行，Server/数据库/Harness 均健康。
 
 ### 22.4 待继续实施
 
 - [ ] Phase 0 剩余项：Feature Flag、唤醒决策指标与整改前后指标面板。
-- [ ] Phase 4：记忆治理、注入预算、角色事件订阅与负载预警。
-- [ ] Phase 5：Run 心跳、Watchdog、运行状态投影、讨论线程和摘要卡片。
-- [ ] 五 Agent、环境 Revision、QA Retest 的完整最终 E2E；当前已验收 Phase 1 至 Phase 3 的关键闭环。
+- [x] Phase 4：记忆治理、可配置软预算、角色事件订阅与负载预警。
+- [x] Phase 5：Run 心跳、Watchdog、运行状态投影、讨论线程和摘要卡片。
+- [ ] 五 Agent、环境 Revision、QA Retest 的完整最终压力 E2E；Phase 1–5 的关键状态闭环已分别验收，最终场景保留为发布前压力回归。
 
 ## 22. 风险与回滚
 

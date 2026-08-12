@@ -499,6 +499,15 @@ pub(super) fn map_agent_codex_trigger_run(row: Row) -> AgentCodexTriggerRun {
         activity_summary: row.get("activity_summary"),
         last_activity_at: row.get("last_activity_at"),
         activity_log,
+        process_instance_id: row.get("process_instance_id"),
+        heartbeat_at: row.get("heartbeat_at"),
+        state_reason: row.get("state_reason"),
+        current_intent_id: row.get("current_intent_id"),
+        current_task_id: row.get("current_task_id"),
+        waiting_on_type: row.get("waiting_on_type"),
+        waiting_on_id: row.get("waiting_on_id"),
+        session_kind: row.get("session_kind"),
+        resumes_run_id: row.get("resumes_run_id"),
     }
 }
 

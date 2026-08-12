@@ -47,6 +47,7 @@ export function ProjectGatesCard(props: {
   project: CompanyProject;
   token: string;
   canManage: boolean;
+  onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (notice: string) => void;
 }) {
@@ -149,6 +150,18 @@ export function ProjectGatesCard(props: {
     }
   }
 
+  async function openDiscussion(gate: ProjectGate) {
+    try {
+      const response = await api<{ conversation: { preview: { title: string } } }>(
+        `/api/v1/companies/${props.companyId}/projects/${props.project.project.id}/discussion-threads`,
+        { method: "POST", body: JSON.stringify({ scope_type: "gate", subject_id: gate.id }) },
+        props.token,
+      );
+      await props.onChanged();
+      props.onNotice(`${response.conversation.preview.title} 已建立，可在聊天列表中继续讨论`);
+    } catch (error) { props.onError(error); }
+  }
+
   return (
     <div className="project-gates-layout">
       <div className="project-tab-heading">
@@ -184,7 +197,7 @@ export function ProjectGatesCard(props: {
               {relatedTasks.length ? <div className="project-gate-tasks">{relatedTasks.map((task) => <span key={task!.id}><Icon name="tasks" />{task!.title}</span>)}</div> : null}
               {gate.required_evidence.length ? <ul>{gate.required_evidence.map((item) => <li key={item}>{item}</li>)}</ul> : null}
               {gate.decision_summary ? <p className="project-gate-decision">{gate.decision_summary}</p> : null}
-              {props.canManage && !["cancelled"].includes(gate.status) ? <div className="project-gate-actions"><input value={decisionDrafts[gate.id] ?? ""} onChange={(event) => setDecisionDrafts((current) => ({ ...current, [gate.id]: event.target.value }))} placeholder="填写评审结果或决策依据" /><button className="button small primary" disabled={busy} type="button" onClick={() => void decide(gate, "passed")}>通过</button><button className="button small" disabled={busy} type="button" onClick={() => void decide(gate, "waived")}>豁免</button><button className="button small danger-outline" disabled={busy} type="button" onClick={() => void decide(gate, "failed")}>不通过</button></div> : null}
+              <div className="project-gate-actions"><button className="button small" type="button" onClick={() => void openDiscussion(gate)}><Icon name="message" /> Gate 讨论</button>{props.canManage && !["cancelled"].includes(gate.status) ? <><input value={decisionDrafts[gate.id] ?? ""} onChange={(event) => setDecisionDrafts((current) => ({ ...current, [gate.id]: event.target.value }))} placeholder="填写评审结果或决策依据" /><button className="button small primary" disabled={busy} type="button" onClick={() => void decide(gate, "passed")}>通过</button><button className="button small" disabled={busy} type="button" onClick={() => void decide(gate, "waived")}>豁免</button><button className="button small danger-outline" disabled={busy} type="button" onClick={() => void decide(gate, "failed")}>不通过</button></> : null}</div>
             </article>
           );
         })}

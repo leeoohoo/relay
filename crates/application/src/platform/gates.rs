@@ -119,6 +119,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         ) {
             self.notify_project_tasks_ready_after_gate(&project, gate.id, gate.updated_at)?;
         }
+        self.publish_project_gate_summary(&project, &gate)?;
         Ok(gate)
     }
 
@@ -254,6 +255,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         ) {
             self.notify_project_tasks_ready_after_gate(&project, gate.id, gate.updated_at)?;
         }
+        self.publish_project_gate_summary(&project, &gate)?;
         Ok(gate)
     }
 
@@ -396,6 +398,61 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             notified += 1;
         }
         Ok(notified)
+    }
+
+    fn publish_project_gate_summary(
+        &self,
+        project: &CompanyProject,
+        gate: &ProjectGate,
+    ) -> AppResult<()> {
+        if !matches!(
+            gate.status.as_str(),
+            PROJECT_GATE_STATUS_PASSED | PROJECT_GATE_STATUS_FAILED | PROJECT_GATE_STATUS_WAIVED
+        ) {
+            return Ok(());
+        }
+        let status_label = match gate.status.as_str() {
+            PROJECT_GATE_STATUS_PASSED => "已通过",
+            PROJECT_GATE_STATUS_WAIVED => "已豁免",
+            _ => "未通过",
+        };
+        let tasks = self.repo.list_company_project_tasks_result(project.id)?;
+        let next_task = tasks.iter().find(|task| {
+            task.status == PROJECT_TASK_STATUS_TODO
+                && task.assignee_agent_id.is_some()
+                && self.project_task_gate_requirements_satisfied(project.id, task.id)
+                && self.project_task_environment_requirements_satisfied(project.id, task.id)
+                && !self.project_task_has_open_blockers(task.id)
+        });
+        let remaining_risks = tasks
+            .iter()
+            .flat_map(|task| self.repo.list_project_task_blockers(task.id))
+            .filter(|blocker| blocker.status == "open")
+            .count();
+        let owner_name = next_task
+            .and_then(|task| task.assignee_agent_id)
+            .and_then(|agent_id| self.repo.get_agent_profile(agent_id))
+            .map(|agent| agent.display_name)
+            .unwrap_or_else(|| "待分配".into());
+        let content = format!(
+            "{} {status_label}\n下一任务：{}\n负责人：{owner_name}\n剩余风险：{remaining_risks} 项\n决策：{}",
+            gate.title,
+            next_task.map(|task| task.title.as_str()).unwrap_or("暂无"),
+            gate.decision_summary
+        );
+        let message = MessageView {
+            id: Uuid::new_v4(),
+            conversation_id: project.project_group_conversation_id,
+            sender_agent_id: Some(project.owner_agent_id),
+            sender_human_user_id: None,
+            content,
+            attachments: Vec::new(),
+            created_at: gate.updated_at,
+        };
+        self.repo.append_message_with_metadata(
+            message,
+            json!({ "runtime_generated": true, "summary_kind": "gate" }),
+        )
     }
 }
 

@@ -251,6 +251,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         | CONVERSATION_CONTEXT_COMPANY_ALL
                         | CONVERSATION_CONTEXT_COMPANY_GROUP
                         | CONVERSATION_CONTEXT_PROJECT_GROUP
+                        | CONVERSATION_CONTEXT_TASK_THREAD
+                        | CONVERSATION_CONTEXT_BLOCKER_THREAD
+                        | CONVERSATION_CONTEXT_GATE_THREAD
                 )
             {
                 conversations.push(CompanyConversationView {
@@ -587,6 +590,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                             | CONVERSATION_CONTEXT_COMPANY_ALL
                             | CONVERSATION_CONTEXT_COMPANY_GROUP
                             | CONVERSATION_CONTEXT_PROJECT_GROUP
+                            | CONVERSATION_CONTEXT_TASK_THREAD
+                            | CONVERSATION_CONTEXT_BLOCKER_THREAD
+                            | CONVERSATION_CONTEXT_GATE_THREAD
                     )
             })
             .ok_or_else(|| {

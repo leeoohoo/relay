@@ -1,4 +1,5 @@
 use super::*;
+use ai_chat_domain::company::AGENT_CODEX_SESSION_KIND_CONTROL;
 
 fn seed_logged_in_company(
     repo: &MemoryPlatformRepository,
@@ -51,6 +52,61 @@ fn running_codex_run(agent_profile_id: Uuid) -> AgentCodexTriggerRun {
         activity_summary: Some("Codex 已开始执行".into()),
         last_activity_at: Some(now_utc()),
         activity_log: Vec::new(),
+        process_instance_id: Some("test-process".into()),
+        heartbeat_at: Some(now_utc()),
+        state_reason: Some("Codex 已开始执行".into()),
+        current_intent_id: None,
+        current_task_id: None,
+        waiting_on_type: None,
+        waiting_on_id: None,
+        session_kind: AGENT_CODEX_SESSION_KIND_CONTROL.into(),
+        resumes_run_id: None,
+    }
+}
+
+fn active_trigger_config(
+    company_id: Uuid,
+    agent_id: Uuid,
+    config_id: Uuid,
+    now: chrono::DateTime<chrono::Utc>,
+) -> AgentCodexTriggerConfig {
+    AgentCodexTriggerConfig {
+        id: config_id,
+        company_id,
+        agent_profile_id: agent_id,
+        status: AGENT_CODEX_TRIGGER_STATUS_ACTIVE.into(),
+        interval_seconds: 3_600,
+        codex_profile: "default".into(),
+        model: None,
+        reasoning_effort: None,
+        reasoning_summary: None,
+        verbosity: None,
+        personality: None,
+        service_tier: None,
+        sandbox_mode: "workspace_write".into(),
+        approval_policy: "never".into(),
+        network_access: None,
+        web_search: None,
+        feature_multi_agent: None,
+        feature_remote_plugin: None,
+        feature_hooks: None,
+        feature_goals: None,
+        feature_shell_tool: None,
+        max_run_seconds: 1_800,
+        next_run_at: now + chrono::Duration::hours(1),
+        lease_owner: Some("stale-worker".into()),
+        lease_expires_at: Some(now + chrono::Duration::minutes(5)),
+        manual_run_requested_at: None,
+        wake_requested_at: None,
+        wake_reason: None,
+        last_run_at: Some(now),
+        last_success_at: None,
+        last_error: None,
+        consecutive_failure_count: 0,
+        created_by_human_user_id: Uuid::new_v4(),
+        updated_by_human_user_id: None,
+        created_at: now,
+        updated_at: now,
     }
 }
 
@@ -78,6 +134,84 @@ fn codex_trigger_allows_only_one_running_cycle_per_agent() {
         .expect("completed cycle should be saved");
     repo.insert_agent_codex_trigger_run(second)
         .expect("a new cycle should be allowed after the previous one ends");
+}
+
+#[test]
+fn watchdog_recovers_stale_run_lease_and_running_intent() {
+    let repo = MemoryPlatformRepository::default();
+    let now = now_utc();
+    let company_id = Uuid::new_v4();
+    let agent_id = Uuid::new_v4();
+    let config_id = Uuid::new_v4();
+    let intent_id = Uuid::new_v4();
+    let mut run = running_codex_run(agent_id);
+    run.trigger_config_id = config_id;
+    run.heartbeat_at = Some(now - chrono::Duration::minutes(2));
+    run.last_activity_at = run.heartbeat_at;
+    run.current_intent_id = Some(intent_id);
+
+    {
+        let mut guard = repo.inner.write().expect("memory repo lock poisoned");
+        guard.agent_codex_trigger_configs.insert(
+            agent_id,
+            active_trigger_config(company_id, agent_id, config_id, now),
+        );
+        guard.agent_codex_trigger_runs.insert(run.id, run.clone());
+        guard.agent_execution_intents.insert(
+            intent_id,
+            AgentExecutionIntent {
+                id: intent_id,
+                company_id,
+                agent_profile_id: agent_id,
+                project_id: Uuid::new_v4(),
+                worker_session_id: None,
+                source_event_ids: Vec::new(),
+                task_ids: vec![Uuid::new_v4()],
+                action_type: "execute".into(),
+                objective: "resume after lost heartbeat".into(),
+                acceptance_criteria: Vec::new(),
+                priority: "high".into(),
+                dedupe_key: "watchdog-recovery".into(),
+                status: AGENT_EXECUTION_INTENT_STATUS_RUNNING.into(),
+                result_summary: String::new(),
+                error_message: None,
+                created_at: now,
+                claimed_at: Some(now - chrono::Duration::minutes(2)),
+                completed_at: None,
+            },
+        );
+    }
+
+    let recovered = repo
+        .watchdog_stale_agent_codex_trigger_runs(now, now - chrono::Duration::seconds(30))
+        .expect("watchdog should recover stale work");
+
+    assert_eq!(recovered, 1);
+    let guard = repo.inner.read().expect("memory repo lock poisoned");
+    let recovered_run = guard
+        .agent_codex_trigger_runs
+        .get(&run.id)
+        .expect("recovered run");
+    assert_eq!(recovered_run.status, AGENT_CODEX_RUN_STATUS_LEASE_LOST);
+    assert_eq!(recovered_run.activity_phase, "lease_lost");
+    assert_eq!(recovered_run.finished_at, Some(now));
+    let config = guard
+        .agent_codex_trigger_configs
+        .get(&agent_id)
+        .expect("trigger config");
+    assert!(config.lease_owner.is_none());
+    assert!(config.lease_expires_at.is_none());
+    assert_eq!(config.next_run_at, now);
+    let intent = guard
+        .agent_execution_intents
+        .get(&intent_id)
+        .expect("execution intent");
+    assert_eq!(intent.status, AGENT_EXECUTION_INTENT_STATUS_PENDING);
+    assert!(intent.claimed_at.is_none());
+    assert!(intent
+        .error_message
+        .as_deref()
+        .is_some_and(|value| value.contains("心跳丢失")));
 }
 
 #[test]

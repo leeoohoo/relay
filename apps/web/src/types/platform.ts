@@ -237,6 +237,13 @@ export type CompanyProject = {
     metadata: Record<string, unknown>;
     created_at: string;
   }>;
+  load_warnings?: Array<{
+    code: string;
+    severity: "warning" | "critical";
+    agent_profile_id: string | null;
+    title: string;
+    detail: string;
+  }>;
 };
 
 export type CompanyProjectType = {
@@ -272,6 +279,15 @@ export type CodexTriggerRun = {
     phase: string;
     summary: string;
   }>;
+  process_instance_id?: string | null;
+  heartbeat_at?: string | null;
+  state_reason?: string | null;
+  current_intent_id?: string | null;
+  current_task_id?: string | null;
+  waiting_on_type?: string | null;
+  waiting_on_id?: string | null;
+  session_kind?: "control" | "project";
+  resumes_run_id?: string | null;
 };
 
 export type CodexSession = {
@@ -343,6 +359,18 @@ export type CodexTriggerView = {
     claimed_at: string | null;
   }>;
   recent_sessions: CodexSession[];
+  runtime?: {
+    state: "idle" | "triaging" | "executing" | "waiting_dependency" | "waiting_environment" | "waiting_approval" | "waiting_human" | "reporting" | "recovering" | "failed" | "paused";
+    reason: string;
+    session_kind: "control" | "project" | null;
+    run_id: string | null;
+    intent_id: string | null;
+    task_id: string | null;
+    waiting_on_type: string | null;
+    waiting_on_id: string | null;
+    heartbeat_at: string | null;
+    stale: boolean;
+  };
 };
 
 export type CodexRunnerProfileView = {

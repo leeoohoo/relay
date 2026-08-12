@@ -6,9 +6,11 @@ use uuid::Uuid;
 pub mod environments;
 pub mod execution;
 pub mod gates;
+pub mod orchestration;
 pub use environments::*;
 pub use execution::*;
 pub use gates::*;
+pub use orchestration::*;
 
 pub const COMPANY_ROLE_OWNER: &str = "owner";
 pub const COMPANY_ROLE_ADMIN: &str = "admin";
@@ -588,6 +590,15 @@ pub struct AgentCodexTriggerRun {
     pub activity_summary: Option<String>,
     pub last_activity_at: Option<DateTime<Utc>>,
     pub activity_log: Vec<AgentCodexRunActivity>,
+    pub process_instance_id: Option<String>,
+    pub heartbeat_at: Option<DateTime<Utc>>,
+    pub state_reason: Option<String>,
+    pub current_intent_id: Option<Uuid>,
+    pub current_task_id: Option<Uuid>,
+    pub waiting_on_type: Option<String>,
+    pub waiting_on_id: Option<Uuid>,
+    pub session_kind: String,
+    pub resumes_run_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

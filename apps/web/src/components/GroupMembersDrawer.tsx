@@ -135,7 +135,10 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
           <span><small>连接</small><strong>{connectionLabel(props.agent.connection.status)}</strong></span>
           <span><small>Trigger</small><strong>{triggerStatusLabel(props.runtime.trigger)}</strong></span>
           {latestRun ? <span><small>{latestRun.status === "running" ? "已运行" : "最近执行"}</small><strong>{latestRun.status === "running" ? formatElapsed(latestRun.started_at) : formatTime(latestRun.started_at)}</strong></span> : null}
+          {props.runtime.trigger?.runtime?.session_kind ? <span><small>会话</small><strong>{props.runtime.trigger.runtime.session_kind === "project" ? "项目工作" : "控制分诊"}</strong></span> : null}
+          {props.runtime.trigger?.runtime?.heartbeat_at ? <span><small>心跳</small><strong>{formatTime(props.runtime.trigger.runtime.heartbeat_at)}</strong></span> : null}
         </div>
+        {props.runtime.trigger?.runtime ? <div className={`runtime-projection ${props.runtime.trigger.runtime.state}`}><strong>{runtimeProjectionLabel(props.runtime.trigger.runtime.state)}</strong><span>{props.runtime.trigger.runtime.reason}</span></div> : null}
 
         {props.tasks.length ? (
           <section className="runtime-task-section">
@@ -233,6 +236,11 @@ function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: Compan
   const trigger = runtime.trigger;
   if (!trigger) return agent.connection.status === "connected" ? "idle" : "offline";
   if (trigger.config.status !== "active") return trigger.config.status;
+  if (trigger.runtime?.state === "executing") return "running";
+  if (trigger.runtime?.state === "recovering") return "continuing";
+  if (trigger.runtime?.state === "triaging" || trigger.runtime?.state === "reporting") return "queued";
+  if (trigger.runtime?.state === "waiting_approval" || trigger.runtime?.state.startsWith("waiting_")) return "continuing";
+  if (trigger.runtime?.state === "failed") return "error";
   if (trigger.active_intents?.some((intent) => intent.status === "running")) return "running";
   if (trigger.recent_runs.some((run) => run.status === "running")) return "running";
   if (trigger.active_intents?.length) return "continuing";
@@ -244,6 +252,7 @@ function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: Compan
 function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task: CompanyProjectTask | null, operationalStatus: string) {
   if (runtime.loading) return "正在同步运行数据";
   if (runtime.error) return "无法读取运行详情";
+  if (runtime.trigger?.runtime?.reason && runtime.trigger.runtime.state !== "idle") return runtime.trigger.runtime.reason;
   if (operationalStatus === "queued") return "任务已进入执行队列";
   if (operationalStatus === "continuing" && task) return `任务尚未完成，等待接续或外部条件 · ${task.title}`;
   if (operationalStatus === "paused") return "Trigger 已暂停";
@@ -252,6 +261,10 @@ function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task
   if (task) return `${taskStatusLabel(task.status)} · ${task.title}`;
   if (run) return runDisplayMessage(run);
   return runtime.trigger ? "当前空闲，等待新任务" : "尚未启用运行配置";
+}
+
+function runtimeProjectionLabel(value: NonNullable<CodexTriggerView["runtime"]>["state"]) {
+  return ({ idle: "空闲", triaging: "控制分诊", executing: "执行任务", waiting_dependency: "等待依赖", waiting_environment: "等待环境", waiting_approval: "等待审批", waiting_human: "等待 Human", reporting: "整理汇报", recovering: "恢复接续", failed: "运行异常", paused: "已暂停" } as Record<string, string>)[value] ?? value;
 }
 
 function runtimeStatusLabel(value: string) {

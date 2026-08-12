@@ -19,6 +19,7 @@ pub(super) async fn process_claimed_trigger(
         workspace_manager,
         codex_runner,
         codex_control,
+        service_config,
         &trigger,
     )
     .await;
@@ -132,6 +133,7 @@ pub(super) async fn execute_trigger(
     workspace_manager: &GitWorkspaceManager,
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
+    service_config: &TriggerServiceConfig,
     trigger: &AgentCodexTriggerConfig,
 ) -> AppResult<TriggerExecution> {
     if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
@@ -211,6 +213,19 @@ pub(super) async fn execute_trigger(
         activity_summary: Some(initial_activity.summary.clone()),
         last_activity_at: Some(initial_activity.at),
         activity_log: vec![initial_activity],
+        process_instance_id: Some(service_config.lease_owner.clone()),
+        heartbeat_at: Some(started_at),
+        state_reason: Some("正在准备 Agent 控制会话".into()),
+        current_intent_id: None,
+        current_task_id: None,
+        waiting_on_type: None,
+        waiting_on_id: None,
+        session_kind: AGENT_CODEX_SESSION_KIND_CONTROL.into(),
+        resumes_run_id: platform
+            .list_agent_codex_trigger_runs(trigger.agent_profile_id, 5)
+            .into_iter()
+            .find(|candidate| candidate.status == AGENT_CODEX_RUN_STATUS_RESTARTED)
+            .map(|candidate| candidate.id),
     };
     platform.insert_agent_codex_trigger_run(run.clone())?;
     let token_expiry =
@@ -344,6 +359,10 @@ pub(super) async fn execute_trigger(
         intent.claimed_at = Some(now_utc());
         platform.update_agent_execution_intent(intent.clone())?;
         run.project_id = Some(intent.project_id);
+        run.current_intent_id = Some(intent.id);
+        run.current_task_id = intent.task_ids.first().copied();
+        run.session_kind = AGENT_CODEX_SESSION_KIND_PROJECT.into();
+        run.state_reason = Some(intent.objective.clone());
         platform.update_agent_codex_trigger_run(run.clone())?;
         record_run_activity(
             platform,
@@ -707,8 +726,10 @@ async fn run_codex_stage(
     let remaining_run_seconds = configured_run_seconds
         .saturating_sub(elapsed_seconds)
         .max(1);
-    let mut result = codex_runner
-        .run(CodexRunRequest {
+    let mut result = run_with_heartbeat(
+        platform,
+        run.id,
+        codex_runner.run(CodexRunRequest {
             cwd: workspace.path.clone(),
             codex_profile: trigger.codex_profile.clone(),
             model: settings.model.clone(),
@@ -761,8 +782,9 @@ async fn run_codex_stage(
                 agent_id: trigger.agent_profile_id,
                 project_id,
             }) as Arc<dyn CodexCancellationHandler>),
-        })
-        .await?;
+        }),
+    )
+    .await?;
     if let Some(message) = result.final_message.as_mut() {
         *message = sanitize_workspace_output(message, &workspace.path);
     }

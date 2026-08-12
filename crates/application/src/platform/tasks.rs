@@ -71,6 +71,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     },
                 },
             })?;
+        let _ = self.ensure_project_member_default_subscriptions(project.id, input.target_agent_id);
         let _ = self.enqueue_agent_event(
             input.target_agent_id,
             "company.project.member_added",

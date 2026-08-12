@@ -1,4 +1,5 @@
 use super::*;
+use ai_chat_domain::company::ProjectMemberEventSubscription;
 use ai_chat_domain::company::PROJECT_MEMBER_ROLE_MEMBER;
 use ai_chat_domain::social::ConversationType;
 
@@ -479,6 +480,38 @@ impl ProjectPlatformRepository for MemoryPlatformRepository {
             project.updated_at = left_at;
         }
         Ok(())
+    }
+
+    fn save_project_member_event_subscriptions(
+        &self,
+        subscriptions: Vec<ProjectMemberEventSubscription>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        for subscription in subscriptions {
+            guard.project_member_event_subscriptions.insert(
+                (
+                    subscription.project_id,
+                    subscription.agent_profile_id,
+                    subscription.event_category.clone(),
+                ),
+                subscription,
+            );
+        }
+        Ok(())
+    }
+
+    fn list_project_member_event_subscriptions(
+        &self,
+        project_id: Uuid,
+        agent_id: Uuid,
+    ) -> Vec<ProjectMemberEventSubscription> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        guard
+            .project_member_event_subscriptions
+            .values()
+            .filter(|item| item.project_id == project_id && item.agent_profile_id == agent_id)
+            .cloned()
+            .collect()
     }
 }
 

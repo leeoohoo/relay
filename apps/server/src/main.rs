@@ -53,7 +53,8 @@ use ai_chat_application::{
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
     ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput,
     ListProjectEnvironmentsForHumanInput, ListProjectGatesForHumanInput, LoginHumanInput,
-    ObserveProjectEnvironmentForHumanInput, OpenHumanCompanyDirectConversationInput, PlatformApp,
+    ObserveProjectEnvironmentForHumanInput, OpenHumanCompanyDirectConversationInput,
+    OpenProjectDiscussionThreadForHumanInput, PlatformApp,
     ProjectEnvironmentServiceObservationInput, ProjectProvisioningCleanupJob,
     PublishCompanyGovernancePolicyInput, RegisterHumanInput,
     RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
@@ -186,6 +187,7 @@ mod codex;
 mod company;
 mod dto;
 mod environments;
+mod project_discussions;
 mod project_files;
 mod project_repository;
 mod projects;
@@ -199,6 +201,7 @@ use codex::*;
 use company::*;
 use dto::*;
 use environments::*;
+use project_discussions::*;
 use project_files::*;
 use project_repository::*;
 use projects::*;
@@ -425,6 +428,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/projects",
             get(list_company_console_projects).post(create_company_project_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/discussion-threads",
+            post(open_project_discussion_thread),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/import-folder",

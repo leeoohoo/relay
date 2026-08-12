@@ -45,14 +45,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         config.updated_by_human_user_id = Some(input.human_user_id);
         config.updated_at = now;
         self.repo.save_agent_codex_trigger_config(config.clone())?;
+        let recent_runs = self.recent_agent_codex_runs_for_human(input.agent_id, 20)?;
+        let active_intents = self.active_agent_execution_intents(input.agent_id);
+        let runtime = self.project_agent_runtime(&config, &recent_runs, &active_intents);
         Ok(CompanyAgentCodexTriggerView {
-            recent_runs: self.recent_agent_codex_runs_for_human(input.agent_id, 20)?,
-            active_intents: self.active_agent_execution_intents(input.agent_id),
+            recent_runs,
+            active_intents,
             recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
             config,
+            runtime,
         })
     }
 
@@ -355,6 +359,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.repo.insert_agent_codex_trigger_run(run)
     }
 
+    pub fn list_agent_codex_trigger_runs(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentCodexTriggerRun> {
+        self.repo
+            .list_agent_codex_trigger_runs(agent_id, limit.clamp(1, 100))
+    }
+
     pub fn has_running_agent_codex_trigger_run(&self, agent_id: Uuid) -> bool {
         self.repo.has_running_agent_codex_trigger_run(agent_id)
     }
@@ -371,6 +384,22 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<()> {
         self.repo
             .append_agent_codex_trigger_run_activity(run_id, activity, codex_thread_id)
+    }
+
+    pub fn heartbeat_agent_codex_trigger_run(&self, run_id: Uuid) -> AppResult<()> {
+        self.repo
+            .heartbeat_agent_codex_trigger_run(run_id, now_utc())
+    }
+
+    pub fn watchdog_stale_agent_codex_trigger_runs(
+        &self,
+        stale_after_seconds: i64,
+    ) -> AppResult<usize> {
+        let now = now_utc();
+        self.repo.watchdog_stale_agent_codex_trigger_runs(
+            now,
+            now - Duration::seconds(stale_after_seconds.clamp(15, 300)),
+        )
     }
 
     pub fn complete_agent_codex_trigger_lease(

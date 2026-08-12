@@ -23,6 +23,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                             | CONVERSATION_CONTEXT_COMPANY_ALL
                             | CONVERSATION_CONTEXT_COMPANY_GROUP
                             | CONVERSATION_CONTEXT_PROJECT_GROUP
+                            | CONVERSATION_CONTEXT_TASK_THREAD
+                            | CONVERSATION_CONTEXT_BLOCKER_THREAD
+                            | CONVERSATION_CONTEXT_GATE_THREAD
                     )
             })
             .ok_or_else(|| {
@@ -195,6 +198,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .iter()
             .copied()
             .filter(|agent_id| {
+                let subscription_allows_immediate = self
+                    .project_event_subscription_mode(project_id, *agent_id, EVENT_CATEGORY_TASK)
+                    .is_ok_and(|mode| mode == EVENT_SUBSCRIPTION_IMMEDIATE);
                 tasks.iter().any(|task| {
                     task.assignee_agent_id == Some(*agent_id)
                         && matches!(
@@ -215,7 +221,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                                         )
                                     })
                             })
-                })
+                }) && subscription_allows_immediate
             })
             .collect())
     }

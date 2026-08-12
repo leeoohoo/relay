@@ -235,6 +235,12 @@ pub(super) struct ResolveProjectTaskBlockerRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct OpenProjectDiscussionThreadRequest {
+    pub(super) scope_type: String,
+    pub(super) subject_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct AddProjectTaskRelationRequest {
     pub(super) target_task_id: Uuid,
     pub(super) relation_type: String,

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use ai_chat_domain::agent_identity::AgentInboxEvent;
 use ai_chat_domain::company::{
     AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
-    AgentExecutionIntent, CodexPluginCatalogSnapshot, CodexPluginOperation,
+    AgentExecutionIntent, AgentRuntimeProjection, CodexPluginCatalogSnapshot, CodexPluginOperation,
     CompanyCodexRunnerProfile, CompanyProject, CompanyProjectGitConfig, CompanyProjectTask,
 };
 
@@ -16,6 +16,7 @@ pub struct CompanyAgentCodexTriggerView {
     pub active_intents: Vec<AgentExecutionIntent>,
     pub recent_sessions: Vec<AgentCodexSession>,
     pub runner_profile_id: Option<Uuid>,
+    pub runtime: AgentRuntimeProjection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

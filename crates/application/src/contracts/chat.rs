@@ -167,6 +167,23 @@ pub struct CompanyConversationCreationBundle {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProjectDiscussionThreadCreationBundle {
+    pub thread: ai_chat_domain::company::ProjectDiscussionThread,
+    pub company_id: Uuid,
+    pub title: String,
+    pub member_agent_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenProjectDiscussionThreadForHumanInput {
+    pub human_user_id: Uuid,
+    pub company_id: Uuid,
+    pub project_id: Uuid,
+    pub scope_type: String,
+    pub subject_id: Uuid,
+}
+
+#[derive(Debug, Clone)]
 pub struct HumanCompanyDirectConversationCreationBundle {
     pub company_id: Uuid,
     pub human_user_id: Uuid,

@@ -495,6 +495,41 @@ button.message-entity-reference:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.runtime-projection {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  font-size: 12px;
+}
+
+.runtime-projection strong { flex: 0 0 auto; }
+.runtime-projection span { color: var(--text-muted); line-height: 1.45; }
+.runtime-projection.failed { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+
+.project-load-warnings {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.project-load-warnings > div {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.project-load-warnings span { display: grid; gap: 2px; }
+.project-load-warnings small { color: var(--text-muted); }
+.project-load-warnings .critical { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
 .runtime-task-section,
 .runtime-process-section,
 .runtime-history-section,

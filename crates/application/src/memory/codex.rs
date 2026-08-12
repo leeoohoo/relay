@@ -567,6 +567,8 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
         run.activity_phase = activity.phase.clone();
         run.activity_summary = Some(activity.summary.clone());
         run.last_activity_at = Some(activity.at);
+        run.heartbeat_at = Some(activity.at);
+        run.state_reason = Some(activity.summary.clone());
         if codex_thread_id.is_some() {
             run.codex_thread_id = codex_thread_id;
         }
@@ -576,6 +578,70 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             run.activity_log.drain(0..excess);
         }
         Ok(())
+    }
+
+    fn heartbeat_agent_codex_trigger_run(
+        &self,
+        run_id: Uuid,
+        heartbeat_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let run = guard
+            .agent_codex_trigger_runs
+            .get_mut(&run_id)
+            .filter(|run| run.status == AGENT_CODEX_RUN_STATUS_RUNNING)
+            .ok_or_else(|| {
+                ai_chat_shared::AppError::Conflict("Codex trigger run is no longer running".into())
+            })?;
+        run.heartbeat_at = Some(heartbeat_at);
+        Ok(())
+    }
+
+    fn watchdog_stale_agent_codex_trigger_runs(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        stale_before: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<usize> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let stale_agent_ids = guard
+            .agent_codex_trigger_runs
+            .values_mut()
+            .filter(|run| run.status == AGENT_CODEX_RUN_STATUS_RUNNING)
+            .filter(|run| {
+                run.heartbeat_at
+                    .or(run.last_activity_at)
+                    .unwrap_or(run.started_at)
+                    < stale_before
+            })
+            .map(|run| {
+                run.status = AGENT_CODEX_RUN_STATUS_LEASE_LOST.into();
+                run.finished_at = Some(now);
+                run.activity_phase = "lease_lost".into();
+                run.activity_summary = Some("运行心跳已停止，Watchdog 已回收本轮".into());
+                run.state_reason = Some("run_heartbeat_lost: Trigger 进程没有继续报告心跳".into());
+                run.error_message =
+                    Some("run_heartbeat_lost: Trigger process heartbeat stopped".into());
+                run.agent_profile_id
+            })
+            .collect::<std::collections::HashSet<_>>();
+        for agent_id in &stale_agent_ids {
+            if let Some(config) = guard.agent_codex_trigger_configs.get_mut(agent_id) {
+                config.lease_owner = None;
+                config.lease_expires_at = None;
+                config.next_run_at = config.next_run_at.min(now);
+                config.updated_at = now;
+            }
+        }
+        for intent in guard.agent_execution_intents.values_mut().filter(|intent| {
+            intent.status == AGENT_EXECUTION_INTENT_STATUS_RUNNING
+                && stale_agent_ids.contains(&intent.agent_profile_id)
+        }) {
+            intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+            intent.claimed_at = None;
+            intent.completed_at = None;
+            intent.error_message = Some("上一个运行心跳丢失，Relay 已安排从原项目会话恢复".into());
+        }
+        Ok(stale_agent_ids.len())
     }
 
     fn list_agent_codex_trigger_runs(

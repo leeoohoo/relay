@@ -18,8 +18,8 @@ use ai_chat_application::{
     EnvironmentPlatformRepository, ExecutionPlatformRepository, GatePlatformRepository,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
     ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, MessagePageView,
-    ProjectPlatformRepository, ProjectProvisioningCleanupJob, RegistrationCompletionBundle,
-    TaskPlatformRepository,
+    ProjectDiscussionThreadCreationBundle, ProjectPlatformRepository,
+    ProjectProvisioningCleanupJob, RegistrationCompletionBundle, TaskPlatformRepository,
 };
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,
@@ -37,9 +37,10 @@ use ai_chat_domain::company::{
     CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig,
     CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
     CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRealtimeEvent, OrgUnit,
-    ProjectEnvironment, ProjectEnvironmentService, ProjectEvidence, ProjectGate,
-    ProjectTaskAttempt, ProjectTaskBlocker, ProjectTaskEnvironmentRequirement,
-    ProjectTaskGateRequirement, ProjectTaskRelation, COMPANY_AGENT_ROLE_MANAGER,
+    ProjectDiscussionThread, ProjectEnvironment, ProjectEnvironmentService, ProjectEvidence,
+    ProjectGate, ProjectMemberEventSubscription, ProjectTaskAttempt, ProjectTaskBlocker,
+    ProjectTaskEnvironmentRequirement, ProjectTaskGateRequirement, ProjectTaskRelation,
+    COMPANY_AGENT_ROLE_MANAGER,
 };
 use ai_chat_domain::social::{
     ConversationContext, ConversationPreview, ConversationType, MessageView,
