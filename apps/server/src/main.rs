@@ -82,7 +82,9 @@ use ai_chat_infrastructure::codex_control::{
 };
 use ai_chat_infrastructure::codex_trigger::CodexModelCatalogFile;
 use ai_chat_infrastructure::config::{ApiConfig, HarnessMode, McpConfig};
-use ai_chat_infrastructure::git_credentials::{managed_token_profile_name, GitCredentialStore};
+use ai_chat_infrastructure::git_credentials::{
+    is_managed_token_profile, managed_token_profile_name, GitCredentialStore,
+};
 use ai_chat_infrastructure::harness::{
     HarnessProjectGitProvisioner, HarnessProvisioner, HarnessRepositoryContent,
 };

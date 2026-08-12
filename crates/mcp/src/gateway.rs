@@ -40,6 +40,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
             project_id: project.project.id,
             project_name: project.project.name.clone(),
             description: project.project.description.clone(),
+            initialize_default_branch: true,
         })?;
         self.platform
             .upsert_company_project_git(UpsertCompanyProjectGitInput {

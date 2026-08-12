@@ -11,6 +11,12 @@ use ai_chat_shared::{AppError, AppResult};
 
 use command::{ref_exists, run_git, run_git_bytes};
 pub use manager::{is_git_authentication_error, GitWorkspaceManager, PreparedGitWorkspace};
+
+pub fn is_missing_default_branch_error(error: &AppError) -> bool {
+    error
+        .to_string()
+        .contains("was not found in the project Git remote")
+}
 use recovery::{
     agent_worktree_has_no_user_files, attach_detached_agent_repository,
     migrate_legacy_linked_worktree,

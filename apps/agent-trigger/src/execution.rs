@@ -596,6 +596,8 @@ async fn execute_project_intent(
         trigger.agent_profile_id,
         agent.owner_user_id,
         &agent.handle,
+        &project_view.project.name,
+        &project_view.project.description,
         &git,
     )
     .await?;

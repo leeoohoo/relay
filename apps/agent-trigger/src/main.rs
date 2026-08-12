@@ -58,7 +58,10 @@ use ai_chat_infrastructure::{
     },
     config::ApiConfig,
     git_credentials::is_managed_token_profile,
-    git_workspace::{is_git_authentication_error, GitWorkspaceManager, PreparedGitWorkspace},
+    git_workspace::{
+        is_git_authentication_error, is_missing_default_branch_error, GitWorkspaceManager,
+        PreparedGitWorkspace,
+    },
     harness::HarnessProvisioner,
     RepositoryAdapter,
 };

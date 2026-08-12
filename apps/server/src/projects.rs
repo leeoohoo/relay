@@ -498,6 +498,7 @@ async fn provision_imported_project_git(
             project_id,
             project_name,
             description,
+            false,
             &state.git_credential_store,
         )
         .await?;

@@ -604,7 +604,7 @@ async fn failed_project_token_creation_deletes_the_new_repository() {
     let project_id = Uuid::new_v4();
 
     let error = provisioner
-        .provision_project_git(user.id, project_id, "Rollback", "", &git_credentials)
+        .provision_project_git(user.id, project_id, "Rollback", "", false, &git_credentials)
         .await
         .expect_err("project token failure must abort provisioning");
     assert!(error.to_string().contains("project token"));

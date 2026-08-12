@@ -1,6 +1,48 @@
 use super::*;
+use crate::project_git::ensure_remote_default_branch;
 
 impl<R: PlatformRepository> HarnessProvisioner<R> {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ensure_project_default_branch(
+        &self,
+        human_user_id: Uuid,
+        project_id: Uuid,
+        remote_url: &str,
+        default_branch: &str,
+        project_name: &str,
+        description: &str,
+        git_credentials: &GitCredentialStore,
+    ) -> AppResult<bool> {
+        let access = self
+            .repository_access(human_user_id, remote_url)?
+            .ok_or_else(|| {
+                AppError::Validation("project is not a managed Harness repository".into())
+            })?;
+        let internal_base = reqwest::Url::parse(access.api_base_url.as_str()).map_err(|error| {
+            AppError::Validation(format!("invalid Harness internal URL: {error}"))
+        })?;
+        let push_url = internal_base
+            .join(&format!("git/{}.git", access.repository_path))
+            .map_err(|error| AppError::Validation(format!("invalid Harness push URL: {error}")))?;
+        let auth_profile = git_credentials
+            .has_managed_git_token(project_id)
+            .then(|| crate::git_credentials::managed_token_profile_name(project_id))
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "managed Git credential is unavailable for repository initialization".into(),
+                )
+            })?;
+        ensure_remote_default_branch(
+            project_id,
+            push_url.as_str(),
+            default_branch,
+            auth_profile.as_str(),
+            project_name,
+            description,
+            git_credentials,
+        )
+    }
+
     pub async fn cleanup_project_git_resources_by_identifier(
         &self,
         human_user_id: Uuid,
@@ -44,6 +86,44 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         access_token_identifier: Option<&str>,
         git_credentials: &GitCredentialStore,
     ) -> AppResult<()> {
+        self.cleanup_project_git_resources_inner(
+            human_user_id,
+            project_id,
+            repository_identifier,
+            access_token_identifier,
+            git_credentials,
+            true,
+        )
+        .await
+    }
+
+    pub(super) async fn cleanup_project_git_credentials(
+        &self,
+        human_user_id: Uuid,
+        project_id: Uuid,
+        access_token_identifier: Option<&str>,
+        git_credentials: &GitCredentialStore,
+    ) -> AppResult<()> {
+        self.cleanup_project_git_resources_inner(
+            human_user_id,
+            project_id,
+            "",
+            access_token_identifier,
+            git_credentials,
+            false,
+        )
+        .await
+    }
+
+    async fn cleanup_project_git_resources_inner(
+        &self,
+        human_user_id: Uuid,
+        project_id: Uuid,
+        repository_identifier: &str,
+        access_token_identifier: Option<&str>,
+        git_credentials: &GitCredentialStore,
+        delete_repository: bool,
+    ) -> AppResult<()> {
         let mut failures = Vec::new();
         if let Err(error) = git_credentials.remove_project_tokens(project_id) {
             failures.push(format!("remove local Git credentials: {error}"));
@@ -70,22 +150,24 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                         }
                     }
                 }
-                let repository_ref = format!(
-                    "{}%2F{}",
-                    account.space_identifier.replace('/', "%2F"),
-                    repository_identifier
-                );
-                let endpoint = format!("{api_base_url}/api/v1/repos/{repository_ref}");
-                if let Err(error) = self
-                    .request_without_response(
-                        Method::DELETE,
-                        endpoint.as_str(),
-                        Some(access_token.as_str()),
-                    )
-                    .await
-                {
-                    if !error.is_not_found() {
-                        failures.push(format!("delete Harness repository: {error}"));
+                if delete_repository {
+                    let repository_ref = format!(
+                        "{}%2F{}",
+                        account.space_identifier.replace('/', "%2F"),
+                        repository_identifier
+                    );
+                    let endpoint = format!("{api_base_url}/api/v1/repos/{repository_ref}");
+                    if let Err(error) = self
+                        .request_without_response(
+                            Method::DELETE,
+                            endpoint.as_str(),
+                            Some(access_token.as_str()),
+                        )
+                        .await
+                    {
+                        if !error.is_not_found() {
+                            failures.push(format!("delete Harness repository: {error}"));
+                        }
                     }
                 }
             }

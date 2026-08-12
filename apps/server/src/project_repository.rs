@@ -77,12 +77,39 @@ pub(super) async fn list_company_project_repository_refs(
     Path((company_id, project_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ProjectRepositoryRefsResponse>, ApiError> {
     let human = authenticate_human_request(&state, &headers)?;
+    let project = state
+        .platform
+        .get_company_project_for_human_manager(human.id, company_id, project_id)?;
     let git = project_repository_git(&state, human.id, company_id, project_id)?;
-    let refs = state
+    let mut refs = state
         .harness_provisioner
         .list_repository_refs(human.id, git.remote_url.as_str())
         .await?
         .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
+    if refs.is_empty()
+        && git
+            .auth_profile
+            .as_deref()
+            .is_some_and(is_managed_token_profile)
+    {
+        state
+            .harness_provisioner
+            .ensure_project_default_branch(
+                human.id,
+                project_id,
+                git.remote_url.as_str(),
+                git.default_branch.as_str(),
+                project.project.name.as_str(),
+                project.project.description.as_str(),
+                &state.git_credential_store,
+            )
+            .await?;
+        refs = state
+            .harness_provisioner
+            .list_repository_refs(human.id, git.remote_url.as_str())
+            .await?
+            .ok_or_else(|| non_harness_repository_error(state.harness_provisioner.is_enabled()))?;
+    }
     let refs = harness_repository_refs(refs, git.default_branch.as_str());
     Ok(Json(repository_refs_response(refs, "harness_api")?))
 }
