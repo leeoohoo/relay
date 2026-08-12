@@ -189,6 +189,7 @@ mod environments;
 mod project_files;
 mod project_repository;
 mod projects;
+mod task_execution;
 
 use account::*;
 use agents::*;
@@ -201,6 +202,7 @@ use environments::*;
 use project_files::*;
 use project_repository::*;
 use projects::*;
+use task_execution::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -615,6 +617,30 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}",
             axum::routing::put(update_company_project_task_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/execution",
+            get(get_project_task_execution_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/blockers",
+            post(open_project_task_blocker_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/blockers/{blocker_id}",
+            axum::routing::put(resolve_project_task_blocker_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/relations",
+            post(add_project_task_relation_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/relations/{relation_id}",
+            axum::routing::delete(remove_project_task_relation_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/evidence",
+            post(create_project_evidence_for_human),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/gates",

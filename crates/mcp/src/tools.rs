@@ -77,7 +77,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
     let can_update_tasks = permissions
         .iter()
         .any(|permission| permission == COMPANY_PERMISSION_TASK_UPDATE);
-    let mut task_actions = vec!["get", "list", "my"];
+    let mut task_actions = vec!["get", "list", "my", "execution_get"];
     if can_assign_tasks {
         task_actions.extend([
             "create",
@@ -85,9 +85,23 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
             "batch_update",
             "dependency_add",
             "dependency_remove",
+            "attempt_start",
+            "attempt_finish",
+            "blocker_open",
+            "blocker_resolve",
+            "relation_add",
+            "relation_remove",
+            "evidence_create",
         ]);
     } else if can_update_tasks {
-        task_actions.push("update");
+        task_actions.extend([
+            "update",
+            "attempt_start",
+            "attempt_finish",
+            "blocker_open",
+            "blocker_resolve",
+            "evidence_create",
+        ]);
     }
     let task_schema = tailored_action_schema::<CompanyTaskToolInput>(
         &task_actions,
@@ -113,8 +127,8 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
             task_schema,
             "update",
             "status",
-            &["in_progress", "blocked", "done", "failed"],
-            "Assigned Agents may only update their own task to in_progress, blocked, done, or failed.",
+            &["in_progress", "done"],
+            "Assigned Agents may only update their own task to in_progress or done. Record execution failure with attempt_finish and waiting conditions with blocker_open.",
         )
     };
 

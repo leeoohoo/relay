@@ -154,6 +154,13 @@ export type CompanyProjectTask = {
   updated_at: string;
 };
 
+export type ProjectTaskExecution = {
+  attempts: Array<{ id: string; attempt_number: number; attempt_type: string; status: string; objective: string; result_summary: string | null; failure_category: string | null; agent_id: string; started_at: string | null; finished_at: string | null; created_at: string }>;
+  blockers: Array<{ id: string; attempt_id: string | null; blocker_type: string; status: "open" | "resolved" | "waived"; summary: string; resolution_condition: string; resolution_summary: string | null; owner_agent_id: string | null; created_at: string; resolved_at: string | null }>;
+  relations: Array<{ id: string; source_task_id: string; target_task_id: string; relation_type: string; created_at: string }>;
+  evidence: Array<{ id: string; attempt_id: string | null; evidence_type: string; title: string; summary: string; result: string; artifact_refs: unknown[]; metrics: Record<string, unknown>; producer_agent_id: string | null; created_at: string }>;
+};
+
 export type CompanyProject = {
   project: {
     id: string;

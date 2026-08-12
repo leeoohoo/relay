@@ -980,7 +980,7 @@ apps/web/src/pages/projects/sessions.tsx
 
 ## 22. 实施进度（2026-08-12）
 
-本轮完成了事件路由、一次性控制快照、项目 Gate，以及 Phase 3 的第一块 Project Environment。Task Attempt、Blocker、Relation、Evidence 和 Phase 4 至 Phase 5 仍按本方案继续推进，不能把本节视为整份方案已经全部完成。
+本轮已完成事件路由、一次性控制快照、项目 Gate，以及完整的 Phase 3：Project Environment、Task Attempt、Blocker、Task Relation 与 Evidence Registry。Phase 4 至 Phase 5 仍按本方案继续推进，不能把本节视为整份方案已经全部完成。
 
 ### 22.1 已完成
 
@@ -999,6 +999,12 @@ apps/web/src/pages/projects/sessions.tsx
 - [x] 环境 Human REST、Agent MCP 和应用服务入口；项目详情新增“项目环境”Tab。
 - [x] Readiness 同时校验依赖、Gate 和环境；Revision、环境健康或必需服务不满足时拒绝任务进入 `in_progress/done`。
 - [x] 环境或服务观测真正变化后重新计算任务，满足条件时只生成一条带稳定去重键的 `task_ready`。
+- [x] 数据库迁移 `0068_task_attempts_blockers_relations`：新增 Task Attempt、Blocker 与 Task Relation，并保证同一任务最多一个 queued/running Attempt。
+- [x] Attempt 失败不再把 Task 直接改为 `failed`；Agent 只直接推进 `in_progress/done`，失败与等待分别通过 Attempt 和 Blocker 表达。
+- [x] Open Blocker 纳入统一 Readiness；任务启动、完成、Gate/Environment 重新 Ready 均检查开放阻塞，解决后自动重新计算。
+- [x] 数据库迁移 `0069_project_evidence`：新增结构化 Evidence 与项目内 `dedupe_key` 幂等约束。
+- [x] Human REST 与 Agent MCP 已提供 execution、attempt、blocker、relation 和 evidence 操作。
+- [x] 任务编辑详情按需加载执行记录，展示 Attempt 时间线、Blocker、Relation 与 Evidence，不把长列表塞回 Company Console 聚合响应。
 
 ### 22.2 自动化验证
 
@@ -1010,6 +1016,9 @@ apps/web/src/pages/projects/sessions.tsx
 - [x] 新增 Gate 集成测试覆盖“未通过不能开始、通过后 Ready、重复决策只生成一条 Ready Event”。
 - [x] 消息路由集成测试覆盖“普通 Agent 群消息不唤醒”和“明确 `@` 只唤醒目标 Agent”。
 - [x] 环境集成测试覆盖“服务不健康不能开始、服务恢复后 Ready、重复观测只生成一条 Ready Event”。
+- [x] Execution 集成测试覆盖“单任务单活动 Attempt、Attempt 失败不改写 Task、Blocker 门禁、Relation、Evidence 幂等与执行详情聚合”。
+- [x] MCP Schema 测试覆盖新增执行动作，并验证 Agent 任务状态只允许直接推进 `in_progress/done`。
+- [x] `0068/0069` 使用迁移执行器统一登记版本，避免 SQL 与执行器重复写入 `schema_migrations` 导致产品启动失败。
 
 ### 22.3 真实 E2E 结果
 
@@ -1026,14 +1035,17 @@ apps/web/src/pages/projects/sessions.tsx
 9. 使用最终重建镜像再次创建并分配任务，数据库确认 `company.project.task_assigned` 为 `informational`、`requires_action=false`、`wake_policy=never`；是否执行由实时 Ready Snapshot 决定。
 10. 创建 `staging-e2e` 环境并把任务绑定到 `rev-2`；环境为 `degraded/rev-1` 时启动任务，服务端正确返回 `task_environment_not_ready`。
 11. 把环境更新为 `ready/rev-2` 且 `web` 服务健康后，任务自动 Ready 并可进入 `in_progress`；数据库确认只存在一条对应 `task_ready`，浏览器控制台无错误。
+12. 在任务详情按需加载执行记录；创建 Open Blocker 后，尝试把任务推进到 `done`，服务端正确返回 `task_blocker_open` 且任务保持原状态。
+13. Human 解决 Blocker 后任务可再次推进；执行详情保留 resolved Blocker 的时间线。
+14. 通过真实页面登记 `Phase 3 浏览器 E2E` Evidence，执行详情立即显示 1 条结构化证据；数据库确认任务仍为 `in_progress`，Blocker 与 Evidence 各保留一条。
+15. 浏览器 E2E 发现并修复执行面板按钮继承外层表单提交语义的问题，创建 Evidence、创建/解决 Blocker 均不会再意外保存任务或离开当前详情。
 
 ### 22.4 待继续实施
 
 - [ ] Phase 0 剩余项：Feature Flag、唤醒决策指标与整改前后指标面板。
-- [ ] Phase 3 剩余：Task Attempt、Blocker、Relation 与 Evidence Registry；Project Environment 已完成。
 - [ ] Phase 4：记忆治理、注入预算、角色事件订阅与负载预警。
 - [ ] Phase 5：Run 心跳、Watchdog、运行状态投影、讨论线程和摘要卡片。
-- [ ] 五 Agent、环境 Revision、QA Retest 的完整最终 E2E；本轮 E2E 只验收 Phase 1 至 Phase 2 的闭环。
+- [ ] 五 Agent、环境 Revision、QA Retest 的完整最终 E2E；当前已验收 Phase 1 至 Phase 3 的关键闭环。
 
 ## 22. 风险与回滚
 
@@ -1110,8 +1122,8 @@ apps/web/src/pages/projects/sessions.tsx
 ### 第二批
 
 - [x] 0067 Project Environment
-- [ ] 0068 Task Attempt / Blocker / Relation
-- [ ] 0069 Evidence Registry
+- [x] 0068 Task Attempt / Blocker / Relation
+- [x] 0069 Evidence Registry
 - [ ] 自动项目状态投影
 
 ### 第三批
@@ -1120,7 +1132,7 @@ apps/web/src/pages/projects/sessions.tsx
 - [ ] 0071 Run Heartbeat / Runtime Projection
 - [ ] 0072 Task/Gate/Blocker Thread
 - [ ] 0073 Memory Governance
-- [ ] 前端运行详情和项目控制面改造
+- [ ] 前端运行详情和项目控制面改造（Task Attempt/Blocker/Evidence 详情已完成，运行投影与讨论仍待 Phase 5）
 
 ## 25. 建议排期与资源配置
 

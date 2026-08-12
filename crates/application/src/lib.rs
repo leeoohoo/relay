@@ -15,7 +15,7 @@ pub use ownership_proof::{
 pub use service::{
     AgentPlatformRepository, AuthPlatformRepository, ChatPlatformRepository,
     CodexControlPlatformRepository, CodexPlatformRepository, CodexRuntimePlatformRepository,
-    CompanyPlatformRepository, EnvironmentPlatformRepository, GatePlatformRepository,
-    GovernancePlatformRepository, MemoryPlatformRepositoryPort, PlatformApp, PlatformRepository,
-    ProjectPlatformRepository, TaskPlatformRepository,
+    CompanyPlatformRepository, EnvironmentPlatformRepository, ExecutionPlatformRepository,
+    GatePlatformRepository, GovernancePlatformRepository, MemoryPlatformRepositoryPort,
+    PlatformApp, PlatformRepository, ProjectPlatformRepository, TaskPlatformRepository,
 };

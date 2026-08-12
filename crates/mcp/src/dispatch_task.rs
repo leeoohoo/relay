@@ -1,5 +1,10 @@
 use super::handler::parse_input;
 use super::*;
+use ai_chat_application::{
+    AddProjectTaskRelationInput, CreateProjectEvidenceInput, FinishProjectTaskAttemptInput,
+    OpenProjectTaskBlockerInput, RemoveProjectTaskRelationInput, ResolveProjectTaskBlockerInput,
+    StartProjectTaskAttemptInput,
+};
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
     pub(super) fn execute_company_task_tool(
@@ -274,6 +279,97 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             "removed": true
                         }))
                     }
+                    CompanyTaskOperation::ExecutionGet {
+                        company_id,
+                        project_id,
+                        task_id,
+                    } => Ok(
+                        json!({ "execution": self.platform.get_project_task_execution(agent_id, company_id, project_id, task_id)? }),
+                    ),
+                    CompanyTaskOperation::AttemptStart {
+                        company_id,
+                        project_id,
+                        task_id,
+                        intent_id,
+                        attempt_type,
+                        objective,
+                    } => Ok(
+                        json!({ "attempt": self.platform.start_project_task_attempt(StartProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, intent_id, attempt_type, objective })? }),
+                    ),
+                    CompanyTaskOperation::AttemptFinish {
+                        company_id,
+                        project_id,
+                        task_id,
+                        attempt_id,
+                        status,
+                        result_summary,
+                        failure_category,
+                    } => Ok(
+                        json!({ "attempt": self.platform.finish_project_task_attempt(FinishProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, status, result_summary, failure_category })? }),
+                    ),
+                    CompanyTaskOperation::BlockerOpen {
+                        company_id,
+                        project_id,
+                        task_id,
+                        attempt_id,
+                        blocker_type,
+                        summary,
+                        owner_agent_id,
+                        resolution_condition,
+                    } => Ok(
+                        json!({ "blocker": self.platform.open_project_task_blocker(OpenProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, blocker_type, summary, owner_agent_id, resolution_condition })? }),
+                    ),
+                    CompanyTaskOperation::BlockerResolve {
+                        company_id,
+                        project_id,
+                        task_id,
+                        blocker_id,
+                        status,
+                        resolution_summary,
+                    } => Ok(
+                        json!({ "blocker": self.platform.resolve_project_task_blocker(ResolveProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, blocker_id, status, resolution_summary })? }),
+                    ),
+                    CompanyTaskOperation::RelationAdd {
+                        company_id,
+                        project_id,
+                        source_task_id,
+                        target_task_id,
+                        relation_type,
+                    } => Ok(
+                        json!({ "relation": self.platform.add_project_task_relation(AddProjectTaskRelationInput { actor_agent_id: agent_id, company_id, project_id, source_task_id, target_task_id, relation_type })? }),
+                    ),
+                    CompanyTaskOperation::RelationRemove {
+                        company_id,
+                        project_id,
+                        relation_id,
+                    } => {
+                        self.platform.remove_project_task_relation(
+                            RemoveProjectTaskRelationInput {
+                                actor_agent_id: agent_id,
+                                company_id,
+                                project_id,
+                                relation_id,
+                            },
+                        )?;
+                        Ok(json!({ "relation_id": relation_id, "removed": true }))
+                    }
+                    CompanyTaskOperation::EvidenceCreate {
+                        company_id,
+                        project_id,
+                        task_id,
+                        attempt_id,
+                        gate_id,
+                        environment_id,
+                        evidence_type,
+                        title,
+                        summary,
+                        result,
+                        artifact_refs,
+                        metrics,
+                        dedupe_key,
+                    } => Ok(
+                        json!({ "evidence": self.platform.create_project_evidence(CreateProjectEvidenceInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, gate_id, environment_id, evidence_type, title, summary, result, artifact_refs, metrics, dedupe_key })? }),
+                    ),
                 }
             }
 

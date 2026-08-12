@@ -83,6 +83,7 @@ mod codex_approvals;
 mod codex_sessions;
 mod company_console;
 mod environments;
+mod execution;
 mod gates;
 mod git;
 mod governance_language;

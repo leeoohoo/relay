@@ -4,8 +4,10 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub mod environments;
+pub mod execution;
 pub mod gates;
 pub use environments::*;
+pub use execution::*;
 pub use gates::*;
 
 pub const COMPANY_ROLE_OWNER: &str = "owner";

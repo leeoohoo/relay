@@ -157,3 +157,17 @@
   .project-environment-card header { grid-template-columns: auto minmax(0,1fr); }
   .project-environment-card header small { grid-column: 2; }
 }
+.task-execution-panel { display: grid; gap: 9px; border: 1px solid var(--relay-line); border-radius: 11px; padding: 11px 12px; background: rgba(255,255,255,.018); }
+.task-execution-loading { padding: 10px; color: var(--relay-muted); font-size: 10px; }
+.task-execution-heading { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; }
+.task-execution-heading > strong { color: var(--relay-text); font-size: 11px; }
+.task-execution-heading > span { color: var(--relay-muted); font-size: 9px; }
+.task-execution-heading > div { display: flex; gap: 6px; }
+.task-execution-inline-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; }
+.task-execution-sections { display: grid; gap: 8px; }
+.task-execution-sections > section { display: grid; gap: 6px; border-top: 1px solid var(--relay-line); padding-top: 8px; }
+.task-execution-sections > section > strong { color: #b9c8d2; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.task-execution-sections article { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: start; gap: 8px; border-radius: 8px; padding: 7px 8px; background: rgba(0,0,0,.12); }
+.task-execution-sections article b { color: var(--relay-text); font-size: 10px; }.task-execution-sections article p { margin: 2px 0; color: #afbdc7; font-size: 9px; line-height: 1.45; }.task-execution-sections article small,.task-execution-sections article time { color: var(--relay-muted); font-size: 8px; }.task-execution-empty { margin: 0; color: var(--relay-muted); font-size: 9px; }
+.task-execution-status { border-radius: 999px; padding: 3px 6px; color: #aab8c2; background: rgba(255,255,255,.06); font-size: 7px; text-transform: uppercase; }.task-execution-status.running,.task-execution-status.open { color: #ffe0a8; background: rgba(255,181,71,.12); }.task-execution-status.succeeded,.task-execution-status.resolved,.task-execution-status.passed { color: #d9ffba; background: rgba(168,255,96,.1); }.task-execution-status.failed { color: #ffbeb8; background: rgba(255,98,82,.1); }
+@media (max-width: 620px) { .task-execution-heading,.task-execution-inline-form { grid-template-columns: 1fr; }.task-execution-heading > div { flex-wrap: wrap; } }

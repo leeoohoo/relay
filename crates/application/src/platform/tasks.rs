@@ -313,14 +313,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 let status = normalize_project_task_status(status)?;
                 if !matches!(
                     status.as_str(),
-                    PROJECT_TASK_STATUS_IN_PROGRESS
-                        | PROJECT_TASK_STATUS_BLOCKED
-                        | PROJECT_TASK_STATUS_DONE
-                        | PROJECT_TASK_STATUS_FAILED
+                    PROJECT_TASK_STATUS_IN_PROGRESS | PROJECT_TASK_STATUS_DONE
                 ) {
                     return Err(AppError::Unauthorized(
-                        "assigned Agents may only mark tasks in progress, blocked, done, or failed"
-                            .into(),
+                        "assigned Agents may only mark tasks in progress or done; use attempt_finish and blocker_open for failures and blockers".into(),
                     ));
                 }
             }
@@ -347,6 +343,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 self.ensure_project_task_dependencies_resolved(project.id, task.id)?;
                 self.ensure_project_task_gates_satisfied(project.id, task.id)?;
                 self.ensure_project_task_environment_ready(project.id, task.id)?;
+                self.ensure_project_task_has_no_open_blockers(task.id)?;
             }
             status_changed = task.status != status;
             task.status = status;
@@ -439,6 +436,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 self.ensure_project_task_dependency_ids_resolved(&dependency_ids)?;
                 self.ensure_project_task_gates_satisfied(project.id, task.id)?;
                 self.ensure_project_task_environment_ready(project.id, task.id)?;
+                self.ensure_project_task_has_no_open_blockers(task.id)?;
             }
             status_changed = task.status != status;
             task.status = status;
@@ -476,6 +474,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             self.ensure_project_task_dependency_ids_resolved(&dependency_ids)?;
             self.ensure_project_task_gates_satisfied(project.id, task.id)?;
             self.ensure_project_task_environment_ready(project.id, task.id)?;
+            self.ensure_project_task_has_no_open_blockers(task.id)?;
         }
         self.repo.update_company_project_task(task.clone())?;
         self.sync_project_task_dependencies_for_human(
@@ -725,6 +724,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     self.ensure_project_task_dependencies_resolved(project.id, task.id)?;
                     self.ensure_project_task_gates_satisfied(project.id, task.id)?;
                     self.ensure_project_task_environment_ready(project.id, task.id)?;
+                    self.ensure_project_task_has_no_open_blockers(task.id)?;
                 }
                 if task.status != status {
                     task.status = status.to_string();

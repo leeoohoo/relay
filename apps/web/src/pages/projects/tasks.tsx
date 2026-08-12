@@ -4,6 +4,7 @@ import { Pagination, usePagination } from "../../components/Pagination";
 import { Field, Icon } from "../../components/ui";
 import type { CompanyConsole, CompanyProject, CompanyProjectTask } from "../../types/platform";
 import { Dialog, formatTaskDue, formatTime, taskDueClass, taskPriorityLabel, taskStatusLabel, toDateTimeLocalValue } from "../app/shared";
+import { TaskExecutionPanel } from "./task-execution";
 
 export function TasksView(props: {
   consoleData: CompanyConsole;
@@ -175,6 +176,7 @@ export function TasksView(props: {
             await props.onChanged();
           }}
           onError={props.onError}
+          onNotice={props.onNotice}
         />
       ) : null}
       {editingEntry ? (
@@ -190,6 +192,7 @@ export function TasksView(props: {
             await props.onChanged();
           }}
           onError={props.onError}
+          onNotice={props.onNotice}
         />
       ) : null}
     </div>
@@ -226,6 +229,7 @@ function TaskDialog(props: {
   onClose: () => void;
   onSaved: (task: CompanyProjectTask) => Promise<void>;
   onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
 }) {
   const [projectId, setProjectId] = useState(props.task?.project_id ?? props.projects[0]?.project.id ?? "");
   const [title, setTitle] = useState(props.task?.title ?? "");
@@ -373,6 +377,7 @@ function TaskDialog(props: {
             <Pagination {...historyPagination} onPageChange={historyPagination.setPage} compact />
           </div>
         ) : null}
+        {props.task && project ? <TaskExecutionPanel companyId={props.companyId} project={project} task={props.task} token={props.token} onError={props.onError} onNotice={props.onNotice} /> : null}
         {!activeMembers.length ? <div className="git-security-note">这个项目还没有活跃成员。你可以先保存为未分配任务，或让有权限的 Agent 添加项目成员。</div> : null}
         <div className="dialog-actions">
           <button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button>

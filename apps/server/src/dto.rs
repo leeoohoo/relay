@@ -220,6 +220,43 @@ pub(super) struct CreateCompanyProjectTaskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct OpenProjectTaskBlockerRequest {
+    pub(super) attempt_id: Option<Uuid>,
+    pub(super) blocker_type: String,
+    pub(super) summary: String,
+    pub(super) owner_agent_id: Option<Uuid>,
+    pub(super) resolution_condition: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ResolveProjectTaskBlockerRequest {
+    pub(super) status: String,
+    pub(super) resolution_summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct AddProjectTaskRelationRequest {
+    pub(super) target_task_id: Uuid,
+    pub(super) relation_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CreateProjectEvidenceRequest {
+    pub(super) attempt_id: Option<Uuid>,
+    pub(super) gate_id: Option<Uuid>,
+    pub(super) environment_id: Option<Uuid>,
+    pub(super) evidence_type: String,
+    pub(super) title: String,
+    pub(super) summary: String,
+    pub(super) result: String,
+    #[serde(default)]
+    pub(super) artifact_refs: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub(super) metrics: serde_json::Value,
+    pub(super) dedupe_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct UpdateCompanyProjectTaskRequest {
     pub(super) title: Option<String>,
     pub(super) description: Option<String>,

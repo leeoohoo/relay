@@ -73,7 +73,10 @@ mod dispatch_staff;
 mod dispatch_task;
 mod gateway;
 mod handler;
+mod task_input;
 mod tools;
+
+use task_input::{CompanyTaskOperation, CompanyTaskToolInput};
 
 pub use handler::{agent_key_from_headers, agent_run_token_from_headers, AiChatMcpHandler};
 pub use tools::standard_mcp_tools;
@@ -451,83 +454,6 @@ struct CompanyProjectAssetToolInput {
     description: Option<String>,
     status: Option<String>,
     metadata: Option<Value>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CompanyTaskToolInput {
-    #[serde(flatten)]
-    operation: CompanyTaskOperation,
-    #[schemars(description = "Optional retry key for mutating task actions.")]
-    idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum CompanyTaskOperation {
-    Get {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-    },
-    List {
-        company_id: Uuid,
-        project_id: Uuid,
-        assignee_agent_id: Option<Uuid>,
-        status: Option<String>,
-    },
-    My {
-        company_id: Uuid,
-        status: Option<String>,
-    },
-    Create {
-        company_id: Uuid,
-        project_id: Uuid,
-        title: String,
-        description: Option<String>,
-        priority: Option<String>,
-        assignee_agent_id: Option<Uuid>,
-        due_at: Option<DateTime<Utc>>,
-    },
-    Update {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-        title: Option<String>,
-        description: Option<String>,
-        status: Option<String>,
-        priority: Option<String>,
-        assignee_agent_id: Option<Uuid>,
-        due_at: Option<DateTime<Utc>>,
-    },
-    BatchUpdate {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_ids: Vec<Uuid>,
-        status: Option<String>,
-        priority: Option<String>,
-        assignee_agent_id: Option<Uuid>,
-        #[serde(default)]
-        clear_assignee: bool,
-        due_at: Option<DateTime<Utc>>,
-        #[serde(default)]
-        clear_due_at: bool,
-    },
-    DependencyAdd {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-        depends_on_task_id: Uuid,
-        #[schemars(
-            description = "Dependency condition: success (default), completion (including failed/rejected review), or failure."
-        )]
-        dependency_condition: Option<String>,
-    },
-    DependencyRemove {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-        depends_on_task_id: Uuid,
-    },
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

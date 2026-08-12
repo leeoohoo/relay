@@ -397,6 +397,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }) {
             if !self.project_task_gate_requirements_satisfied(project.id, task.id)
                 || !self.project_task_environment_requirements_satisfied(project.id, task.id)
+                || self.project_task_has_open_blockers(task.id)
                 || dependencies
                     .iter()
                     .filter(|dependency| dependency.task_id == task.id)

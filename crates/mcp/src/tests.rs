@@ -441,10 +441,21 @@ fn company_action_schemas_keep_hot_grant_project_actions_visible() {
         .expect("member task tool");
     assert_eq!(
         tool_schema_actions(member_task),
-        ["get", "list", "my", "update"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
+        [
+            "attempt_finish",
+            "attempt_start",
+            "blocker_open",
+            "blocker_resolve",
+            "evidence_create",
+            "execution_get",
+            "get",
+            "list",
+            "my",
+            "update",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
     );
     let member_task_schema = serde_json::to_string(&member_task.input_schema)
         .expect("member task schema should serialize");
@@ -457,13 +468,7 @@ fn company_action_schemas_keep_hot_grant_project_actions_visible() {
             .get("enum")
             .and_then(Value::as_array)
             .expect("member status should be an enum"),
-        &vec![
-            json!("in_progress"),
-            json!("blocked"),
-            json!("done"),
-            json!("failed"),
-            Value::Null,
-        ]
+        &vec![json!("in_progress"), json!("done"), Value::Null,]
     );
     for hidden_field in [
         "title",
