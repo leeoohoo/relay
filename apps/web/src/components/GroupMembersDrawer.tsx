@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "../api/client";
+import { fetchCodexRuntimeOverview } from "../api/codexRuntime";
 import type { CompanyRealtimeEvent } from "../api/types";
 import type { CodexTriggerRun, CodexTriggerView, CompanyAgent, CompanyProject, CompanyProjectTask } from "../types/platform";
 import { Pagination, usePagination } from "./Pagination";
@@ -9,6 +9,7 @@ type RuntimeState = {
   loading: boolean;
   trigger: CodexTriggerView | null;
   error: string | null;
+  stale: boolean;
 };
 
 export function GroupMembersDrawer(props: {
@@ -30,22 +31,19 @@ export function GroupMembersDrawer(props: {
   useEffect(() => {
     let active = true;
     setRuntimeByAgent(Object.fromEntries(props.agents.map((agent) => [agent.agent_profile.id, emptyRuntime(true)])));
-    Promise.all(props.agents.map(async (agent) => {
-      const agentId = agent.agent_profile.id;
-      if (agent.membership.employment_status !== "active") return [agentId, emptyRuntime(false)] as const;
-      try {
-        const response = await api<{ trigger: CodexTriggerView | null }>(
-          `/api/v1/companies/${props.companyId}/agents/${agentId}/codex-trigger`,
-          {},
-          props.token,
-        );
-        return [agentId, { loading: false, trigger: response.trigger, error: null }] as const;
-      } catch (error) {
-        return [agentId, { loading: false, trigger: null, error: errorMessage(error) }] as const;
-      }
-    })).then((entries) => {
-      if (active) setRuntimeByAgent(Object.fromEntries(entries));
-    });
+    const activeAgents = props.agents.filter((agent) => agent.membership.employment_status === "active");
+    if (!activeAgents.length) return () => { active = false; };
+    fetchCodexRuntimeOverview(props.companyId, activeAgents.map((agent) => agent.agent_profile.id), props.token)
+      .then(({ agents }) => {
+        if (!active) return;
+        const next = Object.fromEntries(props.agents.map((agent) => [agent.agent_profile.id, emptyRuntime(false)]));
+        for (const item of agents) next[item.agent_id] = { loading: false, trigger: item.trigger, error: null, stale: false };
+        setRuntimeByAgent(next);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setRuntimeByAgent((current) => markRuntimeRefreshFailure(current, error));
+      });
     return () => { active = false; };
   }, [agentIdsKey, props.companyId, props.token]);
 
@@ -54,19 +52,15 @@ export function GroupMembersDrawer(props: {
     if (!event?.event_type.startsWith("codex.")) return;
     const agentId = typeof event.payload.agent_profile_id === "string" ? event.payload.agent_profile_id : null;
     if (!agentId || !props.agents.some((agent) => agent.agent_profile.id === agentId)) return;
-    let active = true;
-    api<{ trigger: CodexTriggerView | null }>(
-      `/api/v1/companies/${props.companyId}/agents/${agentId}/codex-trigger`,
-      {},
-      props.token,
-    ).then(({ trigger }) => {
-      if (!active) return;
-      setRuntimeByAgent((current) => ({ ...current, [agentId]: { loading: false, trigger, error: null } }));
-    }).catch((error) => {
-      if (!active) return;
-      setRuntimeByAgent((current) => ({ ...current, [agentId]: { loading: false, trigger: null, error: errorMessage(error) } }));
-    });
-    return () => { active = false; };
+    const timer = window.setTimeout(() => {
+      fetchCodexRuntimeOverview(props.companyId, [agentId], props.token)
+        .then(({ agents }) => {
+          const trigger = agents[0]?.trigger ?? null;
+          setRuntimeByAgent((current) => ({ ...current, [agentId]: { loading: false, trigger, error: null, stale: false } }));
+        })
+        .catch((error) => setRuntimeByAgent((current) => markRuntimeRefreshFailure(current, error, agentId)));
+    }, 1_000);
+    return () => window.clearTimeout(timer);
   }, [agentIdsKey, props.companyId, props.realtimeEvent, props.token]);
 
   return (
@@ -150,6 +144,7 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
         {currentIntent ? <IntentProgress intent={currentIntent} tasks={props.tasks} session={projectSession} /> : null}
 
         {props.runtime.loading ? <div className="runtime-empty"><span className="loader" /> 正在读取运行情况…</div> : null}
+        {props.runtime.stale ? <div className="runtime-stale"><Icon name="alert" /> <span><strong>运行状态暂未更新</strong><small>请求已自动降频，当前展示最后一次成功数据。</small></span></div> : null}
         {props.runtime.error ? <div className="runtime-error"><Icon name="alert" /> <span><strong>运行信息读取失败</strong><small>{props.runtime.error}</small></span></div> : null}
         {!props.runtime.loading && !props.runtime.error && !props.runtime.trigger ? <div className="runtime-empty">这个 Agent 尚未启用 Codex Trigger。</div> : null}
         {latestRun ? <RunProcess run={latestRun} /> : null}
@@ -226,13 +221,29 @@ function assignedTasks(project: CompanyProject | null, agentId: string) {
 }
 
 function emptyRuntime(loading: boolean): RuntimeState {
-  return { loading, trigger: null, error: null };
+  return { loading, trigger: null, error: null, stale: false };
+}
+
+function markRuntimeRefreshFailure(current: Record<string, RuntimeState>, error: unknown, agentId?: string) {
+  const rateLimited = typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "rate_limited";
+  const targets = agentId ? [agentId] : Object.keys(current);
+  const next = { ...current };
+  for (const id of targets) {
+    const previous = current[id] ?? emptyRuntime(false);
+    next[id] = rateLimited
+      ? { ...previous, loading: false, error: null, stale: true }
+      : { ...previous, loading: false, error: errorMessage(error), stale: false };
+  }
+  return next;
 }
 
 function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: CompanyProjectTask[]) {
   if (agent.membership.employment_status !== "active") return "paused";
   if (runtime.loading) return "loading";
-  if (runtime.error) return "error";
+  if (runtime.error && !runtime.trigger) return "error";
   const trigger = runtime.trigger;
   if (!trigger) return agent.connection.status === "connected" ? "idle" : "offline";
   if (trigger.config.status !== "active") return trigger.config.status;
@@ -251,7 +262,8 @@ function runtimeStatus(agent: CompanyAgent, runtime: RuntimeState, tasks: Compan
 
 function runtimeSummary(runtime: RuntimeState, run: CodexTriggerRun | null, task: CompanyProjectTask | null, operationalStatus: string) {
   if (runtime.loading) return "正在同步运行数据";
-  if (runtime.error) return "无法读取运行详情";
+  if (runtime.error && !runtime.trigger) return "无法读取运行详情";
+  if (runtime.stale && !runtime.trigger) return "运行状态更新受限，等待自动恢复";
   if (runtime.trigger?.runtime?.reason && runtime.trigger.runtime.state !== "idle") return runtime.trigger.runtime.reason;
   if (operationalStatus === "queued") return "任务已进入执行队列";
   if (operationalStatus === "continuing" && task) return `任务尚未完成，等待接续或外部条件 · ${task.title}`;

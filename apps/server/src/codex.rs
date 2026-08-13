@@ -504,6 +504,60 @@ pub(super) async fn get_company_agent_codex_trigger(
     Ok(Json(serde_json::json!({ "trigger": trigger })))
 }
 
+pub(super) async fn get_company_codex_runtime_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<CodexRuntimeOverviewQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let agent_ids = query
+        .agent_ids
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            Uuid::parse_str(value)
+                .map_err(|_| ApiError(AppError::Validation("invalid agent id".into())))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if agent_ids.is_empty() || agent_ids.len() > 100 {
+        return Err(
+            AppError::Validation("agent_ids must contain between 1 and 100 agents".into()).into(),
+        );
+    }
+
+    let mut agents = Vec::with_capacity(agent_ids.len());
+    for agent_id in agent_ids {
+        let trigger = state.platform.get_company_agent_codex_trigger_for_human(
+            GetCompanyAgentCodexTriggerForHumanInput {
+                human_user_id: human.id,
+                company_id,
+                agent_id,
+            },
+        )?;
+        let sessions = if query.project_id.is_some() {
+            state.platform.list_company_agent_codex_sessions_for_human(
+                ListCompanyAgentCodexSessionsForHumanInput {
+                    human_user_id: human.id,
+                    company_id,
+                    agent_id,
+                    project_id: query.project_id,
+                    limit: 50,
+                },
+            )?
+        } else {
+            Vec::new()
+        };
+        agents.push(CompanyAgentCodexRuntimeOverview {
+            agent_id,
+            trigger,
+            sessions,
+        });
+    }
+    Ok(Json(serde_json::json!({ "agents": agents })))
+}
+
 pub(super) async fn upsert_company_agent_codex_trigger(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -42,8 +42,8 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use ai_chat_application::{
-    ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
-    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
+    ChangeHumanPasswordInput, CompanyAgentCodexRuntimeOverview, CreateCompanyAgentInput,
+    CreateCompanyInput, CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
     CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput,
     CreateProjectEnvironmentForHumanInput, CreateProjectGateForHumanInput,
     DecideProjectGateForHumanInput, DeleteAgentMemoryForHumanInput,
@@ -484,6 +484,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/codex-trigger",
             get(get_company_agent_codex_trigger).put(upsert_company_agent_codex_trigger),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-runtime-overview",
+            get(get_company_codex_runtime_overview),
         )
         .route(
             "/api/v1/companies/{company_id}/codex-runner-profiles",

@@ -23,6 +23,7 @@ type RegionResponse<T> = {
 } & T;
 
 export function companyConsoleRegionsForEvent(eventType: string): CompanyConsoleRegion[] {
+  if (eventType.startsWith("codex.")) return [];
   if (eventType.startsWith("agent.runtime.approval_")) return [];
   if (eventType.startsWith("message.")) return ["conversations"];
   if (eventType.startsWith("project.task.") || eventType.startsWith("project.status.")) {

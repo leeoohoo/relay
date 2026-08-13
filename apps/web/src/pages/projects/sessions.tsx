@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../../api/client";
+import { fetchCodexRuntimeOverview } from "../../api/codexRuntime";
 import type {
   CodexSession,
   CodexTriggerRun,
@@ -50,25 +50,21 @@ export function ProjectSessionsCard(props: {
   async function loadSessions(reportError = true) {
     setLoading(true);
     try {
-      const results = await Promise.all(props.project.members.map(async (member) => {
+      const response = await fetchCodexRuntimeOverview(
+        props.companyId,
+        props.project.members.map((member) => member.agent_profile.id),
+        props.token,
+        props.project.project.id,
+      );
+      const runtimeByAgent = new Map(response.agents.map((item) => [item.agent_id, item]));
+      const results = props.project.members.map((member) => {
         const agentId = member.agent_profile.id;
-        const [sessionResponse, triggerResponse] = await Promise.all([
-          api<{ sessions: CodexSession[] }>(
-            `/api/v1/companies/${props.companyId}/agents/${agentId}/codex-sessions?project_id=${props.project.project.id}`,
-            {},
-            props.token,
-          ),
-          api<{ trigger: CodexTriggerView | null }>(
-            `/api/v1/companies/${props.companyId}/agents/${agentId}/codex-trigger`,
-            {},
-            props.token,
-          ),
-        ]);
-        const runningRun = runningProjectRun(triggerResponse.trigger, props.project.project.id);
+        const runtime = runtimeByAgent.get(agentId);
+        const runningRun = runningProjectRun(runtime?.trigger ?? null, props.project.project.id);
         const currentTaskTitles = props.project.tasks
           .filter((task) => task.assignee_agent_id === agentId && task.status === "in_progress")
           .map((task) => task.title);
-        const sessions: ProjectSessionRow[] = sessionResponse.sessions
+        const sessions: ProjectSessionRow[] = (runtime?.sessions ?? [])
           .filter((session) => session.status === "active" && !session.archived_at)
           .map((session) => ({
             agentId,
@@ -87,7 +83,7 @@ export function ProjectSessionsCard(props: {
           });
         }
         return sessions;
-      }));
+      });
       setRows(results.flat().sort((left, right) => {
         if (left.runningRun && !right.runningRun) return -1;
         if (!left.runningRun && right.runningRun) return 1;

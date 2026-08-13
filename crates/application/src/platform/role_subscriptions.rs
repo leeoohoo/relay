@@ -129,11 +129,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }),
                 55,
             )?;
-            self.repo.request_agent_codex_trigger_wake(
+            // Task state is the source of truth. A transient Trigger scheduling
+            // failure must not turn an already-persisted task update into an
+            // apparent business failure; the durable inbox event remains
+            // available for the manager's next control turn.
+            let _ = self.repo.request_agent_codex_trigger_wake(
                 member.agent_profile_id,
                 changed_at,
                 AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED,
-            )?;
+            );
             notified += 1;
         }
         Ok(notified)

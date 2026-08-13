@@ -696,7 +696,8 @@ button.message-entity-reference:focus-visible {
   font-size: 6px;
 }
 .runtime-empty,
-.runtime-error {
+.runtime-error,
+.runtime-stale {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -714,6 +715,16 @@ button.message-entity-reference:focus-visible {
   border-color: rgba(255, 112, 120, .18);
   background: rgba(255, 112, 120, .035);
 }
+.runtime-stale {
+  align-items: flex-start;
+  color: #d9b776;
+  border-color: rgba(255, 199, 111, .18);
+  background: rgba(255, 199, 111, .035);
+}
+.runtime-stale svg { width: 13px; flex: 0 0 auto; }
+.runtime-stale span { min-width: 0; display: grid; gap: 2px; }
+.runtime-stale strong { font-size: 8px; }
+.runtime-stale small { color: #9f895f; font-size: 7px; }
 .runtime-error svg { width: 13px; flex: 0 0 auto; }
 .runtime-error span { min-width: 0; display: grid; gap: 2px; }
 .runtime-error strong { font-size: 8px; }

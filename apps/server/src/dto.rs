@@ -59,6 +59,12 @@ pub(super) struct ConsolePageQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct CodexRuntimeOverviewQuery {
+    pub(super) agent_ids: String,
+    pub(super) project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct CreateCompanyAgentRequest {
     pub(super) display_name: String,
     pub(super) org_unit_id: Option<Uuid>,

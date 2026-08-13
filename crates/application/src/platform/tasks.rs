@@ -383,7 +383,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
         }
         if status_changed {
-            self.notify_project_managers_of_task_status_change(
+            let _ = self.notify_project_managers_of_task_status_change(
                 &project,
                 &task,
                 &previous_status,
@@ -524,7 +524,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
         }
         if status_changed {
-            self.notify_project_managers_of_task_status_change(
+            let _ = self.notify_project_managers_of_task_status_change(
                 &project,
                 &task,
                 &previous_status,
@@ -813,7 +813,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         }
         for (task_id, previous_status) in status_changes {
             if let Some(task) = tasks.iter().find(|task| task.id == task_id) {
-                self.notify_project_managers_of_task_status_change(
+                let _ = self.notify_project_managers_of_task_status_change(
                     &project,
                     task,
                     &previous_status,

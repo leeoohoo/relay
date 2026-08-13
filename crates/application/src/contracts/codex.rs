@@ -96,6 +96,13 @@ pub struct GetCompanyAgentCodexTriggerForHumanInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanyAgentCodexRuntimeOverview {
+    pub agent_id: Uuid,
+    pub trigger: Option<CompanyAgentCodexTriggerView>,
+    pub sessions: Vec<AgentCodexSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertCompanyAgentCodexTriggerForHumanInput {
     pub human_user_id: Uuid,
     pub company_id: Uuid,

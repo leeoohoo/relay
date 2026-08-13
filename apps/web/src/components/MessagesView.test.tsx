@@ -152,7 +152,7 @@ beforeEach(() => {
   mockedApi.mockImplementation(async (path) => {
     if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
     if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-    if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
+    if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger, sessions: [] }] };
     throw new Error(`unexpected request: ${path}`);
   });
 });
@@ -179,7 +179,7 @@ describe("MessagesView group member runtime drawer", () => {
         };
       }
       if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger, sessions: [] }] };
       throw new Error(`unexpected request: ${path}`);
     });
 
@@ -321,7 +321,7 @@ describe("MessagesView group member runtime drawer", () => {
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
       if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger: betweenRunsTrigger };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: betweenRunsTrigger, sessions: [] }] };
       throw new Error(`unexpected request: ${path}`);
     });
 
@@ -371,7 +371,7 @@ describe("MessagesView group member runtime drawer", () => {
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
       if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger: resumedTrigger };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: resumedTrigger, sessions: [] }] };
       throw new Error(`unexpected request: ${path}`);
     });
 
