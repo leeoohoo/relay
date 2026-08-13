@@ -137,20 +137,23 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                 })
             }
             Err(error) => {
-                if is_mutating {
-                    let action_name = audit_action_name(tool_name, &request_input);
-                    let _ = self.platform.record_agent_action(
-                        agent.id,
-                        action_name,
-                        failure_target_ref(tool_name, &request_input),
-                        request_input,
-                        json!({
-                            "code": error.code(),
-                            "message": error.to_string(),
-                        }),
-                        action_status_for_error(&error),
-                    );
-                }
+                let action_name = audit_action_name(tool_name, &request_input);
+                let action_name = if is_mutating {
+                    action_name
+                } else {
+                    format!("diagnostic.{action_name}")
+                };
+                let _ = self.platform.record_agent_action(
+                    agent.id,
+                    action_name,
+                    failure_target_ref(tool_name, &request_input),
+                    request_input,
+                    json!({
+                        "code": error.code(),
+                        "message": error.to_string(),
+                    }),
+                    action_status_for_error(&error),
+                );
                 Err(error)
             }
         }

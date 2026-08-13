@@ -304,7 +304,11 @@ impl AgentPlatformRepository for MemoryPlatformRepository {
         guard
             .action_logs
             .iter()
-            .filter(|log| log.agent_profile_id == agent_id && log.created_at >= since)
+            .filter(|log| {
+                log.agent_profile_id == agent_id
+                    && log.created_at >= since
+                    && !log.action_type.starts_with("diagnostic.")
+            })
             .count()
     }
 

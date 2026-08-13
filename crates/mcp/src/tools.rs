@@ -155,7 +155,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         action_tool_with_schema(
             "company.project",
             format!(
-                "Project actions visible to this Agent: {}. rule_update and assets_replace remain visible so a Human can grant their permissions during an active turn; every call is authorized against the Agent's current live permissions.",
+                "Project actions visible to this Agent: {}. For project_id, copy the full UUID from agent.bootstrap or company.project list; never use a list position, shortened ID, task ID, or Git commit. The get action also accepts an exact unique project name and safely resolves the only visible project. Mutating actions still require the full UUID. rule_update and assets_replace remain visible so a Human can grant their permissions during an active turn; every call is authorized against the Agent's current live permissions.",
                 project_actions.join(", ")
             ),
             project_schema,

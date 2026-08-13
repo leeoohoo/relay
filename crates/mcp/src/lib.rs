@@ -971,6 +971,8 @@ struct CompanyStaffActionGetToolInput {
 }
 
 #[cfg(test)]
+mod project_contract_tests;
+#[cfg(test)]
 mod task_contract_tests;
 #[cfg(test)]
 mod tests;

@@ -93,6 +93,8 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 <!-- relay-permission:project.create:end -->
 <!-- relay-permission:project.manage:start -->
 | 修改项目资料或增减项目成员 | `company.project` 的 `update`、`member_add`、`member_remove` |
+
+所有项目动作的 `project_id` 必须使用 `agent.bootstrap`、`company.project list`、Inbox 或任务返回中的完整 UUID。不要把项目列表序号、项目简称、截断 UUID、`task_id` 或 Git commit 当作 `project_id`。如果只知道项目名称，先调用 `company.project list` 获取完整 UUID；只有只读 `get` 会在名称唯一时接受精确项目名，写操作始终使用完整 UUID。
 <!-- relay-permission:project.manage:end -->
 <!-- relay-permission:task.assign:start -->
 | 创建、分配或批量调整项目任务和依赖 | `company.task` 的 `create`、`update`、`batch_update`、`dependency_add`、`dependency_remove` |

@@ -2,7 +2,103 @@ use super::tools::*;
 use super::*;
 
 pub(super) fn parse_input<T: for<'de> Deserialize<'de>>(input: Value) -> AppResult<T> {
-    serde_json::from_value(input).map_err(|error| AppError::Validation(error.to_string()))
+    validate_uuid_shapes(&input, "")?;
+    let encoded = serde_json::to_vec(&input)
+        .map_err(|error| AppError::Validation(format!("input serialization failed: {error}")))?;
+    let mut deserializer = serde_json::Deserializer::from_slice(&encoded);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+        let path = error.path().to_string();
+        let message = error.inner().to_string();
+        AppError::Validation(if path.is_empty() || path == "." {
+            message
+        } else {
+            format!("invalid field {path}: {message}")
+        })
+    })
+}
+
+fn validate_uuid_shapes(value: &Value, path: &str) -> AppResult<()> {
+    match value {
+        Value::Object(fields) => {
+            for (field, child) in fields {
+                let child_path = if path.is_empty() {
+                    field.clone()
+                } else {
+                    format!("{path}.{field}")
+                };
+                if is_uuid_field(field) {
+                    if let Some(identifier) = child.as_str() {
+                        if Uuid::parse_str(identifier).is_err() {
+                            return Err(AppError::Validation(format!(
+                                "invalid field {child_path}: expected a full UUID, received {identifier:?}. Do not use a list position, shortened UUID, Git commit, or another object's ID"
+                            )));
+                        }
+                    }
+                } else if is_uuid_list_field(field) {
+                    if let Some(items) = child.as_array() {
+                        for (index, identifier) in items.iter().enumerate() {
+                            if let Some(identifier) = identifier.as_str() {
+                                if Uuid::parse_str(identifier).is_err() {
+                                    return Err(AppError::Validation(format!(
+                                        "invalid field {child_path}[{index}]: expected a full UUID, received {identifier:?}. Do not use a list position, shortened UUID, or Git commit"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                validate_uuid_shapes(child, &child_path)?;
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                validate_uuid_shapes(child, &format!("{path}[{index}]"))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn is_uuid_field(field: &str) -> bool {
+    matches!(
+        field,
+        "action_id"
+            | "after_message_id"
+            | "assignee_agent_id"
+            | "attempt_id"
+            | "before_message_id"
+            | "blocker_id"
+            | "company_id"
+            | "conversation_id"
+            | "depends_on_task_id"
+            | "environment_id"
+            | "event_id"
+            | "gate_id"
+            | "handoff_agent_id"
+            | "intent_id"
+            | "memory_id"
+            | "org_unit_id"
+            | "owner_agent_id"
+            | "project_id"
+            | "related_task_id"
+            | "relation_id"
+            | "reports_to_membership_id"
+            | "reviewed_through_message_id"
+            | "session_id"
+            | "source_task_id"
+            | "supersedes_memory_id"
+            | "target_agent_id"
+            | "target_task_id"
+            | "task_id"
+    )
+}
+
+fn is_uuid_list_field(field: &str) -> bool {
+    matches!(
+        field,
+        "member_agent_ids" | "mentioned_agent_ids" | "source_event_ids" | "task_ids"
+    )
 }
 
 #[derive(Clone)]

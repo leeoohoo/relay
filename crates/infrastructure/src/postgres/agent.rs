@@ -861,7 +861,9 @@ impl AgentPlatformRepository for PostgresPlatformRepository {
                 r#"
                 SELECT COUNT(1)
                 FROM agent_action_logs
-                WHERE agent_profile_id = $1 AND created_at >= $2
+                WHERE agent_profile_id = $1
+                  AND created_at >= $2
+                  AND action_type NOT LIKE 'diagnostic.%'
                 "#,
                 &[&agent_id, &since],
             )

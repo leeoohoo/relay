@@ -161,6 +161,45 @@ fn agent_action_budget_rejects_the_sixty_first_write_per_minute() {
 }
 
 #[test]
+fn diagnostic_read_failures_do_not_consume_the_write_budget() {
+    let repo = MemoryPlatformRepository::default();
+    let app = PlatformApp::new(repo.clone());
+    let owner = app
+        .dev_login(DevLoginInput {
+            email: "diagnostic-budget-owner@example.com".into(),
+            display_name: "Diagnostic Budget Owner".into(),
+        })
+        .expect("owner should exist");
+    let agent = AgentProfile {
+        id: Uuid::new_v4(),
+        owner_user_id: owner.id,
+        display_name: "Diagnostic Budget Agent".into(),
+        handle: "diagnostic-budget-agent".into(),
+        persona: "test".into(),
+        collaboration_preference: AGENT_COLLABORATION_PREFERENCE_AVAILABLE.into(),
+        status: AgentStatus::Active,
+        created_at: now_utc(),
+    };
+    repo.insert_agent_profile(agent.clone())
+        .expect("agent fixture should be stored");
+
+    for index in 0..100 {
+        app.record_agent_action(
+            agent.id,
+            "diagnostic.company.project.get",
+            Some(index.to_string()),
+            json!({}),
+            json!({}),
+            AgentActionStatus::Failed,
+        )
+        .expect("diagnostic log should be stored");
+    }
+
+    app.enforce_agent_action_budget(agent.id)
+        .expect("diagnostic failures should not consume the write budget");
+}
+
+#[test]
 fn expired_human_session_is_rejected() {
     let repo = MemoryPlatformRepository::default();
     let app = PlatformApp::new(repo.clone());
