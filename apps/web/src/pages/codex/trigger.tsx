@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
+import { applyCodexRealtimeEvent } from "../../api/codexRuntime";
 import type { CompanyRealtimeEvent } from "../../api/types";
 import { Field } from "../../components/ui";
 import { useUiLanguage } from "../../i18n/uiLanguage";
@@ -40,6 +41,11 @@ export function CodexTriggerPanel(props: {
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const refreshTimerRef = useRef<number | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const triggerRef = useRef<CodexTriggerView | null>(null);
+  const onErrorRef = useRef(props.onError);
+  onErrorRef.current = props.onError;
   const currentSessions = currentTriggerSessions(sessions);
   const selectedProfile = props.profiles.find((item) => item.profile.id === selectedProfileId)?.profile;
   const runningRun = trigger?.recent_runs.find((run) => run.status === "running") ?? null;
@@ -57,36 +63,53 @@ export function CodexTriggerPanel(props: {
   const sessionsEndpoint = `/api/v1/companies/${props.companyId}/agents/${props.agentId}/codex-sessions`;
 
   function applyTrigger(next: CodexTriggerView | null) {
+    triggerRef.current = next;
     setTrigger(next);
     setSelectedProfileId(next?.runner_profile_id ?? "");
   }
 
+  const loadRuntime = useCallback(async (reportError: boolean) => {
+    try {
+      const [{ trigger }, { sessions }] = await Promise.all([
+        api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token),
+        api<{ sessions: CodexSession[] }>(sessionsEndpoint, {}, props.token),
+      ]);
+      applyTrigger(trigger);
+      setSessions(sessions);
+    } catch (error) {
+      if (reportError) onErrorRef.current(error);
+    }
+  }, [endpoint, sessionsEndpoint, props.token]);
+
+  const scheduleRuntimeRefresh = useCallback((delayMs = 1_000) => {
+    if (refreshTimerRef.current !== null || refreshInFlightRef.current) return;
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshInFlightRef.current = true;
+      void loadRuntime(false).finally(() => { refreshInFlightRef.current = false; });
+    }, delayMs);
+  }, [loadRuntime]);
+
   useEffect(() => {
     let active = true;
     setLoading(true);
-    Promise.all([
-      api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token),
-      api<{ sessions: CodexSession[] }>(sessionsEndpoint, {}, props.token),
-    ])
-      .then(([{ trigger }, { sessions }]) => { if (active) { applyTrigger(trigger); setSessions(sessions); } })
-      .catch(props.onError)
+    loadRuntime(true)
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [endpoint, sessionsEndpoint, props.token]);
+  }, [loadRuntime]);
 
   useEffect(() => {
     const event = props.realtimeEvent;
     if (!event || !event.event_type.startsWith("codex.")) return;
     if (event.payload.agent_profile_id !== props.agentId) return;
-    let active = true;
-    Promise.all([
-      api<{ trigger: CodexTriggerView | null }>(endpoint, {}, props.token),
-      api<{ sessions: CodexSession[] }>(sessionsEndpoint, {}, props.token),
-    ])
-      .then(([{ trigger }, { sessions }]) => { if (active) { setTrigger(trigger); setSessions(sessions); } })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, [endpoint, sessionsEndpoint, props.agentId, props.realtimeEvent, props.token]);
+    const projection = applyCodexRealtimeEvent(triggerRef.current, event);
+    applyTrigger(projection.trigger);
+    if (projection.refreshRequired) scheduleRuntimeRefresh();
+  }, [props.agentId, props.realtimeEvent, scheduleRuntimeRefresh]);
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!loading && !selectedProfileId && props.profiles.length) {

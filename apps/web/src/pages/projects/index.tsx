@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
+import type { CompanyRealtimeEvent } from "../../api/types";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Icon } from "../../components/ui";
 import type { CompanyConsole, CompanyProject } from "../../types/platform";
@@ -21,6 +22,7 @@ export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks
 export function ProjectsView(props: {
   consoleData: CompanyConsole;
   token: string;
+  realtimeEvent?: CompanyRealtimeEvent | null;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onClearError: () => void;
@@ -197,6 +199,7 @@ export function ProjectsView(props: {
               companyId={props.consoleData.company.id}
               project={selectedProject}
               token={props.token}
+              realtimeEvent={props.realtimeEvent}
               onError={props.onError}
             />
           ) : null}

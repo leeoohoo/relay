@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { fetchCodexRuntimeOverview } from "../api/codexRuntime";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { applyCodexRealtimeEvent, fetchCodexRuntimeOverview } from "../api/codexRuntime";
 import type { CompanyRealtimeEvent } from "../api/types";
 import type { CodexTriggerRun, CodexTriggerView, CompanyAgent, CompanyProject, CompanyProjectTask } from "../types/platform";
 import { Pagination, usePagination } from "./Pagination";
@@ -26,7 +26,11 @@ export function GroupMembersDrawer(props: {
 }) {
   const agentIdsKey = props.agents.map((agent) => agent.agent_profile.id).join(",");
   const [runtimeByAgent, setRuntimeByAgent] = useState<Record<string, RuntimeState>>({});
+  const runtimeByAgentRef = useRef(runtimeByAgent);
+  const refreshTimersRef = useRef<Map<string, number>>(new Map());
+  const refreshingAgentsRef = useRef<Set<string>>(new Set());
   const pagination = usePagination(props.agents, 8, agentIdsKey);
+  runtimeByAgentRef.current = runtimeByAgent;
 
   useEffect(() => {
     let active = true;
@@ -52,16 +56,36 @@ export function GroupMembersDrawer(props: {
     if (!event?.event_type.startsWith("codex.")) return;
     const agentId = typeof event.payload.agent_profile_id === "string" ? event.payload.agent_profile_id : null;
     if (!agentId || !props.agents.some((agent) => agent.agent_profile.id === agentId)) return;
+    const existing = runtimeByAgentRef.current[agentId] ?? emptyRuntime(false);
+    const projection = applyCodexRealtimeEvent(existing.trigger, event);
+    setRuntimeByAgent((current) => ({
+      ...current,
+      [agentId]: { ...existing, loading: false, trigger: projection.trigger, error: null, stale: false },
+    }));
+    if (
+      !projection.refreshRequired
+      || refreshTimersRef.current.has(agentId)
+      || refreshingAgentsRef.current.has(agentId)
+    ) return;
     const timer = window.setTimeout(() => {
+      refreshTimersRef.current.delete(agentId);
+      refreshingAgentsRef.current.add(agentId);
       fetchCodexRuntimeOverview(props.companyId, [agentId], props.token)
         .then(({ agents }) => {
           const trigger = agents[0]?.trigger ?? null;
           setRuntimeByAgent((current) => ({ ...current, [agentId]: { loading: false, trigger, error: null, stale: false } }));
         })
-        .catch((error) => setRuntimeByAgent((current) => markRuntimeRefreshFailure(current, error, agentId)));
+        .catch((error) => setRuntimeByAgent((current) => markRuntimeRefreshFailure(current, error, agentId)))
+        .finally(() => refreshingAgentsRef.current.delete(agentId));
     }, 1_000);
-    return () => window.clearTimeout(timer);
+    refreshTimersRef.current.set(agentId, timer);
   }, [agentIdsKey, props.companyId, props.realtimeEvent, props.token]);
+
+  useEffect(() => () => {
+    for (const timer of refreshTimersRef.current.values()) window.clearTimeout(timer);
+    refreshTimersRef.current.clear();
+    refreshingAgentsRef.current.clear();
+  }, []);
 
   return (
     <aside className="group-members-drawer" aria-label={props.mode === "group" ? "群成员与运行情况" : "私聊成员与运行情况"}>
