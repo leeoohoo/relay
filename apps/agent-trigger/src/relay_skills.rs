@@ -254,6 +254,13 @@ pub(super) fn prepare_relay_skills(
 ) -> AppResult<PreparedRelaySkills> {
     let profession = infer_company_profession(Some(job_title));
     let identity_token = relay_skill_identity_token(agent);
+    let agent_id_token = agent
+        .id
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(8)
+        .collect::<String>();
     let managed_prefix = format!("relay-{identity_token}-");
     let employee_name = format!("{managed_prefix}employee");
     let profession_name = format!(
@@ -343,8 +350,8 @@ pub(super) fn prepare_relay_skills(
             runtime_skills_root.display()
         ))
     })?;
-    remove_stale_managed_skills(&skills_root, &managed_prefix)?;
-    remove_stale_managed_skills(&runtime_skills_root, &managed_prefix)?;
+    remove_stale_managed_skills(&skills_root, &managed_prefix, &agent_id_token)?;
+    remove_stale_managed_skills(&runtime_skills_root, &managed_prefix, &agent_id_token)?;
     write_and_link_managed_skill(
         &runtime_skills_root,
         &skills_root,
@@ -545,7 +552,7 @@ pub(super) fn relay_skill_identity_token(agent: &AgentProfile) -> String {
     let id = agent.id.to_string().replace('-', "");
     format!(
         "{}-{}",
-        handle.chars().take(36).collect::<String>(),
+        handle.chars().take(18).collect::<String>(),
         &id[..8]
     )
 }
@@ -669,6 +676,7 @@ pub(super) fn append_agent_identity_card(
 pub(super) fn remove_stale_managed_skills(
     skills_root: &Path,
     managed_prefix: &str,
+    agent_id_token: &str,
 ) -> AppResult<()> {
     for entry in fs::read_dir(skills_root).map_err(|error| {
         AppError::Validation(format!(
@@ -680,7 +688,11 @@ pub(super) fn remove_stale_managed_skills(
             AppError::Validation(format!("failed to inspect managed Relay skill: {error}"))
         })?;
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if file_name.starts_with(managed_prefix) {
+        let belongs_to_agent = file_name.starts_with("relay-")
+            && file_name
+                .split('-')
+                .any(|component| component == agent_id_token);
+        if file_name.starts_with(managed_prefix) || belongs_to_agent {
             remove_managed_skill_path(&entry.path()).map_err(|error| {
                 AppError::Validation(format!(
                     "failed to replace managed Relay skill {}: {error}",

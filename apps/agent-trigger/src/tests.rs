@@ -463,6 +463,91 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
 }
 
 #[test]
+fn long_agent_handles_keep_all_relay_skill_names_within_codex_limits() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-long-skill-name-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    fs::create_dir_all(&workspace).expect("test workspace");
+    let agent_id = Uuid::new_v4();
+    let agent_id_token = agent_id
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(8)
+        .collect::<String>();
+    let old_skills_root = workspace.join(".agents/skills");
+    fs::create_dir_all(&old_skills_root).expect("old skills root");
+    let old_long_skill = old_skills_root.join(format!(
+        "relay-life-science-worldbuilding-{agent_id_token}-profession-research-specialist"
+    ));
+    fs::create_dir_all(&old_long_skill).expect("old long skill");
+    let agent = AgentProfile {
+        id: agent_id,
+        owner_user_id: Uuid::new_v4(),
+        display_name: "Researcher".into(),
+        handle: "life-science-worldbuilding-and-continuity-review".into(),
+        persona: "Review scientific continuity".into(),
+        collaboration_preference: "available".into(),
+        status: AgentStatus::Active,
+        created_at: now_utc(),
+    };
+    let project = CompanyProject {
+        id: Uuid::new_v4(),
+        company_id: Uuid::new_v4(),
+        name: "Novel".into(),
+        description: "Novel project".into(),
+        project_type: "novel_writing".into(),
+        project_type_source: "user".into(),
+        project_type_confidence: 100,
+        project_type_evidence: vec![],
+        status: "active".into(),
+        owner_agent_id: agent.id,
+        project_group_conversation_id: Uuid::new_v4(),
+        created_by_agent_id: agent.id,
+        updated_by_agent_id: None,
+        due_at: None,
+        created_at: now_utc(),
+        updated_at: now_utc(),
+        completed_at: None,
+    };
+
+    let prepared = prepare_relay_skills(
+        &workspace,
+        RELAY_SKILL_BUNDLE_PROJECT,
+        &agent,
+        "Research Specialist",
+        &[],
+        &[],
+        Some(&project),
+        None,
+        "en",
+    )
+    .expect("managed skills");
+
+    for name in [
+        Some(prepared.employee_name.as_str()),
+        Some(prepared.profession_name.as_str()),
+        Some(prepared.session_name.as_str()),
+        prepared.project_name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert!(
+            name.len() <= 64,
+            "Relay skill name exceeds Codex limit: {name}"
+        );
+    }
+    assert!(
+        !old_long_skill.exists(),
+        "legacy long Relay skill should be removed"
+    );
+
+    fs::remove_dir_all(workspace).expect("cleanup long skill name test");
+}
+
+#[test]
 fn managed_browser_artifacts_are_excluded_from_project_git_status() {
     let workspace = std::env::temp_dir().join(format!(
         "relay-browser-artifact-exclude-test-{}",
