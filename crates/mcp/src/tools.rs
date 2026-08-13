@@ -170,7 +170,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         action_tool_with_schema(
             "company.task",
             format!(
-                "Project task actions available to this Agent: {}.",
+                "Project task actions available to this Agent: {}. The top-level action field is required on every call. Never call with an empty object. After a validation error, correct one complete call before attempting another or running calls in parallel.",
                 task_actions.join(", ")
             ),
             task_schema,
@@ -292,9 +292,42 @@ pub(super) fn tailored_action_schema<T: JsonSchema + 'static>(
 ) -> Arc<JsonObject> {
     let mut schema = Value::Object((*schema_for::<T>()).clone());
     tailor_action_schema_value(&mut schema, allowed_actions, hidden_fields);
+    expose_required_action_discriminator(&mut schema, allowed_actions);
     match schema {
         Value::Object(object) => Arc::new(object),
         _ => unreachable!("MCP input schema root must be an object"),
+    }
+}
+
+fn expose_required_action_discriminator(value: &mut Value, allowed_actions: &[&str]) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let properties = object
+        .entry("properties")
+        .or_insert_with(|| Value::Object(JsonObject::new()));
+    let Some(properties) = properties.as_object_mut() else {
+        return;
+    };
+    properties.insert(
+        "action".into(),
+        json!({
+            "type": "string",
+            "enum": allowed_actions,
+            "description": "Required operation selector. Always send this top-level field together with every field required by the selected action; never call this tool with an empty object."
+        }),
+    );
+
+    let required = object
+        .entry("required")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(required) = required.as_array_mut() {
+        if !required
+            .iter()
+            .any(|field| field.as_str() == Some("action"))
+        {
+            required.push(Value::String("action".into()));
+        }
     }
 }
 

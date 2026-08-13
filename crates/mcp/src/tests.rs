@@ -187,10 +187,23 @@ fn task_execution_schema_exposes_all_fixed_value_enums() {
         "waived",
         "retry_of",
         "report",
+        "artifact",
         "informational",
     ] {
         assert!(serialized.contains(value), "schema should expose {value}");
     }
+    let schema = serde_json::to_value(&tool.input_schema).expect("task schema should serialize");
+    assert!(schema
+        .pointer("/required")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|field| field == "action")));
+    let action_values = schema
+        .pointer("/properties/action/enum")
+        .and_then(Value::as_array)
+        .expect("task schema should expose a top-level action discriminator");
+    assert!(action_values
+        .iter()
+        .any(|action| action == "evidence_create"));
 }
 
 #[test]
@@ -211,6 +224,26 @@ fn evidence_metrics_default_to_an_empty_object() {
         panic!("expected evidence_create operation");
     };
     assert!(metrics.is_empty());
+}
+
+#[test]
+fn evidence_input_accepts_artifact_as_a_first_class_type() {
+    let input: CompanyTaskToolInput = serde_json::from_value(json!({
+        "action": "evidence_create",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "evidence_type": "artifact",
+        "title": "Delivery artifact",
+        "summary": "Committed project deliverable",
+        "result": "informational",
+        "artifact_refs": []
+    }))
+    .expect("evidence input should accept artifact evidence");
+
+    let CompanyTaskOperation::EvidenceCreate { evidence_type, .. } = input.operation else {
+        panic!("expected evidence_create operation");
+    };
+    assert_eq!(evidence_type.as_str(), "artifact");
 }
 
 #[test]

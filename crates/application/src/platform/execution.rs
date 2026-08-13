@@ -33,6 +33,7 @@ const RELATION_TYPES: &[&str] = &[
 const EVIDENCE_TYPES: &[&str] = &[
     "test",
     "report",
+    "artifact",
     "screenshot",
     "log",
     "runtime",

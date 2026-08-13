@@ -65,6 +65,7 @@ string_enum!(TaskRelationTypeInput {
 string_enum!(EvidenceTypeInput {
     Test => "test",
     Report => "report",
+    Artifact => "artifact",
     Screenshot => "screenshot",
     Log => "log",
     Runtime => "runtime",
@@ -225,7 +226,7 @@ pub(super) enum CompanyTaskOperation {
         gate_id: Option<Uuid>,
         environment_id: Option<Uuid>,
         #[schemars(
-            description = "Evidence category. Use report for review documents and structured written findings; use other only when no specific category applies."
+            description = "Evidence category. Use artifact for delivered files or committed project outputs, report for review documents and structured written findings, and other only when no specific category applies."
         )]
         evidence_type: EvidenceTypeInput,
         title: String,

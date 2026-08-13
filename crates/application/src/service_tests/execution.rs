@@ -196,7 +196,7 @@ fn attempts_blockers_relations_and_evidence_preserve_task_business_state() {
         attempt_id: Some(attempt.id),
         gate_id: None,
         environment_id: None,
-        evidence_type: "test".into(),
+        evidence_type: "artifact".into(),
         title: "单元测试结果".into(),
         summary: "全部测试通过".into(),
         result: "passed".into(),
@@ -207,6 +207,7 @@ fn attempts_blockers_relations_and_evidence_preserve_task_business_state() {
     let evidence = app.create_project_evidence(evidence_input.clone()).unwrap();
     let repeated = app.create_project_evidence(evidence_input).unwrap();
     assert_eq!(evidence.id, repeated.id);
+    assert_eq!(evidence.evidence_type, "artifact");
 
     let view = app
         .get_project_task_execution(
