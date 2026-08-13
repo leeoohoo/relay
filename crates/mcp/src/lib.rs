@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ai_chat_application::{
     AddCompanyProjectMemberInput, AgentStaffingHireInput, AgentStaffingStatusInput,
@@ -42,7 +42,7 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -465,8 +465,80 @@ struct CompanyProjectAssetToolInput {
     asset_type: String,
     locator: String,
     description: Option<String>,
-    status: Option<String>,
-    metadata: Option<Value>,
+    #[schemars(
+        description = "Asset lifecycle status. Omit it to use active; allowed values are active, missing, deprecated, and unknown."
+    )]
+    status: Option<CompanyProjectAssetStatusInput>,
+    #[schemars(
+        description = "Optional structured JSON object for asset-specific metadata. Omit it or send {} when there is no metadata."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_json_object")]
+    metadata: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum CompanyProjectAssetStatusInput {
+    Active,
+    #[serde(alias = "planned")]
+    Missing,
+    Deprecated,
+    Unknown,
+}
+
+fn deserialize_optional_json_object<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    value.map(parse_json_object::<D::Error>).transpose()
+}
+
+fn deserialize_json_object<'de, D>(deserializer: D) -> Result<BTreeMap<String, Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    parse_json_object(Value::deserialize(deserializer)?)
+}
+
+fn parse_json_object<E>(value: Value) -> Result<BTreeMap<String, Value>, E>
+where
+    E: serde::de::Error,
+{
+    match value {
+        Value::Object(object) => Ok(object.into_iter().collect()),
+        Value::String(encoded) => {
+            let decoded = serde_json::from_str::<Value>(&encoded).map_err(|error| {
+                E::custom(format!(
+                    "expected a JSON object; legacy encoded value is invalid JSON: {error}"
+                ))
+            })?;
+            match decoded {
+                Value::Object(object) => Ok(object.into_iter().collect()),
+                _ => Err(E::custom(
+                    "expected a JSON object; legacy encoded JSON must decode to an object",
+                )),
+            }
+        }
+        _ => Err(E::custom("expected a JSON object")),
+    }
+}
+
+impl CompanyProjectAssetStatusInput {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Missing => "missing",
+            Self::Deprecated => "deprecated",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn into_string(self) -> String {
+        self.as_str().to_owned()
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

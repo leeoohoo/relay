@@ -206,8 +206,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                         asset_type: asset.asset_type,
                                         locator: asset.locator,
                                         description: asset.description,
-                                        status: asset.status,
-                                        metadata: asset.metadata,
+                                        status: asset
+                                            .status
+                                            .map(CompanyProjectAssetStatusInput::into_string),
+                                        metadata: asset.metadata.map(|metadata| {
+                                            Value::Object(metadata.into_iter().collect())
+                                        }),
                                     })
                                     .collect(),
                             },

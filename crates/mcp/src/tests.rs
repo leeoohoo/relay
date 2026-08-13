@@ -207,6 +207,214 @@ fn task_execution_schema_exposes_all_fixed_value_enums() {
 }
 
 #[test]
+fn project_asset_schema_matches_application_validation_contract() {
+    let tool = company_mcp_tools(&[COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE.into()])
+        .into_iter()
+        .find(|tool| tool.name.as_ref() == "company.project")
+        .expect("company.project tool");
+    let schema = Value::Object((*tool.input_schema).clone());
+
+    let metadata = schema
+        .pointer("/$defs/CompanyProjectAssetToolInput/properties/metadata")
+        .expect("asset metadata schema");
+    assert!(schema_contains_type(metadata, "object"));
+    assert!(!schema_contains_type(metadata, "string"));
+
+    let status = schema
+        .pointer("/$defs/CompanyProjectAssetStatusInput/enum")
+        .and_then(Value::as_array)
+        .expect("asset status enum");
+    assert_eq!(
+        status,
+        &vec![
+            json!("active"),
+            json!("missing"),
+            json!("deprecated"),
+            json!("unknown"),
+        ]
+    );
+
+    let input: CompanyProjectToolInput = handler::parse_input(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "status": "active",
+            "metadata": { "language": "Rust" }
+        }]
+    }))
+    .expect("valid structured asset input should parse");
+    let CompanyProjectOperation::AssetsReplace { assets, .. } = input.operation else {
+        panic!("expected assets_replace operation");
+    };
+    assert_eq!(
+        assets[0].status.as_ref().map(|value| value.as_str()),
+        Some("active")
+    );
+    assert_eq!(
+        assets[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("language")),
+        Some(&json!("Rust"))
+    );
+
+    let invalid_status = handler::parse_input::<CompanyProjectToolInput>(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "status": "ready"
+        }]
+    }));
+    assert!(invalid_status.is_err());
+
+    for status in ["active", "missing", "deprecated", "unknown"] {
+        handler::parse_input::<CompanyProjectToolInput>(json!({
+            "action": "assets_replace",
+            "company_id": Uuid::nil(),
+            "project_id": Uuid::nil(),
+            "assets": [{
+                "name": "HTTP API",
+                "asset_type": "service",
+                "locator": "apps/server",
+                "status": status
+            }]
+        }))
+        .unwrap_or_else(|error| panic!("documented asset status {status} should parse: {error}"));
+    }
+
+    let legacy_string_metadata: CompanyProjectToolInput = handler::parse_input(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "status": "planned",
+            "metadata": "{\"language\":\"Rust\"}"
+        }]
+    }))
+    .expect("legacy cached schemas should remain compatible during rollout");
+    let CompanyProjectOperation::AssetsReplace { assets, .. } = legacy_string_metadata.operation
+    else {
+        panic!("expected assets_replace operation");
+    };
+    assert_eq!(
+        assets[0].status.as_ref().map(|status| status.as_str()),
+        Some("missing")
+    );
+    assert_eq!(
+        assets[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("language")),
+        Some(&json!("Rust"))
+    );
+
+    let invalid_string_metadata = handler::parse_input::<CompanyProjectToolInput>(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "metadata": "not-json"
+        }]
+    }));
+    assert!(invalid_string_metadata.is_err());
+}
+
+#[test]
+fn environment_observation_schema_uses_structured_objects_and_status_enums() {
+    let tool = company_mcp_tools(&[COMPANY_PERMISSION_TASK_ASSIGN.into()])
+        .into_iter()
+        .find(|tool| tool.name.as_ref() == "company.environment")
+        .expect("company.environment tool");
+    let schema = Value::Object((*tool.input_schema).clone());
+
+    let health_summary = schema_action_property(&schema, "observe", "health_summary")
+        .expect("health_summary schema");
+    assert!(schema_contains_type(health_summary, "object"));
+    assert!(!schema_contains_type(health_summary, "string"));
+
+    let health_details = schema
+        .pointer("/$defs/ProjectEnvironmentServiceObservationToolInput/properties/health_details")
+        .expect("service health_details schema");
+    assert!(schema_contains_type(health_details, "object"));
+    assert!(!schema_contains_type(health_details, "string"));
+
+    for (definition, expected) in [
+        (
+            "ProjectEnvironmentStatusInput",
+            vec!["unknown", "provisioning", "ready", "degraded", "offline"],
+        ),
+        (
+            "ProjectEnvironmentServiceHealthStatusInput",
+            vec!["unknown", "healthy", "unhealthy"],
+        ),
+    ] {
+        let values = schema
+            .pointer(&format!("/$defs/{definition}/enum"))
+            .and_then(Value::as_array)
+            .expect("environment status enum");
+        assert_eq!(
+            values,
+            &expected.into_iter().map(Value::from).collect::<Vec<_>>()
+        );
+    }
+
+    handler::parse_input::<dispatch_environment::CompanyEnvironmentToolInput>(json!({
+        "action": "observe",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "environment_id": Uuid::nil(),
+        "status": "ready",
+        "health_summary": { "message": "healthy" },
+        "services": [{
+            "service_key": "web",
+            "health_status": "healthy",
+            "health_details": { "status_code": 200 }
+        }]
+    }))
+    .expect("valid environment observation should parse");
+
+    handler::parse_input::<dispatch_environment::CompanyEnvironmentToolInput>(json!({
+        "action": "observe",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "environment_id": Uuid::nil(),
+        "status": "ready",
+        "health_summary": "{\"message\":\"healthy\"}",
+        "services": [{
+            "service_key": "web",
+            "health_status": "healthy",
+            "health_details": "{\"status_code\":200}"
+        }]
+    }))
+    .expect("legacy string-encoded environment objects should parse during rollout");
+
+    let invalid_string_summary =
+        handler::parse_input::<dispatch_environment::CompanyEnvironmentToolInput>(json!({
+            "action": "observe",
+            "company_id": Uuid::nil(),
+            "project_id": Uuid::nil(),
+            "environment_id": Uuid::nil(),
+            "status": "ready",
+            "health_summary": "not-json"
+        }));
+    assert!(invalid_string_summary.is_err());
+}
+
+#[test]
 fn evidence_metrics_default_to_an_empty_object() {
     let input: CompanyTaskToolInput = serde_json::from_value(json!({
         "action": "evidence_create",
@@ -852,6 +1060,24 @@ fn schema_action_property<'a>(value: &'a Value, action: &str, property: &str) ->
             .iter()
             .find_map(|item| schema_action_property(item, action, property)),
         _ => None,
+    }
+}
+
+fn schema_contains_type(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.get("type").is_some_and(|value| match value {
+                Value::String(value) => value == expected,
+                Value::Array(values) => values.iter().any(|value| value == expected),
+                _ => false,
+            }) || object
+                .values()
+                .any(|child| schema_contains_type(child, expected))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|item| schema_contains_type(item, expected)),
+        _ => false,
     }
 }
 
