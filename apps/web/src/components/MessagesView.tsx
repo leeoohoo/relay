@@ -24,6 +24,7 @@ export function MessagesView(props: {
   humanUser: HumanUser;
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
+  messageRealtimeEvents?: CompanyRealtimeEvent[];
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onNotice: (message: string) => void;
@@ -41,12 +42,15 @@ export function MessagesView(props: {
   const [mentionAll, setMentionAll] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<PendingMessageFile[]>([]);
+  const [unreadConversationIds, setUnreadConversationIds] = useState<Set<string>>(() => new Set());
+  const lastProcessedMessageSequenceRef = useRef(0);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const shouldScrollToLatestRef = useRef(true);
   const isNearLatestRef = useRef(true);
   const historyScrollAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const selected = props.consoleData.conversations.find((item) => item.preview.id === selectedId);
+  const messageRealtimeEvents = props.messageRealtimeEvents ?? [];
   const selectedProject = selected?.context.project_id
     ? props.consoleData.projects.find((project) => project.project.id === selected.context.project_id)
     : null;
@@ -122,9 +126,39 @@ export function MessagesView(props: {
   } = useConversationMessages<Message>({
     conversationId: selectedId,
     token: props.token,
-    realtimeEvent: props.realtimeEvent,
+    realtimeEvents: messageRealtimeEvents,
     onError: props.onError,
   });
+
+  useEffect(() => {
+    if (!messageRealtimeEvents.length) {
+      lastProcessedMessageSequenceRef.current = 0;
+      return;
+    }
+    const freshEvents = messageRealtimeEvents.filter((event) =>
+      event.sequence_id > lastProcessedMessageSequenceRef.current);
+    if (!freshEvents.length) return;
+    lastProcessedMessageSequenceRef.current = Math.max(
+      lastProcessedMessageSequenceRef.current,
+      ...freshEvents.map((event) => event.sequence_id),
+    );
+    setUnreadConversationIds((current) => {
+      const next = new Set(current);
+      for (const event of freshEvents) {
+        const conversationId = typeof event.payload.conversation_id === "string"
+          ? event.payload.conversation_id
+          : null;
+        if (!conversationId || !event.actor_agent_id || conversationId === selectedId) continue;
+        next.add(conversationId);
+      }
+      return next;
+    });
+  }, [messageRealtimeEvents, selectedId]);
+
+  useEffect(() => {
+    setUnreadConversationIds(new Set());
+    lastProcessedMessageSequenceRef.current = 0;
+  }, [props.consoleData.company.id]);
 
   useEffect(() => {
     setSelectedId((current) => current && props.consoleData.conversations.some((item) => item.preview.id === current)
@@ -347,6 +381,16 @@ export function MessagesView(props: {
     });
   }
 
+  function selectConversation(conversationId: string) {
+    setSelectedId(conversationId);
+    setUnreadConversationIds((current) => {
+      if (!current.has(conversationId)) return current;
+      const next = new Set(current);
+      next.delete(conversationId);
+      return next;
+    });
+  }
+
   return (
     <>
       <section className={`message-console ${showMemberDetails && selected ? "members-open" : ""} ${projectPanelTab && selectedProject ? "project-context-open" : ""}`}>
@@ -357,9 +401,10 @@ export function MessagesView(props: {
           </div>
           <label className="conversation-search"><Icon name="search" /><input value={conversationQuery} onChange={(event) => setConversationQuery(event.target.value)} placeholder="搜索会话" /></label>
           {conversationPagination.pageItems.map((conversation) => (
-            <button key={conversation.preview.id} className={selectedId === conversation.preview.id ? "active" : ""} onClick={() => setSelectedId(conversation.preview.id)}>
+            <button key={conversation.preview.id} className={selectedId === conversation.preview.id ? "active" : ""} onClick={() => selectConversation(conversation.preview.id)}>
               <span className="conversation-icon"><Icon name={conversation.preview.conversation_type === "group" ? "group" : "message"} /></span>
               <span><strong>{conversationDisplayTitle(conversation, agentNames)}</strong><small>{conversation.preview.last_message_preview ?? "暂无消息"}</small></span>
+              {unreadConversationIds.has(conversation.preview.id) ? <span className="conversation-unread-dot" aria-label="有新消息" /> : null}
             </button>
           ))}
           <Pagination {...conversationPagination} onPageChange={conversationPagination.setPage} compact />

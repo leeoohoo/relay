@@ -11,6 +11,7 @@ export function ChatCenter(props: {
   humanUser: HumanUser;
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
+  messageRealtimeEvents: CompanyRealtimeEvent[];
   approvals: AgentToolApproval[];
   onReview: (approvalId: string, decision: ApprovalReviewDecision, reviewNote: string) => Promise<void>;
   onChanged: () => Promise<void>;
@@ -40,6 +41,7 @@ export function ChatCenter(props: {
             humanUser={props.humanUser}
             token={props.token}
             realtimeEvent={props.realtimeEvent}
+            messageRealtimeEvents={props.messageRealtimeEvents}
             onChanged={props.onChanged}
             onError={props.onError}
             onNotice={props.onNotice}

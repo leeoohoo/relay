@@ -41,6 +41,17 @@
   background: var(--relay-cyan);
   box-shadow: 0 0 11px rgba(77, 226, 255, .45);
 }
+.conversation-unread-dot {
+  position: absolute;
+  top: 10px;
+  right: 9px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid #111b24;
+  border-radius: 999px;
+  background: #ff5266;
+  box-shadow: 0 0 0 2px rgba(255, 82, 102, .12), 0 0 10px rgba(255, 82, 102, .55);
+}
 .conversation-icon,
 .conversation-list .agent-avatar.small {
   width: 30px;

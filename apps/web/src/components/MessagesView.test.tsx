@@ -160,6 +160,38 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
+  it("shows a new-message dot for another conversation and clears it when opened", async () => {
+    const messageEvent = {
+      sequence_id: 12,
+      id: "event-12",
+      company_id: "company-1",
+      event_type: "message.created",
+      aggregate_type: "conversation",
+      aggregate_id: "conversation-2",
+      actor_agent_id: "agent-1",
+      actor_human_user_id: null,
+      payload: { conversation_id: "conversation-2", message_id: "message-2" },
+      created_at: "2026-08-07T03:10:00Z",
+    };
+    const baseProps = {
+      consoleData,
+      humanUser: { id: "human-1", email: "owner@example.com", display_name: "Lee" },
+      token: "token",
+      realtimeEvent: null,
+      onChanged: async () => undefined,
+      onError: () => undefined,
+      onNotice: () => undefined,
+    };
+    const { rerender } = render(<MessagesView {...baseProps} messageRealtimeEvents={[]} />);
+
+    rerender(<MessagesView {...baseProps} messageRealtimeEvents={[messageEvent]} />);
+    const unreadDot = await screen.findByLabelText("有新消息");
+    expect(unreadDot.closest("button")).toHaveTextContent("Owner ↔ 前端 Agent");
+
+    fireEvent.click(unreadDot.closest("button")!);
+    expect(screen.queryByLabelText("有新消息")).not.toBeInTheDocument();
+  });
+
   it("shows entity names instead of raw UUIDs in chat messages", async () => {
     const intentId = "d7225caf-9e91-457e-a3fa-bd95a177d42b";
     mockedApi.mockImplementation(async (path) => {

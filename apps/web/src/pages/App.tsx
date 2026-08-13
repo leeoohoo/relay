@@ -51,6 +51,7 @@ export function App() {
   const [approvals, setApprovals] = useState<AgentToolApproval[]>([]);
   const [dismissedApprovalIds, setDismissedApprovalIds] = useState<Set<string>>(() => new Set());
   const [realtimeEvent, setRealtimeEvent] = useState<CompanyRealtimeEvent | null>(null);
+  const [messageRealtimeEvents, setMessageRealtimeEvents] = useState<CompanyRealtimeEvent[]>([]);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
   const realtimeRefreshInFlightRef = useRef(false);
   const pendingRealtimeRegionsRef = useRef<Set<CompanyConsoleRegion>>(new Set());
@@ -109,6 +110,10 @@ export function App() {
   }, [selectedCompanyId, session?.token]);
 
   useEffect(() => {
+    setMessageRealtimeEvents([]);
+  }, [selectedCompanyId]);
+
+  useEffect(() => {
     setApprovals([]);
     setDismissedApprovalIds(new Set());
     if (!session || !selectedCompanyId || !companyConsole || !["owner", "admin"].includes(companyConsole.human_membership.role)) return;
@@ -136,6 +141,12 @@ export function App() {
     token: session?.token ?? null,
     onEvent: (event) => {
       setRealtimeEvent(event);
+      if (event.event_type === "message.created") {
+        // Message events can arrive immediately before inbox/runtime events. Keep
+        // them in a small independent queue so React batching cannot replace the
+        // message notification with the last event from the same SSE chunk.
+        setMessageRealtimeEvents((current) => [...current, event].slice(-200));
+      }
       if (event.event_type.startsWith("agent.runtime.approval_")) {
         void refreshApprovals().catch(() => undefined);
       }
@@ -463,6 +474,7 @@ export function App() {
                 humanUser={session.user}
                 token={session.token}
                 realtimeEvent={realtimeEvent}
+                messageRealtimeEvents={messageRealtimeEvents}
                 approvals={approvals}
                 onReview={reviewApproval}
                 onChanged={refreshCompany}
