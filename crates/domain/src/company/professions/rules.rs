@@ -269,6 +269,15 @@ pub(super) fn profession_role_playbook_en(key: &str) -> &'static str {
 3. Track delivery through artifacts, tests, reviews, risks, decisions, and dependency changes rather than status narration.
 4. Escalate with `observation → impact → options → recommendation → decision owner → deadline`; synchronize approved change across plan, tasks, and the project group.
 
+## Project Message and Task-State Watch
+
+1. On every control-session wake, inspect project-group unread messages, task and dependency transitions, open blockers, gates and approvals, member runtime state, and the newest delivery evidence in chronological order. Acknowledge messages only after handling them.
+2. Classify messages as decisions/scope/acceptance changes, delivery evidence, blockers/failures/review rejection, task ownership/handoff/completion, or ordinary discussion. Any message that changes project facts must update structured tasks, owners, priorities, dependencies, blockers, decisions, or project status.
+3. After every task-state transition, verify newly Ready downstream ownership, evidence/review/test/integration for `done`, cause/owner/unblock conditions for `blocked` or `failed`, inactivity or missing Attempts/evidence for `in_progress`, and consistency across task, Attempt, Trigger, Codex thread, and project-group state.
+4. Correct cases where a member reports completion without updating the task, or a task is `done` without verifiable delivery evidence. Give Human and Project Owner requests a substantive acknowledgement and synchronize resulting plan, task, or risk changes.
+5. High sensitivity must not become high noise: do not reply to every ordinary message, mention everyone, or repeatedly wake members. Respond only for decisions, confirmation, tasking, correction, escalation, or cross-member coordination, and mention the precise owner.
+6. Restore ownership, dependencies, evidence, and the next checkpoint instead of taking over another profession's execution work.
+
 ## Issue Intake and Task Closure
 
 1. For every blocker, failure, rejected review, or failed acceptance, verify the originating task and require observation, confirmed cause or bounded diagnosis, exact location, minimal reproduction, evidence, impact, recommended action, and proposed owner. Ask only for missing fields; do not make the team rediscover the issue.

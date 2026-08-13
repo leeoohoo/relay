@@ -285,6 +285,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_company_project_task(input.task_id)
             .filter(|task| task.project_id == project.id)
             .ok_or_else(|| AppError::NotFound("project task not found".into()))?;
+        let previous_status = task.status.clone();
         let can_manage = membership
             .permissions
             .iter()
@@ -381,6 +382,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         {
             self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
         }
+        if status_changed {
+            self.notify_project_managers_of_task_status_change(
+                &project,
+                &task,
+                &previous_status,
+                Some(input.actor_agent_id),
+                None,
+                now,
+            )?;
+        }
         Ok(task)
     }
 
@@ -399,6 +410,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_company_project_task(input.task_id)
             .filter(|task| task.project_id == project.id)
             .ok_or_else(|| AppError::NotFound("project task not found".into()))?;
+        let previous_status = task.status.clone();
         let current_dependency_ids = self
             .repo
             .list_company_project_task_dependencies(project.id)
@@ -510,6 +522,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     45,
                 );
             }
+        }
+        if status_changed {
+            self.notify_project_managers_of_task_status_change(
+                &project,
+                &task,
+                &previous_status,
+                None,
+                Some(input.human_user_id),
+                now,
+            )?;
         }
         Ok(task)
     }
@@ -710,6 +732,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let now = now_utc();
         let mut assignments = Vec::new();
         let mut dependency_unlock_task_ids = Vec::new();
+        let mut status_changes = Vec::new();
         let mut tasks = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
             let mut task = self
@@ -717,6 +740,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .get_company_project_task(task_id)
                 .filter(|task| task.project_id == project.id)
                 .ok_or_else(|| AppError::NotFound("project task not found".into()))?;
+            let previous_status = task.status.clone();
             if let Some(status) = status.as_deref() {
                 if matches!(
                     status,
@@ -729,6 +753,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }
                 if task.status != status {
                     task.status = status.to_string();
+                    status_changes.push((task.id, previous_status));
                     if matches!(
                         status,
                         PROJECT_TASK_STATUS_DONE
@@ -785,6 +810,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }),
                 45,
             );
+        }
+        for (task_id, previous_status) in status_changes {
+            if let Some(task) = tasks.iter().find(|task| task.id == task_id) {
+                self.notify_project_managers_of_task_status_change(
+                    &project,
+                    task,
+                    &previous_status,
+                    Some(input.actor_agent_id),
+                    None,
+                    now,
+                )?;
+            }
         }
         tasks.sort_by(|left, right| {
             right

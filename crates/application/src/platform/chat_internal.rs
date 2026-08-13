@@ -68,19 +68,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 notification_recipient_ids.push(owner_agent_id);
             }
         }
-        let wake_recipient_agent_ids = if context.context_type == CONVERSATION_CONTEXT_PROJECT_GROUP
-            && mentioned_agent_ids.is_empty()
-            && !input.mention_all
-        {
-            Vec::new()
-        } else {
-            self.resolve_company_message_wake_recipients(
-                &context,
-                &notification_recipient_ids,
-                &mentioned_agent_ids,
-                input.mention_all,
-            )?
-        };
+        let wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
+            &context,
+            &notification_recipient_ids,
+            &mentioned_agent_ids,
+            input.mention_all,
+        )?;
         let message = MessageView {
             id: Uuid::new_v4(),
             conversation_id: input.conversation_id,
@@ -195,10 +188,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .iter()
             .copied()
             .filter(|agent_id| {
-                let subscription_allows_immediate = self
+                let message_subscription_allows_immediate = self
+                    .project_event_subscription_mode(project_id, *agent_id, EVENT_CATEGORY_MESSAGE)
+                    .is_ok_and(|mode| mode == EVENT_SUBSCRIPTION_IMMEDIATE);
+                let task_subscription_allows_immediate = self
                     .project_event_subscription_mode(project_id, *agent_id, EVENT_CATEGORY_TASK)
                     .is_ok_and(|mode| mode == EVENT_SUBSCRIPTION_IMMEDIATE);
-                tasks.iter().any(|task| {
+                let has_executable_task = tasks.iter().any(|task| {
                     task.assignee_agent_id == Some(*agent_id)
                         && matches!(
                             task.status.as_str(),
@@ -218,7 +214,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                                         )
                                     })
                             })
-                }) && subscription_allows_immediate
+                });
+                message_subscription_allows_immediate
+                    || (has_executable_task && task_subscription_allows_immediate)
             })
             .collect())
     }

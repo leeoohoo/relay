@@ -421,7 +421,7 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             handle: "human-message-alpha".into(),
             persona: "负责协调".into(),
             org_unit_id: None,
-            job_title: None,
+            job_title: Some("项目经理".into()),
             role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
             reports_to_membership_id: None,
         })
@@ -647,6 +647,15 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             depends_on_task_ids: Vec::new(),
         })
         .expect("owner should assign a ready project task");
+    app.repo
+        .save_project_member_event_subscriptions(vec![ProjectMemberEventSubscription {
+            project_id: project.project.id,
+            agent_profile_id: alpha.agent_profile.id,
+            event_category: EVENT_CATEGORY_MESSAGE.into(),
+            subscription_mode: EVENT_SUBSCRIPTION_DIGEST.into(),
+            updated_at: now_utc(),
+        }])
+        .expect("test should simulate a legacy project-manager message subscription");
     for agent_id in [alpha.agent_profile.id, beta.agent_profile.id] {
         let mut trigger = app
             .repo
@@ -671,7 +680,18 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .repo
         .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
         .expect("alpha trigger should exist");
-    assert!(alpha_project_trigger.wake_requested_at.is_none());
+    assert_eq!(
+        alpha_project_trigger.wake_requested_at,
+        Some(project_message.created_at)
+    );
+    assert!(app
+        .repo
+        .list_project_member_event_subscriptions(project.project.id, alpha.agent_profile.id)
+        .iter()
+        .any(|subscription| {
+            subscription.event_category == EVENT_CATEGORY_MESSAGE
+                && subscription.subscription_mode == EVENT_SUBSCRIPTION_IMMEDIATE
+        }));
     let beta_project_trigger = app
         .repo
         .get_agent_codex_trigger_config_by_agent(beta.agent_profile.id)
@@ -718,8 +738,10 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .repo
         .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
         .expect("project owner trigger should exist");
-    assert!(owner_trigger.wake_requested_at.is_none());
-    assert!(owner_trigger.wake_reason.is_none());
+    assert_eq!(
+        owner_trigger.wake_requested_at,
+        Some(member_update.created_at)
+    );
     let owner_events = app
         .list_agent_inbox_events(alpha.agent_profile.id, true, 100)
         .expect("project owner inbox should load")
@@ -731,9 +753,9 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         })
         .collect::<Vec<_>>();
     assert_eq!(owner_events.len(), 1);
-    assert_eq!(owner_events[0].event_class, "digestible");
-    assert!(!owner_events[0].requires_action);
-    assert_eq!(owner_events[0].wake_policy, "deferred");
+    assert_eq!(owner_events[0].event_class, "actionable");
+    assert!(owner_events[0].requires_action);
+    assert_eq!(owner_events[0].wake_policy, "immediate");
     assert_eq!(
         owner_events[0]
             .payload_json
@@ -747,6 +769,55 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .expect("project member trigger should exist")
         .wake_requested_at
         .is_none());
+
+    let mut owner_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
+        .expect("project manager trigger should exist");
+    owner_trigger.next_run_at = future_check;
+    owner_trigger.wake_requested_at = None;
+    owner_trigger.wake_reason = None;
+    app.repo
+        .save_agent_codex_trigger_config(owner_trigger)
+        .expect("test should reset task status wake state");
+    let completed_task = app
+        .update_company_project_task(UpdateCompanyProjectTaskInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            task_id: ready_task.id,
+            title: None,
+            description: None,
+            status: Some(PROJECT_TASK_STATUS_DONE.into()),
+            priority: None,
+            assignee_agent_id: None,
+            due_at: None,
+        })
+        .expect("assigned Agent should complete its task");
+    assert_eq!(completed_task.status, PROJECT_TASK_STATUS_DONE);
+    let owner_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
+        .expect("project manager trigger should exist");
+    assert_eq!(
+        owner_trigger.wake_requested_at,
+        Some(completed_task.updated_at)
+    );
+    assert_eq!(
+        owner_trigger.wake_reason.as_deref(),
+        Some(AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED)
+    );
+    assert!(app
+        .list_agent_inbox_events(alpha.agent_profile.id, true, 100)
+        .expect("project manager inbox should load")
+        .iter()
+        .any(|event| {
+            event.event_type == "company.project.task_status_changed"
+                && payload_uuid_field_optional(&event.payload_json, "task_id")
+                    == Some(completed_task.id)
+                && event.requires_action
+                && event.wake_policy == "immediate"
+        }));
 
     let mut owner_trigger = app
         .repo

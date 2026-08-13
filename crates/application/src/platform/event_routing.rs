@@ -51,6 +51,15 @@ pub(super) fn route_agent_event(
             causation_id: None,
             correlation_id: payload_uuid(payload, "project_id"),
         },
+        "company.project.task_status_changed" => EventRoutingDecision {
+            event_class: EVENT_CLASS_ACTIONABLE,
+            requires_action: true,
+            wake_policy: EVENT_WAKE_IMMEDIATE,
+            dedupe_key: None,
+            coalesce_key: None,
+            causation_id: None,
+            correlation_id: payload_uuid(payload, "project_id"),
+        },
         "company.project.task_assigned" | "company.project.member_added" => EventRoutingDecision {
             event_class: EVENT_CLASS_INFORMATIONAL,
             requires_action: false,
@@ -187,6 +196,20 @@ mod tests {
             route_agent_event("company.project.task_ready", &json!({ "task_id": task_id }));
         assert_eq!(decision.event_class, EVENT_CLASS_EXECUTION_READY);
         assert_eq!(decision.dedupe_key, Some(format!("task-ready:{task_id}")));
+    }
+
+    #[test]
+    fn task_status_change_is_actionable_for_project_management() {
+        let project_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let decision = route_agent_event(
+            "company.project.task_status_changed",
+            &json!({ "project_id": project_id, "task_id": task_id }),
+        );
+        assert_eq!(decision.event_class, EVENT_CLASS_ACTIONABLE);
+        assert!(decision.requires_action);
+        assert_eq!(decision.wake_policy, EVENT_WAKE_IMMEDIATE);
+        assert_eq!(decision.correlation_id, Some(project_id));
     }
 
     #[test]

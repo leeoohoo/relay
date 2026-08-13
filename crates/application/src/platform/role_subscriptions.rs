@@ -9,14 +9,47 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let existing = self
             .repo
             .list_project_member_event_subscriptions(project_id, agent_id);
-        if !existing.is_empty() {
-            return Ok(existing);
-        }
         let membership = self
             .repo
             .get_company_agent_membership(agent_id)
             .ok_or_else(|| AppError::NotFound("company Agent membership not found".into()))?;
         let profession = infer_company_profession(Some(&membership.job_title));
+        if !existing.is_empty() {
+            if profession.key != COMPANY_PROFESSION_PROJECT_MANAGER {
+                return Ok(existing);
+            }
+            let mut subscriptions = existing;
+            let now = now_utc();
+            let mut changed = Vec::new();
+            for (event_category, subscription_mode) in
+                default_role_subscriptions(COMPANY_PROFESSION_PROJECT_MANAGER)
+            {
+                if let Some(subscription) = subscriptions
+                    .iter_mut()
+                    .find(|item| item.event_category == event_category)
+                {
+                    if subscription.subscription_mode != subscription_mode {
+                        subscription.subscription_mode = subscription_mode.into();
+                        subscription.updated_at = now;
+                        changed.push(subscription.clone());
+                    }
+                } else {
+                    let subscription = ProjectMemberEventSubscription {
+                        project_id,
+                        agent_profile_id: agent_id,
+                        event_category: event_category.into(),
+                        subscription_mode: subscription_mode.into(),
+                        updated_at: now,
+                    };
+                    changed.push(subscription.clone());
+                    subscriptions.push(subscription);
+                }
+            }
+            if !changed.is_empty() {
+                self.repo.save_project_member_event_subscriptions(changed)?;
+            }
+            return Ok(subscriptions);
+        }
         let now = now_utc();
         let subscriptions = default_role_subscriptions(&profession.key)
             .into_iter()
@@ -47,6 +80,63 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .find(|item| item.event_category == event_category)
             .map(|item| item.subscription_mode)
             .unwrap_or_else(|| EVENT_SUBSCRIPTION_ON_DEMAND.into()))
+    }
+
+    pub(super) fn notify_project_managers_of_task_status_change(
+        &self,
+        project: &CompanyProject,
+        task: &CompanyProjectTask,
+        previous_status: &str,
+        actor_agent_id: Option<Uuid>,
+        actor_human_user_id: Option<Uuid>,
+        changed_at: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        let mut notified = 0;
+        for member in self.repo.list_company_project_members(project.id) {
+            if member.left_at.is_some() || actor_agent_id == Some(member.agent_profile_id) {
+                continue;
+            }
+            let Some(membership) = self
+                .repo
+                .get_company_agent_membership(member.agent_profile_id)
+            else {
+                continue;
+            };
+            if infer_company_profession(Some(&membership.job_title)).key
+                != COMPANY_PROFESSION_PROJECT_MANAGER
+                || self.project_event_subscription_mode(
+                    project.id,
+                    member.agent_profile_id,
+                    EVENT_CATEGORY_TASK,
+                )? != EVENT_SUBSCRIPTION_IMMEDIATE
+            {
+                continue;
+            }
+            self.enqueue_agent_event(
+                member.agent_profile_id,
+                "company.project.task_status_changed",
+                json!({
+                    "company_id": project.company_id,
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "task_id": task.id,
+                    "task_title": task.title,
+                    "previous_status": previous_status,
+                    "current_status": task.status,
+                    "assignee_agent_id": task.assignee_agent_id,
+                    "changed_by_agent_id": actor_agent_id,
+                    "changed_by_human_user_id": actor_human_user_id,
+                }),
+                55,
+            )?;
+            self.repo.request_agent_codex_trigger_wake(
+                member.agent_profile_id,
+                changed_at,
+                AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED,
+            )?;
+            notified += 1;
+        }
+        Ok(notified)
     }
 
     pub(super) fn project_load_warnings(
@@ -135,7 +225,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
 fn default_role_subscriptions(profession_key: &str) -> Vec<(&'static str, &'static str)> {
     let mut defaults = vec![(EVENT_CATEGORY_MESSAGE, EVENT_SUBSCRIPTION_DIGEST)];
     match profession_key {
-        COMPANY_PROFESSION_PROJECT_MANAGER | COMPANY_PROFESSION_PRODUCT_MANAGER => {
+        COMPANY_PROFESSION_PROJECT_MANAGER => {
+            defaults[0] = (EVENT_CATEGORY_MESSAGE, EVENT_SUBSCRIPTION_IMMEDIATE);
             defaults.extend([
                 (EVENT_CATEGORY_GATE, EVENT_SUBSCRIPTION_IMMEDIATE),
                 (EVENT_CATEGORY_BLOCKER, EVENT_SUBSCRIPTION_IMMEDIATE),
@@ -143,6 +234,12 @@ fn default_role_subscriptions(profession_key: &str) -> Vec<(&'static str, &'stat
                 (EVENT_CATEGORY_GOVERNANCE, EVENT_SUBSCRIPTION_IMMEDIATE),
             ])
         }
+        COMPANY_PROFESSION_PRODUCT_MANAGER => defaults.extend([
+            (EVENT_CATEGORY_GATE, EVENT_SUBSCRIPTION_IMMEDIATE),
+            (EVENT_CATEGORY_BLOCKER, EVENT_SUBSCRIPTION_IMMEDIATE),
+            (EVENT_CATEGORY_TASK, EVENT_SUBSCRIPTION_IMMEDIATE),
+            (EVENT_CATEGORY_GOVERNANCE, EVENT_SUBSCRIPTION_IMMEDIATE),
+        ]),
         COMPANY_PROFESSION_QA_ENGINEER => defaults.extend([
             (EVENT_CATEGORY_ENVIRONMENT, EVENT_SUBSCRIPTION_IMMEDIATE),
             (EVENT_CATEGORY_QA, EVENT_SUBSCRIPTION_IMMEDIATE),
@@ -189,5 +286,26 @@ mod tests {
         assert!(subscriptions.contains(&(EVENT_CATEGORY_REQUIREMENT, EVENT_SUBSCRIPTION_IMMEDIATE)));
         assert!(subscriptions.contains(&(EVENT_CATEGORY_ENVIRONMENT, EVENT_SUBSCRIPTION_MUTED)));
         assert!(subscriptions.contains(&(EVENT_CATEGORY_QA, EVENT_SUBSCRIPTION_MUTED)));
+    }
+
+    #[test]
+    fn project_manager_wakes_for_messages_and_task_governance() {
+        let subscriptions = default_role_subscriptions(COMPANY_PROFESSION_PROJECT_MANAGER);
+        for category in [
+            EVENT_CATEGORY_MESSAGE,
+            EVENT_CATEGORY_GATE,
+            EVENT_CATEGORY_BLOCKER,
+            EVENT_CATEGORY_TASK,
+            EVENT_CATEGORY_GOVERNANCE,
+        ] {
+            assert!(subscriptions.contains(&(category, EVENT_SUBSCRIPTION_IMMEDIATE)));
+        }
+    }
+
+    #[test]
+    fn product_manager_keeps_project_messages_in_digest_mode() {
+        let subscriptions = default_role_subscriptions(COMPANY_PROFESSION_PRODUCT_MANAGER);
+        assert!(subscriptions.contains(&(EVENT_CATEGORY_MESSAGE, EVENT_SUBSCRIPTION_DIGEST)));
+        assert!(subscriptions.contains(&(EVENT_CATEGORY_TASK, EVENT_SUBSCRIPTION_IMMEDIATE)));
     }
 }

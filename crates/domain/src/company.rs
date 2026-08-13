@@ -208,6 +208,7 @@ pub const AGENT_CODEX_TRIGGER_TYPE_TASK: &str = "task";
 pub const AGENT_CODEX_TRIGGER_TYPE_ASSET_REFRESH: &str = "asset_refresh";
 pub const AGENT_CODEX_WAKE_REASON_MESSAGE: &str = "message";
 pub const AGENT_CODEX_WAKE_REASON_TASK_READY: &str = "task_ready";
+pub const AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED: &str = "task_status_changed";
 pub const AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED: &str = "project_resumed";
 pub const AGENT_CODEX_WAKE_REASON_INTENT_RECOVERY: &str = "intent_recovery";
 pub const AGENT_CODEX_RUN_STATUS_RUNNING: &str = "running";
@@ -234,6 +235,7 @@ pub fn is_agent_codex_wake_reason(value: &str) -> bool {
         value,
         AGENT_CODEX_WAKE_REASON_MESSAGE
             | AGENT_CODEX_WAKE_REASON_TASK_READY
+            | AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED
             | AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED
             | AGENT_CODEX_WAKE_REASON_INTENT_RECOVERY
     )
