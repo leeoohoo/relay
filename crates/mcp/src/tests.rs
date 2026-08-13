@@ -166,6 +166,54 @@ fn staffing_profession_keys_accept_common_aliases_and_expose_full_catalog() {
 }
 
 #[test]
+fn task_execution_schema_exposes_all_fixed_value_enums() {
+    let tool = company_mcp_tools(&[
+        COMPANY_PERMISSION_TASK_ASSIGN.into(),
+        COMPANY_PERMISSION_TASK_UPDATE.into(),
+    ])
+    .into_iter()
+    .find(|tool| tool.name.as_ref() == "company.task")
+    .expect("company.task tool");
+    let serialized =
+        serde_json::to_string(&tool.input_schema).expect("task schema should serialize");
+    for value in [
+        "execution",
+        "environment_check",
+        "succeeded",
+        "interrupted",
+        "dependency",
+        "environment",
+        "resolved",
+        "waived",
+        "retry_of",
+        "report",
+        "informational",
+    ] {
+        assert!(serialized.contains(value), "schema should expose {value}");
+    }
+}
+
+#[test]
+fn evidence_metrics_default_to_an_empty_object() {
+    let input: CompanyTaskToolInput = serde_json::from_value(json!({
+        "action": "evidence_create",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "evidence_type": "report",
+        "title": "Review",
+        "summary": "Reviewed",
+        "result": "informational",
+        "artifact_refs": []
+    }))
+    .expect("evidence input should accept omitted metrics");
+
+    let CompanyTaskOperation::EvidenceCreate { metrics, .. } = input.operation else {
+        panic!("expected evidence_create operation");
+    };
+    assert!(metrics.is_empty());
+}
+
+#[test]
 fn active_company_agents_receive_six_company_domain_tools() {
     let tools = company_mcp_tools(&[]);
     let names = tools

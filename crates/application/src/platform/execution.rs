@@ -608,7 +608,10 @@ fn normalize_choice(value: &str, allowed: &[&str], field: &str) -> AppResult<Str
     if allowed.contains(&value.as_str()) {
         Ok(value)
     } else {
-        Err(AppError::Validation(format!("unsupported {field}")))
+        Err(AppError::Validation(format!(
+            "unsupported {field} {value:?}; allowed values: {}",
+            allowed.join(", ")
+        )))
     }
 }
 

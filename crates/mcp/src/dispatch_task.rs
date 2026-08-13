@@ -294,7 +294,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         attempt_type,
                         objective,
                     } => Ok(
-                        json!({ "attempt": self.platform.start_project_task_attempt(StartProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, intent_id, attempt_type, objective })? }),
+                        json!({ "attempt": self.platform.start_project_task_attempt(StartProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, intent_id, attempt_type: attempt_type.into_string(), objective })? }),
                     ),
                     CompanyTaskOperation::AttemptFinish {
                         company_id,
@@ -305,7 +305,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         result_summary,
                         failure_category,
                     } => Ok(
-                        json!({ "attempt": self.platform.finish_project_task_attempt(FinishProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, status, result_summary, failure_category })? }),
+                        json!({ "attempt": self.platform.finish_project_task_attempt(FinishProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, status: status.into_string(), result_summary, failure_category })? }),
                     ),
                     CompanyTaskOperation::BlockerOpen {
                         company_id,
@@ -317,7 +317,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         owner_agent_id,
                         resolution_condition,
                     } => Ok(
-                        json!({ "blocker": self.platform.open_project_task_blocker(OpenProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, blocker_type, summary, owner_agent_id, resolution_condition })? }),
+                        json!({ "blocker": self.platform.open_project_task_blocker(OpenProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, blocker_type: blocker_type.into_string(), summary, owner_agent_id, resolution_condition })? }),
                     ),
                     CompanyTaskOperation::BlockerResolve {
                         company_id,
@@ -327,7 +327,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         status,
                         resolution_summary,
                     } => Ok(
-                        json!({ "blocker": self.platform.resolve_project_task_blocker(ResolveProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, blocker_id, status, resolution_summary })? }),
+                        json!({ "blocker": self.platform.resolve_project_task_blocker(ResolveProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, blocker_id, status: status.into_string(), resolution_summary })? }),
                     ),
                     CompanyTaskOperation::RelationAdd {
                         company_id,
@@ -336,7 +336,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         target_task_id,
                         relation_type,
                     } => Ok(
-                        json!({ "relation": self.platform.add_project_task_relation(AddProjectTaskRelationInput { actor_agent_id: agent_id, company_id, project_id, source_task_id, target_task_id, relation_type })? }),
+                        json!({ "relation": self.platform.add_project_task_relation(AddProjectTaskRelationInput { actor_agent_id: agent_id, company_id, project_id, source_task_id, target_task_id, relation_type: relation_type.into_string() })? }),
                     ),
                     CompanyTaskOperation::RelationRemove {
                         company_id,
@@ -368,7 +368,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         metrics,
                         dedupe_key,
                     } => Ok(
-                        json!({ "evidence": self.platform.create_project_evidence(CreateProjectEvidenceInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, gate_id, environment_id, evidence_type, title, summary, result, artifact_refs, metrics, dedupe_key })? }),
+                        json!({ "evidence": self.platform.create_project_evidence(CreateProjectEvidenceInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, gate_id, environment_id, evidence_type: evidence_type.into_string(), title, summary, result: result.into_string(), artifact_refs, metrics: Value::Object(metrics.into_iter().collect()), dedupe_key })? }),
                     ),
                 }
             }

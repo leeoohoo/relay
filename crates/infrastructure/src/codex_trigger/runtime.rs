@@ -85,16 +85,25 @@ impl CodexTriggerRunner {
         command: &mut Command,
         sandbox_mode: &str,
         runtime_temp_path: &Path,
+        workspace_path: &Path,
     ) -> AppResult<()> {
         let runtime_temp = runtime_temp_path.to_str().ok_or_else(|| {
             AppError::Validation("Codex runtime temp path must be valid UTF-8".into())
         })?;
         if sandbox_mode == "workspace-write" {
+            let mut writable_roots = vec![toml_string(runtime_temp)];
+            let relay_git_directory = workspace_path.join(".relay-git");
+            if relay_git_directory.is_dir() {
+                let relay_git = relay_git_directory.to_str().ok_or_else(|| {
+                    AppError::Validation("Relay Git directory path must be valid UTF-8".into())
+                })?;
+                writable_roots.push(toml_string(relay_git));
+            }
             command
                 .arg("--config")
                 .arg(format!(
                     "sandbox_workspace_write.writable_roots=[{}]",
-                    toml_string(runtime_temp)
+                    writable_roots.join(",")
                 ))
                 .arg("--config")
                 .arg("sandbox_workspace_write.exclude_tmpdir_env_var=false");
@@ -140,7 +149,12 @@ impl CodexTriggerRunner {
         }
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
-        self.apply_runtime_temp_arguments(&mut command, sandbox_mode, runtime_temp_path)?;
+        self.apply_runtime_temp_arguments(
+            &mut command,
+            sandbox_mode,
+            runtime_temp_path,
+            &request.cwd,
+        )?;
         command
             .arg("--sandbox")
             .arg(sandbox_mode)
@@ -332,7 +346,12 @@ impl CodexTriggerRunner {
             .arg("approvals_reviewer=\"user\"");
         apply_managed_cli_settings(&mut command, request, self.auto_compact_token_limit);
         apply_managed_mcp_settings(&mut command, &request.managed_mcp_servers);
-        self.apply_runtime_temp_arguments(&mut command, sandbox_mode, runtime_temp_path)?;
+        self.apply_runtime_temp_arguments(
+            &mut command,
+            sandbox_mode,
+            runtime_temp_path,
+            &request.cwd,
+        )?;
         command
             .arg("--config")
             .arg(format!(
