@@ -76,7 +76,10 @@ mod handler;
 mod task_input;
 mod tools;
 
-use task_input::{CompanyTaskOperation, CompanyTaskToolInput};
+use task_input::{
+    normalize_company_task_input, validate_company_task_input, CompanyTaskOperation,
+    CompanyTaskToolInput,
+};
 
 pub use handler::{agent_key_from_headers, agent_run_token_from_headers, AiChatMcpHandler};
 pub use tools::standard_mcp_tools;
@@ -967,5 +970,7 @@ struct CompanyStaffActionGetToolInput {
     action_id: Uuid,
 }
 
+#[cfg(test)]
+mod task_contract_tests;
 #[cfg(test)]
 mod tests;

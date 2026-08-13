@@ -71,12 +71,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
         agent_key: Option<&str>,
         agent_run_token: Option<&str>,
         tool_name: &str,
-        input: Value,
+        mut input: Value,
     ) -> AppResult<McpInvocation> {
         if !is_public_tool_name(tool_name) {
             return Err(AppError::NotFound(format!("unknown MCP tool: {tool_name}")));
         }
         let agent = self.authenticate_agent(agent_key, agent_run_token)?;
+        if tool_name == "company.task" {
+            normalize_company_task_input(&mut input);
+        }
         let request_input = input.clone();
         let idempotency_key = idempotency_key_from_input(&request_input);
         let is_mutating = is_mutating_tool(tool_name, &request_input);

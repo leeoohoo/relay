@@ -53,6 +53,17 @@ First identify the session kind. The control session owns Inbox, chat, coordinat
 - `failed`: the attempted work or validation failed; preserve a task-ready defect handoff with exact reproduction, evidence, impact, and recovery or decision needed.
 - `done`: every acceptance criterion is satisfied and evidence is available. Partial implementation, unrun tests, or an unpushed shared artifact is not done.
 
+## Execution Record Vocabulary
+
+Use the canonical values below for new `company.task` calls. Relay accepts common natural-language aliases for cached older clients, but do not invent new enum values.
+
+- `attempt_start` requires `attempt_type` and `objective`. Use `execution`, `review`, `qa`, `retest`, or `environment_check`.
+- `attempt_finish` requires `status` and `result_summary`. Use `succeeded`, `failed`, `cancelled`, or `interrupted`. When a blocker stops the attempt, use `interrupted` and open a separate blocker.
+- `blocker_open` requires `blocker_type`, `summary`, and `resolution_condition`. Use `dependency`, `environment`, `approval`, `defect`, `decision`, or `external`; put detailed subtypes in `summary`.
+- `evidence_create` requires `evidence_type`, `title`, `summary`, and `result`. Evidence types are `test`, `report`, `artifact`, `screenshot`, `log`, `runtime`, `design`, `decision`, or `other`. Results are `passed`, `failed`, `inconclusive`, or `informational`. Use `artifact` for delivered files or Git commits and `report` for written review or integration acceptance.
+
+After a validation error, rebuild one complete request with every required field from the tool Schema and retry once. Do not repeatedly add one missing field at a time.
+
 <!-- relay-permission:project.rules.manage:start -->
 ## Project Rule Management
 

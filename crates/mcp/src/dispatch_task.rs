@@ -16,6 +16,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
     ) -> AppResult<Value> {
         match tool_name {
             "company.task" => {
+                validate_company_task_input(&input)?;
                 let input: CompanyTaskToolInput = parse_input(input)?;
                 let _ = input.idempotency_key;
                 match input.operation {

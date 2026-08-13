@@ -167,9 +167,10 @@ pub(super) enum CompanyTaskOperation {
         task_id: Uuid,
         intent_id: Option<Uuid>,
         #[schemars(
-            description = "Execution attempt category. Use execution for implementation/work, review for content or code review, qa for initial verification, retest after a fix, and environment_check for environment diagnostics."
+            description = "Required. Execution attempt category: execution, review, qa, retest, or environment_check. Natural aliases such as implementation/work, verification/test, and delivery_recovery are accepted and normalized."
         )]
         attempt_type: AttemptTypeInput,
+        #[schemars(description = "Required. Concise objective for this concrete attempt.")]
         objective: String,
     },
     AttemptFinish {
@@ -178,9 +179,12 @@ pub(super) enum CompanyTaskOperation {
         task_id: Uuid,
         attempt_id: Uuid,
         #[schemars(
-            description = "Terminal Attempt status, not the Task status. Use succeeded when acceptance criteria pass; failed when work cannot be delivered; cancelled when intentionally abandoned; interrupted when execution stopped before a result. Never use done, completed, success, or blocked."
+            description = "Required terminal Attempt status: succeeded, failed, cancelled, or interrupted. Natural aliases such as success/done/completed and blocked/stopped are accepted and normalized."
         )]
         status: AttemptTerminalStatusInput,
+        #[schemars(
+            description = "Required. What this attempt produced, verified, or failed to complete."
+        )]
         result_summary: String,
         failure_category: Option<String>,
     },
@@ -190,7 +194,7 @@ pub(super) enum CompanyTaskOperation {
         task_id: Uuid,
         attempt_id: Option<Uuid>,
         #[schemars(
-            description = "Blocker category. Put detailed subtypes such as environment_git_permission in summary or resolution_condition, while blocker_type remains environment."
+            description = "Required blocker category: dependency, environment, approval, defect, decision, or external. Detailed values such as environment_git_permission and gate are accepted and normalized to the matching category."
         )]
         blocker_type: BlockerTypeInput,
         summary: String,
@@ -226,13 +230,19 @@ pub(super) enum CompanyTaskOperation {
         gate_id: Option<Uuid>,
         environment_id: Option<Uuid>,
         #[schemars(
-            description = "Evidence category. Use artifact for delivered files or committed project outputs, report for review documents and structured written findings, and other only when no specific category applies."
+            description = "Required evidence category: test, report, artifact, screenshot, log, runtime, design, decision, or other. Natural aliases such as document, integration_report, review, and git_commit are accepted and normalized."
         )]
         evidence_type: EvidenceTypeInput,
+        #[schemars(
+            description = "Required short evidence title. When omitted by an older cached client, Relay derives it from summary."
+        )]
         title: String,
+        #[schemars(
+            description = "Required evidence summary describing what was checked or delivered and the conclusion."
+        )]
         summary: String,
         #[schemars(
-            description = "Evidence conclusion: passed, failed, inconclusive, or informational. Put delivery/blocker details in summary and metrics instead of inventing a result value."
+            description = "Required evidence conclusion: passed, failed, inconclusive, or informational. Natural aliases such as pass/success and blocked/pending are accepted and normalized. When omitted by an older cached client, Relay uses informational."
         )]
         result: EvidenceResultInput,
         #[serde(default)]
@@ -244,4 +254,398 @@ pub(super) enum CompanyTaskOperation {
         metrics: BTreeMap<String, Value>,
         dedupe_key: Option<String>,
     },
+}
+
+pub(super) fn normalize_company_task_input(input: &mut Value) {
+    let Some(fields) = input.as_object_mut() else {
+        return;
+    };
+    let Some(action) = fields
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
+        return;
+    };
+
+    match action.as_str() {
+        "attempt_start" => {
+            normalize_string_field(fields, "attempt_type", normalize_attempt_type);
+            fields
+                .entry("attempt_type")
+                .or_insert_with(|| Value::String("execution".into()));
+            fields.entry("objective").or_insert_with(|| {
+                Value::String(
+                    "Execute the assigned task and satisfy its acceptance criteria.".into(),
+                )
+            });
+        }
+        "attempt_finish" => {
+            normalize_string_field(fields, "status", normalize_attempt_terminal_status);
+        }
+        "blocker_open" => {
+            normalize_string_field(fields, "blocker_type", normalize_blocker_type);
+        }
+        "evidence_create" => normalize_evidence_input(fields),
+        _ => {}
+    }
+}
+
+pub(super) fn validate_company_task_input(input: &Value) -> AppResult<()> {
+    let Some(fields) = input.as_object() else {
+        return Err(AppError::Validation(
+            "company.task input must be a JSON object".into(),
+        ));
+    };
+    let Some(action) = fields.get("action").and_then(Value::as_str) else {
+        return Err(AppError::Validation(
+            "company.task requires action; inspect the tool schema and send one complete action request"
+                .into(),
+        ));
+    };
+
+    let contract = match action {
+        "get" | "execution_get" => Some((
+            &["company_id", "project_id", "task_id"][..],
+            &[][..],
+        )),
+        "list" => Some((&["company_id", "project_id"][..], &[][..])),
+        "my" => Some((&["company_id"][..], &[][..])),
+        "create" => Some((&["company_id", "project_id", "title"][..], &[][..])),
+        "update" => Some((
+            &["company_id", "project_id", "task_id"][..],
+            &[][..],
+        )),
+        "batch_update" => Some((
+            &["company_id", "project_id", "task_ids"][..],
+            &[][..],
+        )),
+        "dependency_add" | "dependency_remove" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "task_id",
+                "depends_on_task_id",
+            ][..],
+            &[][..],
+        )),
+        "attempt_start" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "task_id",
+                "attempt_type",
+                "objective",
+            ][..],
+            &[(
+                "attempt_type",
+                &["execution", "review", "qa", "retest", "environment_check"][..],
+            )][..],
+        )),
+        "attempt_finish" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "task_id",
+                "attempt_id",
+                "status",
+                "result_summary",
+            ][..],
+            &[(
+                "status",
+                &["succeeded", "failed", "cancelled", "interrupted"][..],
+            )][..],
+        )),
+        "blocker_open" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "task_id",
+                "blocker_type",
+                "summary",
+                "resolution_condition",
+            ][..],
+            &[(
+                "blocker_type",
+                &[
+                    "dependency",
+                    "environment",
+                    "approval",
+                    "defect",
+                    "decision",
+                    "external",
+                ][..],
+            )][..],
+        )),
+        "blocker_resolve" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "task_id",
+                "blocker_id",
+                "status",
+                "resolution_summary",
+            ][..],
+            &[("status", &["resolved", "waived"][..])][..],
+        )),
+        "relation_add" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "source_task_id",
+                "target_task_id",
+                "relation_type",
+            ][..],
+            &[(
+                "relation_type",
+                &[
+                    "parent",
+                    "child",
+                    "retry_of",
+                    "supersedes",
+                    "caused_by",
+                    "validates",
+                    "fixes",
+                ][..],
+            )][..],
+        )),
+        "relation_remove" => Some((
+            &["company_id", "project_id", "relation_id"][..],
+            &[][..],
+        )),
+        "evidence_create" => Some((
+            &[
+                "company_id",
+                "project_id",
+                "evidence_type",
+                "title",
+                "summary",
+                "result",
+            ][..],
+            &[
+                (
+                    "evidence_type",
+                    &[
+                        "test",
+                        "report",
+                        "artifact",
+                        "screenshot",
+                        "log",
+                        "runtime",
+                        "design",
+                        "decision",
+                        "other",
+                    ][..],
+                ),
+                (
+                    "result",
+                    &["passed", "failed", "inconclusive", "informational"][..],
+                ),
+            ][..],
+        )),
+        _ => {
+            return Err(AppError::Validation(format!(
+                "unknown company.task action {action:?}; allowed actions: get, list, my, create, update, batch_update, dependency_add, dependency_remove, execution_get, attempt_start, attempt_finish, blocker_open, blocker_resolve, relation_add, relation_remove, evidence_create"
+            )))
+        }
+    };
+    let Some((required, enums)) = contract else {
+        return Ok(());
+    };
+
+    let missing = required
+        .iter()
+        .filter(|field| {
+            fields.get(**field).is_none_or(|value| {
+                value.is_null()
+                    || value.as_str().is_some_and(|value| value.trim().is_empty())
+                    || value.as_array().is_some_and(Vec::is_empty)
+            })
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    let invalid = enums
+        .iter()
+        .filter_map(|(field, allowed)| {
+            fields
+                .get(*field)
+                .and_then(Value::as_str)
+                .filter(|value| !allowed.contains(value))
+                .map(|value| format!("{field}={value:?}; allowed: {}", allowed.join(", ")))
+        })
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() && invalid.is_empty() {
+        return Ok(());
+    }
+
+    let mut problems = Vec::new();
+    if !missing.is_empty() {
+        problems.push(format!("missing or empty fields: {}", missing.join(", ")));
+    }
+    if !invalid.is_empty() {
+        problems.push(format!("invalid enum fields: {}", invalid.join("; ")));
+    }
+    Err(AppError::Validation(format!(
+        "company.task action {action:?} is incomplete: {}. Required fields: {}. Rebuild one complete request and retry once; do not add fields one at a time",
+        problems.join("; "),
+        required.join(", ")
+    )))
+}
+
+fn normalize_evidence_input(fields: &mut serde_json::Map<String, Value>) {
+    normalize_string_field(fields, "evidence_type", normalize_evidence_type);
+    normalize_string_field(fields, "result", normalize_evidence_result);
+
+    fields
+        .entry("evidence_type")
+        .or_insert_with(|| Value::String("other".into()));
+    fields
+        .entry("result")
+        .or_insert_with(|| Value::String("informational".into()));
+
+    if !fields.contains_key("title") {
+        let title = fields
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(evidence_title_from_summary)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "Project evidence".into());
+        fields.insert("title".into(), Value::String(title));
+    }
+    let metrics = fields
+        .get("metrics")
+        .and_then(normalize_object_value)
+        .or_else(|| fields.get("metadata").and_then(normalize_object_value))
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    fields.insert("metrics".into(), metrics);
+    fields.remove("metadata");
+
+    if fields
+        .get("artifact_refs")
+        .is_none_or(|value| !value.is_array())
+    {
+        if let Some(locator) = fields.get("locator").and_then(Value::as_str) {
+            fields.insert(
+                "artifact_refs".into(),
+                Value::Array(vec![Value::String(locator.to_owned())]),
+            );
+        } else {
+            fields.insert("artifact_refs".into(), Value::Array(Vec::new()));
+        }
+    }
+    fields.remove("locator");
+}
+
+fn normalize_object_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Object(_) => Some(value.clone()),
+        Value::String(encoded) => serde_json::from_str::<Value>(encoded)
+            .ok()
+            .filter(Value::is_object),
+        _ => None,
+    }
+}
+
+fn normalize_string_field(
+    fields: &mut serde_json::Map<String, Value>,
+    field: &str,
+    normalize: fn(&str) -> String,
+) {
+    let Some(value) = fields.get(field).and_then(Value::as_str) else {
+        return;
+    };
+    fields.insert(field.into(), Value::String(normalize(value)));
+}
+
+fn normalized_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
+}
+
+fn normalize_attempt_type(value: &str) -> String {
+    let value = normalized_key(value);
+    match value.as_str() {
+        "execution" | "review" | "qa" | "retest" | "environment_check" => value,
+        "implementation" | "work" | "agent" | "delivery_recovery" => "execution".into(),
+        "continuity_review" => "review".into(),
+        "verification" | "validation" | "test" | "testing" => "qa".into(),
+        "regression" | "regression_test" => "retest".into(),
+        "environment" | "environment_diagnostic" | "diagnostic" => "environment_check".into(),
+        value => value.into(),
+    }
+}
+
+fn normalize_attempt_terminal_status(value: &str) -> String {
+    match normalized_key(value).as_str() {
+        "success" | "successful" | "done" | "complete" | "completed" | "passed" => {
+            "succeeded".into()
+        }
+        "blocked" | "stopped" | "timeout" | "timed_out" | "aborted" => "interrupted".into(),
+        "error" | "errored" | "unsuccessful" => "failed".into(),
+        value => value.into(),
+    }
+}
+
+fn normalize_blocker_type(value: &str) -> String {
+    let value = normalized_key(value);
+    match value.as_str() {
+        "dependency" | "environment" | "approval" | "defect" | "decision" | "external" => value,
+        "environment_git_permission" | "git" | "git_permission" | "repository_permission" => {
+            "environment".into()
+        }
+        "gate" | "permission" | "approval_gate" => "approval".into(),
+        "bug" | "failure" | "test_failure" => "defect".into(),
+        "dependency_blocked" | "upstream_dependency" => "dependency".into(),
+        value => value.into(),
+    }
+}
+
+fn normalize_evidence_type(value: &str) -> String {
+    let value = normalized_key(value);
+    if matches!(
+        value.as_str(),
+        "test"
+            | "report"
+            | "artifact"
+            | "screenshot"
+            | "log"
+            | "runtime"
+            | "design"
+            | "decision"
+            | "other"
+    ) {
+        return value;
+    }
+    match value.as_str() {
+        "document" | "integration_report" | "review" | "review_report" => "report".into(),
+        "git_commit" | "commit" | "deliverable" | "file" | "project_output" => "artifact".into(),
+        "qa" | "validation" | "test_report" => "test".into(),
+        "image" | "screen_capture" => "screenshot".into(),
+        "runtime_health" | "health_check" => "runtime".into(),
+        "svg" | "ui" | "ux" | "ui_design" | "ux_design" => "design".into(),
+        value => value.into(),
+    }
+}
+
+fn normalize_evidence_result(value: &str) -> String {
+    match normalized_key(value).as_str() {
+        "pass" | "success" | "successful" | "succeeded" | "ok" => "passed".into(),
+        "error" | "errored" | "unsuccessful" => "failed".into(),
+        "blocked" | "pending" | "not_run" | "skipped" | "content_ready_git_blocked" => {
+            "inconclusive".into()
+        }
+        "info" | "complete" | "completed" => "informational".into(),
+        value => value.into(),
+    }
+}
+
+fn evidence_title_from_summary(summary: &str) -> String {
+    summary
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(summary)
+        .trim()
+        .chars()
+        .take(120)
+        .collect()
 }

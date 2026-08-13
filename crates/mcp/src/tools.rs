@@ -170,7 +170,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         action_tool_with_schema(
             "company.task",
             format!(
-                "Project task actions available to this Agent: {}. The top-level action field is required on every call. Never call with an empty object. After a validation error, correct one complete call before attempting another or running calls in parallel.",
+                "Project task actions available to this Agent: {}. The top-level action field is required on every call. Execution contracts: attempt_start requires company_id, project_id, task_id, attempt_type, objective; attempt_finish requires those ids plus attempt_id, status, result_summary; blocker_open requires the task ids, blocker_type, summary, resolution_condition; evidence_create requires company_id, project_id, evidence_type, title, summary, result. Canonical evidence result values are passed, failed, inconclusive, informational. Relay also normalizes common natural aliases and supplies safe defaults for older cached clients. After a validation error, correct one complete call before attempting another or running calls in parallel.",
                 task_actions.join(", ")
             ),
             task_schema,

@@ -249,6 +249,15 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
 9. 已执行但验收失败、测试失败或确认无法交付时，把任务改为 `failed`，按问题模板提供可直接任务化的缺陷与下一步；不要用 `done` 掩盖失败，也不要只报告“测试未通过”。
 10. 交付物完成、当前阶段门禁经过必要验证且证据已进入项目资产或任务记录后，才能把任务改为 `done`。
 
+执行记录使用 `company.task` 的结构化动作时遵守以下固定词汇；不要自行发明枚举。工具会兼容常见自然语言别名，但新调用始终优先发送规范值：
+
+- `attempt_start`：必填 `attempt_type` 和 `objective`。`attempt_type` 只用 `execution`、`review`、`qa`、`retest`、`environment_check`。
+- `attempt_finish`：必填 `status` 和 `result_summary`。`status` 只用 `succeeded`、`failed`、`cancelled`、`interrupted`；阻塞导致本轮停止用 `interrupted`，同时另开 blocker。
+- `blocker_open`：必填 `blocker_type`、`summary`、`resolution_condition`。`blocker_type` 只用 `dependency`、`environment`、`approval`、`defect`、`decision`、`external`；详细子类型写进 `summary`。
+- `evidence_create`：必填 `evidence_type`、`title`、`summary`、`result`。`evidence_type` 只用 `test`、`report`、`artifact`、`screenshot`、`log`、`runtime`、`design`、`decision`、`other`；`result` 只用 `passed`、`failed`、`inconclusive`、`informational`。交付文件或 Git 提交用 `artifact`，书面审阅与集成验收用 `report`。
+
+遇到 validation error 时，先按错误和工具 Schema 重建一份包含全部必填字段的完整请求，只重试一次；不要采用“每次只补一个字段”的连续试错。
+
 ```json
 {
   "action": "my",
