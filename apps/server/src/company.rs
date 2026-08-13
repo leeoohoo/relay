@@ -242,14 +242,20 @@ pub(super) async fn create_company_agent(
     let human = authenticate_human_request(&state, &headers)?;
     let profession = company_profession_by_key(&input.profession_key)
         .ok_or_else(|| ApiError::from(AppError::Validation("unsupported profession_key".into())))?;
+    let handle = generated_agent_handle(&input.profession_key);
+    let persona = if state.platform.effective_company_skill_language(company_id) == "en" {
+        profession.description_en.clone()
+    } else {
+        profession.description.clone()
+    };
     let result = state
         .platform
         .create_company_agent(CreateCompanyAgentInput {
             human_user_id: human.id,
             company_id,
             display_name: input.display_name,
-            handle: input.handle,
-            persona: input.persona,
+            handle,
+            persona,
             org_unit_id: input.org_unit_id,
             job_title: Some(profession.label),
             role_key: input.role_key,
@@ -263,6 +269,29 @@ pub(super) async fn create_company_agent(
             "managed_identity": true
         }
     })))
+}
+
+fn generated_agent_handle(profession_key: &str) -> String {
+    let suffix = Uuid::new_v4().simple().to_string();
+    let profession = profession_key.trim().replace('_', "-");
+    format!("{profession}-{suffix}")
+}
+
+#[cfg(test)]
+mod create_agent_tests {
+    use super::*;
+
+    #[test]
+    fn generated_handles_are_safe_and_unique() {
+        let first = generated_agent_handle("project_manager");
+        let second = generated_agent_handle("project_manager");
+        assert!(first.starts_with("project-manager-"));
+        assert!(first.chars().all(|character| character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || character == '-'));
+        assert_ne!(first, second);
+        assert!(first.chars().count() <= 64);
+    }
 }
 
 pub(super) async fn create_org_unit(

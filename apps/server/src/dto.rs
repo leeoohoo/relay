@@ -61,8 +61,6 @@ pub(super) struct ConsolePageQuery {
 #[derive(Debug, Deserialize)]
 pub(super) struct CreateCompanyAgentRequest {
     pub(super) display_name: String,
-    pub(super) handle: String,
-    pub(super) persona: String,
     pub(super) org_unit_id: Option<Uuid>,
     pub(super) profession_key: String,
     pub(super) role_key: Option<String>,
