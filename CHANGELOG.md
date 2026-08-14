@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.0.4
+
+### Added
+
+- `@relay-ai/relay` npm launcher with `web`, `install`, `status`, `logs`, `restart`, `stop`, and `update` commands.
+- Verified GitHub Release download and installation for Apple Silicon macOS and Windows WSL2.
+- A WSL2 `.tar.gz` Release asset for the npm installation path.
+
+### Changed
+
+- Relay application files and persistent runtime data can now live in separate roots through `RELAY_DATA_HOME`.
+- Project worker prompts receive authoritative company and project UUIDs from the runtime.
+- GitHub Release publishing now completes before the matching npm package is published with provenance.
+
+### Fixed
+
+- Local-folder and Git project imports failing before their managed Harness repository was usable.
+- PostgreSQL membership lookup failures being reported as missing company membership.
+- Replacement project sessions being rejected by the execution-intent database constraint.
+
 ## v1.0.3
 
 ### Added

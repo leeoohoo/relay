@@ -8,7 +8,22 @@ Relay does **not** implement another model-calling stack. Its optional local tri
 
 ## Quick Start
 
-The recommended GitHub Release packages currently target Apple Silicon macOS and Windows 10/11 through WSL2. They already contain the web console and host Agent Trigger, so normal users only need Docker; Node.js, pnpm, Rust, Cargo, Chrome, and a separate Chrome DevTools MCP installation are not required.
+The simplest installation uses the small npm launcher. Install and start Docker Desktop, install Node.js 20 or newer, then run:
+
+```bash
+npx --yes @relay-ai/relay web
+```
+
+Run this command in Terminal on Apple Silicon macOS, or inside the Ubuntu/WSL2 terminal on Windows 10/11. It downloads the matching GitHub Release, verifies its checksum, stores application files under `~/.relay/app`, keeps persistent data under `~/.relay/data`, starts Relay, and opens the web console.
+
+```bash
+npx --yes @relay-ai/relay status
+npx --yes @relay-ai/relay logs
+npx --yes @relay-ai/relay restart
+npx --yes @relay-ai/relay stop
+```
+
+The direct GitHub Release packages below remain available for users who do not want Node.js. They already contain the web console and host Agent Trigger, so archive users do not need pnpm, Rust, Cargo, Chrome, or a separate Chrome DevTools MCP installation.
 
 ### Apple Silicon macOS Release
 

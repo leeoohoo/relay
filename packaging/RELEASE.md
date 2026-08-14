@@ -1,55 +1,42 @@
-# Relay v1.0.3
+# Relay v1.0.4
 
-Relay v1.0.3 聚焦于 Agent 会话生命周期、任务依赖交接、审批一致性和真实运行状态。安装包已包含 Web 控制台和宿主机 Agent Trigger，普通用户不需要单独安装 Node.js、pnpm、Rust、Cargo、Chrome 或 Chrome DevTools MCP。
+Relay v1.0.4 重点改善首次安装、项目导入和 Agent 工作会话恢复。Apple Silicon macOS 与 Windows WSL2 用户可以通过轻量 npm 启动器完成安装、更新、启动和日常运维。
 
-## 主要更新
+## 一条命令安装
 
-- 项目 Agent 会话页统一展示 Trigger 运行态、当前任务、最近活动、开始时间和会话代次；历史 checkpoint 明确标记为“上轮总结”。
-- 控制会话可显式创建新一代项目工作会话，用最新 checkpoint 恢复项目、分支和任务上下文，不再被损坏的旧会话固定绑定。
-- 任务依赖支持 `success`、`completion` 和 `failure` 三种条件，评审拒绝后可以直接解锁返工任务，同时保留真实审计语义。
-- 网站审批新增“允许本项目本地预览端口”，覆盖当前 Agent、当前项目内的 localhost 非特权端口；精确网站授权继续按 origin 隔离。
-- 本地项目导入既可使用系统目录选择器，也可输入 Trigger 主机可访问的绝对路径；源内容仍复制到组织托管工作区。
-- 运行配置在 Owner API 限流时保留最后一次成功数据，并标记数据可能过期，不再把已有配置误显示为 0。
-- 项目工作区恢复标准 Git 发现能力，同时不再向 Codex 子进程注入 `GIT_DIR` / `GIT_WORK_TREE`，临时 worktree 与 `git -C` 不会被劫持。
-- 项目成员按职业订阅职责相关事件，普通项目消息不再无差别唤醒所有 Agent；项目详情会提示任务过度集中、Ready 任务等待过久和连续运行失败。
-- 群消息现在为每个成员维护独立未读状态：每条消息投递给全体群成员，`@` 只决定立即唤醒谁；A 标记已读不会影响 B。
-- Agent 群未读支持按会话游标分页，每页明确返回当前页和剩余消息中的 `@自己` 数量；确认后续没有 @ 时可安全快速标记已读，后端会拒绝可能漏掉 @ 的批量操作。
-- Codex Run 新增进程心跳和 Watchdog，异常退出时会自动回收失效租约、恢复未完成 Intent，并在成员详情中区分控制会话、项目工作会话、等待、恢复和失败状态。
-- 任务、Blocker 和 Gate 支持独立讨论会话，创建后会立即进入聊天列表；Gate 终态由程序生成简短项目摘要，减少 Agent 重复广播和 Token 消耗。
-- 长期记忆采用可配置软预算和价值优先治理，Pinned 与高价值记忆不会被机械截断。
-
-## 稳定性修复
-
-- 修复下游任务唤醒、项目恢复和 Intent 恢复写入非法 `wake_reason` 时触发 PostgreSQL 约束的问题。
-- 修复暂停 Agent 或项目后，已领取的 Trigger 与待执行 Intent 仍会创建新 Codex 会话的问题；暂停会立即停止当前轮次，工作保留到恢复后继续。
-- 修复浏览器刷新、前进、后退和空白页操作被误判为新网站访问并要求 Human 审批的问题；选择“本次会话允许”后，同一 Agent 工作会话内该网站 origin 的导航和页面操作均自动放行，只有跨网站或上传本地文件时重新审批。
-- 修复审批尚未成功落库，运行状态却先显示“等待 Human 审批”的不一致问题；投递失败会明确终止并记录原因。
-- 修复项目会话仍在真实执行，却显示为“可用”或只展示旧摘要的问题，以及首次绑定期间没有创建中状态的问题。
-- 修复 Agent 会话摘要暴露宿主机用户名和完整绝对工作区路径的问题。
-- 修复 Git 导入失败后成功创建项目，旧错误提示仍残留的问题。
-- 修复 Owner API 限流或网络错误清除登录态、登录页预填开发账号密码的问题。
-- 强化运行时 Skill 隔离规则，避免 `prettier .` 等全仓工具扫描 Relay 注入的只读目录。
-- 修复项目暂停后 Task、Blocker、Gate 讨论线程仍可创建或继续发送消息的问题。
-- 修复 Human 先发送完整群需求、再单独 `@Agent` 时，Agent 控制会话只能看到最后一条 @、看不到此前未读需求的问题；控制快照会按时间带入该 Agent 的未读消息上下文。
-- 修复新建 Harness 空仓库没有默认主分支，导致项目目录、分支读取和首次 Agent 工作区初始化失败的问题。
-- 修复 Agent 权限表单在控制台实时刷新时覆盖尚未保存的勾选状态，导致“扩招 Agent”等特殊授权实际提交为空、Agent 无法招聘的问题。
-- 修复 Agent 回复已经发送成功，但紧随其后的 Inbox 或运行状态事件覆盖 `message.created`，导致聊天窗口必须手动刷新才能看到回复的问题；消息事件现在使用独立有界队列处理，并在窗口重新获得焦点或网络恢复时增量补拉。
-- 非当前会话收到 Agent 新消息时显示未读红点，打开对应会话后自动清除，避免回复静默到达而 Human 无法察觉。
-- 群聊和私聊的成员运行看板新增可直接操作的恢复入口：Trigger 暂停时可“恢复运行”，心跳中断或存在未完成工作时可“立即接续”，请求后明确显示排队状态。
-- 重构成员运行看板的信息层级和视觉样式，统一状态概览、恢复提示、项目任务和执行过程；心跳丢失时不再把旧 Run 误标成仍在执行。
-
-## 安装包
-
-- `relay-macos-apple-silicon.tar.gz`：Apple Silicon Mac。
-- `relay-windows-wsl2-x86_64.zip`：Windows 10/11、WSL2 和 Docker Desktop。
-- `SHA256SUMS`：下载文件完整性校验。
-
-Linux 和 Intel Mac 暂不提供预编译安装包。Docker 仍是必需依赖，因为 Relay Server、PostgreSQL 和 Harness 运行在容器中。
-
-每个安装包内均包含 `INSTALL.md`。覆盖旧版本后执行：
+安装并启动 Docker Desktop 与 Node.js 20+ 后执行：
 
 ```bash
-./start.sh restart
+npx --yes @relay-ai/relay web
 ```
 
-macOS 安装包目前可在没有 Apple 证书的情况下使用，但首次运行可能需要确认一次 Gatekeeper 提示。
+启动器会下载匹配平台的 GitHub Release、校验 `SHA256SUMS`、把程序安装到 `~/.relay/app`，把公司、Agent、项目、Trigger 和工作区数据持久化到 `~/.relay/data`，然后启动 Relay 并打开控制台。
+
+同时支持：
+
+```bash
+npx --yes @relay-ai/relay install
+npx --yes @relay-ai/relay status
+npx --yes @relay-ai/relay logs
+npx --yes @relay-ai/relay restart
+npx --yes @relay-ai/relay stop
+npx --yes @relay-ai/relay update
+```
+
+## 主要修复
+
+- 修复本地目录导入和 Git 地址导入失败，项目记录、Harness 仓库、Git 配置与补偿清理重新保持一致。
+- 修复数据库查询异常被错误转换成“Agent 不属于公司”，导致正常项目成员无法调用项目和任务工具的问题。
+- 补齐 `replace_session` 数据库约束，使损坏或权限缓存过期的项目 worker 可以创建新一代工作会话。
+- 项目 worker 现在直接获得完整 `company_id` 与 `project_id`，不再扫描工作区或从 Git 命名空间猜测运行参数。
+- 安装目录和持久化数据目录彻底分离，npm 启动器更新应用文件时不会覆盖公司、Agent、项目、PostgreSQL、Harness 或工作区数据。
+
+## 发布与平台
+
+- GitHub Release 完成后自动发布带 provenance 的 `@relay-ai/relay` npm 包。
+- `relay-macos-apple-silicon.tar.gz`：Apple Silicon macOS。
+- `relay-windows-wsl2-x86_64.zip`：Windows PowerShell 手动安装。
+- `relay-windows-wsl2-x86_64.tar.gz`：Windows WSL2 npm 启动器。
+- `SHA256SUMS`：所有 Release 附件的完整性校验。
+
+Linux 和 Intel Mac 暂不发布 npm/预编译安装包。Docker 仍是 Relay Server、PostgreSQL、Harness 和浏览器运行时的必需依赖。

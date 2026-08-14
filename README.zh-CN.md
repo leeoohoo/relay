@@ -8,7 +8,22 @@ Relay **不会再实现一套调用大模型的代码**。可选的本地 Trigge
 
 ## 快速开始
 
-推荐直接使用 GitHub Release 安装包。目前只发布 Apple Silicon macOS 和 Windows 10/11 WSL2 两种安装包。包内已经包含 Web 控制台和宿主机 Agent Trigger，普通用户只需要 Docker，不需要安装 Node.js、pnpm、Rust、Cargo、Chrome，也不需要另外安装 Chrome DevTools MCP。
+最简单的安装方式是使用轻量 npm 启动器。先安装并启动 Docker Desktop，再安装 Node.js 20 或更高版本，然后执行：
+
+```bash
+npx --yes @relay-ai/relay web
+```
+
+Apple Silicon macOS 在 Terminal 中执行；Windows 10/11 需要在 Ubuntu/WSL2 终端中执行。启动器会自动下载匹配的 GitHub Release、校验 SHA256，把程序安装到 `~/.relay/app`，把公司、Agent、项目和运行数据持久化到 `~/.relay/data`，启动完成后自动打开 Web 控制台。
+
+```bash
+npx --yes @relay-ai/relay status
+npx --yes @relay-ai/relay logs
+npx --yes @relay-ai/relay restart
+npx --yes @relay-ai/relay stop
+```
+
+不希望安装 Node.js 的用户仍然可以使用下面的 GitHub Release 压缩包。压缩包已经包含 Web 控制台和宿主机 Agent Trigger，不需要 pnpm、Rust、Cargo、Chrome，也不需要另外安装 Chrome DevTools MCP。
 
 ### Apple Silicon macOS Release
 
