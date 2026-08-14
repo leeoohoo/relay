@@ -50,11 +50,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             .into_iter()
                             .filter(|entry| entry.task_id == task_id)
                             .collect::<Vec<_>>();
+                        let readiness = self.platform.get_project_task_readiness(
+                            agent_id, company_id, project_id, task_id,
+                        )?;
                         Ok(json!({
                             "task": task,
                             "project": project.project,
                             "dependencies": dependencies,
                             "status_history": status_history,
+                            "readiness": readiness,
                         }))
                     }
                     CompanyTaskOperation::List {
@@ -124,16 +128,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                             })
                                     })
                                     .collect::<Vec<_>>();
-                                let unresolved_dependencies = dependencies
-                                    .iter()
-                                    .filter(|dependency| {
-                                        dependency.get("resolved").and_then(|value| value.as_bool())
-                                            != Some(true)
-                                    })
-                                    .cloned()
-                                    .collect::<Vec<_>>();
-                                let can_start = unresolved_dependencies.is_empty();
-                                if can_start {
+                                let readiness = self.platform.get_project_task_readiness(
+                                    agent_id,
+                                    company_id,
+                                    project.project.id,
+                                    task.id,
+                                )?;
+                                if readiness.can_start {
                                     ready_count += 1;
                                 } else {
                                     waiting_count += 1;
@@ -143,15 +144,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                     "project_name": project.project.name,
                                     "project_status": project.project.status,
                                     "task": task,
-                                    "readiness": if can_start { "ready" } else { "waiting_for_dependencies" },
-                                    "can_start": can_start,
+                                    "readiness": readiness.readiness,
+                                    "can_start": readiness.can_start,
                                     "dependencies": dependencies,
-                                    "unresolved_dependencies": unresolved_dependencies,
-                                    "guidance": if can_start {
-                                        "任务前置已满足，可以按职责开始处理。"
-                                    } else {
-                                        "前置任务尚未完成：本轮保持任务原状态，不发送等待占位消息，结束后由下一次定时检查重新判断。"
-                                    },
+                                    "waiting_reasons": readiness.waiting_reasons,
+                                    "suggested_actions": readiness.suggested_actions,
+                                    "gate_requirements": readiness.gate_requirements,
+                                    "environment_requirements": readiness.environment_requirements,
+                                    "open_blockers": readiness.open_blockers,
                                 }));
                             }
                         }

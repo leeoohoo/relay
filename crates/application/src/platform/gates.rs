@@ -170,6 +170,20 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         Ok(self.repo.list_project_gates(input.project_id))
     }
 
+    pub fn list_project_gate_requirements(
+        &self,
+        input: ListProjectGatesInput,
+    ) -> AppResult<Vec<ProjectTaskGateRequirement>> {
+        self.ensure_company_project_access(
+            input.company_id,
+            input.project_id,
+            input.actor_agent_id,
+        )?;
+        Ok(self
+            .repo
+            .list_project_task_gate_requirements(input.project_id))
+    }
+
     pub fn create_project_gate(&self, input: CreateProjectGateInput) -> AppResult<ProjectGate> {
         let project = self.ensure_company_project_access(
             input.company_id,

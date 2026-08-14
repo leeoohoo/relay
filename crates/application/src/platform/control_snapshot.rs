@@ -76,9 +76,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
 
         let mut ready_tasks = Vec::new();
         let mut waiting_tasks = Vec::new();
+        let mut task_readiness = Vec::new();
         for project in &projects {
             let tasks = self.repo.list_company_project_tasks_result(project.id)?;
-            let dependencies = self.repo.list_company_project_task_dependencies(project.id);
             for task in tasks.iter().filter(|task| {
                 task.assignee_agent_id == Some(agent_profile_id)
                     && matches!(
@@ -86,28 +86,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         PROJECT_TASK_STATUS_TODO | PROJECT_TASK_STATUS_IN_PROGRESS
                     )
             }) {
-                let ready = self.project_task_gate_requirements_satisfied(project.id, task.id)
-                    && self.project_task_environment_requirements_satisfied(project.id, task.id)
-                    && !self.project_task_has_open_blockers(task.id)
-                    && dependencies
-                        .iter()
-                        .filter(|dependency| dependency.task_id == task.id)
-                        .all(|dependency| {
-                            tasks
-                                .iter()
-                                .find(|candidate| candidate.id == dependency.depends_on_task_id)
-                                .is_some_and(|dependency_task| {
-                                    ai_chat_domain::company::project_task_dependency_satisfied(
-                                        &dependency.dependency_condition,
-                                        &dependency_task.status,
-                                    )
-                                })
-                        });
-                if ready {
+                let readiness = self.project_task_readiness_view(project.id, task.id)?;
+                if readiness.can_start {
                     ready_tasks.push(task.clone());
                 } else {
                     waiting_tasks.push(task.clone());
                 }
+                task_readiness.push(readiness);
             }
         }
         ready_tasks.sort_by(|left, right| {
@@ -153,6 +138,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             actionable_events,
             ready_tasks,
             waiting_tasks,
+            task_readiness,
             active_intents,
             work_sessions,
         })

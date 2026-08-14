@@ -163,6 +163,7 @@
 .task-execution-heading > strong { color: var(--relay-text); font-size: 11px; }
 .task-execution-heading > span { color: var(--relay-muted); font-size: 9px; }
 .task-execution-heading > div { display: flex; gap: 6px; }
+.task-readiness-summary { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 8px; border: 1px solid rgba(168,255,96,.14); border-radius: 8px; padding: 7px 8px; background: rgba(168,255,96,.035); }.task-readiness-summary.waiting { border-color: rgba(255,181,71,.18); background: rgba(255,181,71,.04); }.task-readiness-summary > div { display: grid; gap: 2px; }.task-readiness-summary strong { color: var(--relay-text); font-size: 10px; }.task-readiness-summary small { color: var(--relay-muted); font-size: 8px; }
 .task-execution-inline-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; }
 .task-execution-sections { display: grid; gap: 8px; }
 .task-execution-sections > section { display: grid; gap: 6px; border-top: 1px solid var(--relay-line); padding-top: 8px; }

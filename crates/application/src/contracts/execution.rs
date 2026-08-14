@@ -4,11 +4,58 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use ai_chat_domain::company::{
-    ProjectEvidence, ProjectTaskAttempt, ProjectTaskBlocker, ProjectTaskRelation,
+    CompanyProjectTask, CompanyProjectTaskDependency, ProjectEnvironment,
+    ProjectEnvironmentService, ProjectEvidence, ProjectGate, ProjectTaskAttempt,
+    ProjectTaskBlocker, ProjectTaskEnvironmentRequirement, ProjectTaskGateRequirement,
+    ProjectTaskRelation,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectTaskWaitingReason {
+    pub kind: String,
+    pub code: String,
+    pub summary: String,
+    pub related_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectTaskDependencyReadiness {
+    pub dependency: CompanyProjectTaskDependency,
+    pub dependency_task: Option<CompanyProjectTask>,
+    pub satisfied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectTaskGateReadiness {
+    pub requirement: ProjectTaskGateRequirement,
+    pub gate: Option<ProjectGate>,
+    pub satisfied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectTaskEnvironmentReadiness {
+    pub requirement: ProjectTaskEnvironmentRequirement,
+    pub environment: Option<ProjectEnvironment>,
+    pub services: Vec<ProjectEnvironmentService>,
+    pub satisfied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectTaskReadinessView {
+    pub task_id: Uuid,
+    pub readiness: String,
+    pub can_start: bool,
+    pub waiting_reasons: Vec<ProjectTaskWaitingReason>,
+    pub suggested_actions: Vec<String>,
+    pub dependencies: Vec<ProjectTaskDependencyReadiness>,
+    pub gate_requirements: Vec<ProjectTaskGateReadiness>,
+    pub environment_requirements: Vec<ProjectTaskEnvironmentReadiness>,
+    pub open_blockers: Vec<ProjectTaskBlocker>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectTaskExecutionView {
+    pub readiness: ProjectTaskReadinessView,
     pub attempts: Vec<ProjectTaskAttempt>,
     pub blockers: Vec<ProjectTaskBlocker>,
     pub relations: Vec<ProjectTaskRelation>,

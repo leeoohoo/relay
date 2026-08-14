@@ -133,7 +133,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
             } => Ok(json!({
                 "environments": self.platform.list_project_environments(
                     ListProjectEnvironmentsInput { actor_agent_id: agent_id, company_id, project_id }
-                )?
+                )?,
+                "services": self.platform.list_project_environment_services_for_agent(
+                    ListProjectEnvironmentsInput { actor_agent_id: agent_id, company_id, project_id }
+                )?,
+                "requirements": self.platform.list_project_environment_requirements(
+                    ListProjectEnvironmentsInput { actor_agent_id: agent_id, company_id, project_id }
+                )?,
             })),
             CompanyEnvironmentOperation::Create {
                 company_id,

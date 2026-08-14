@@ -809,14 +809,15 @@ fn assigned_agent_can_read_tasks_through_get_list_and_my_actions() {
         task.id.to_string()
     );
     assert_eq!(mine.output["waiting_count"], 1);
-    assert_eq!(
-        mine.output["assignments"][0]["readiness"],
-        "waiting_for_dependencies"
-    );
+    assert_eq!(mine.output["assignments"][0]["readiness"], "waiting");
     assert_eq!(mine.output["assignments"][0]["can_start"], false);
     assert_eq!(
-        mine.output["assignments"][0]["unresolved_dependencies"][0]["task_id"],
+        mine.output["assignments"][0]["waiting_reasons"][0]["related_id"],
         prerequisite.id.to_string()
+    );
+    assert_eq!(
+        mine.output["assignments"][0]["waiting_reasons"][0]["kind"],
+        "dependency"
     );
 
     app.update_company_project_task(UpdateCompanyProjectTaskInput {

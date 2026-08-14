@@ -117,6 +117,24 @@ fn project_environment_controls_task_readiness_and_emits_one_ready_event() {
         .expect("waiting snapshot should load");
     assert!(waiting_snapshot.ready_tasks.is_empty());
     assert_eq!(waiting_snapshot.waiting_tasks.len(), 1);
+    let waiting_readiness = waiting_snapshot
+        .task_readiness
+        .iter()
+        .find(|item| item.task_id == task.id)
+        .expect("waiting task readiness should be included");
+    assert!(!waiting_readiness.can_start);
+    assert!(waiting_readiness.waiting_reasons.iter().any(|reason| {
+        reason.kind == "environment" && reason.related_id == Some(environment.id)
+    }));
+    let execution = app
+        .get_project_task_execution(
+            engineer.agent_profile.id,
+            company.company.id,
+            project.project.id,
+            task.id,
+        )
+        .expect("execution view should expose environment readiness");
+    assert_eq!(execution.readiness.environment_requirements.len(), 1);
     let start_error = app
         .update_company_project_task(UpdateCompanyProjectTaskInput {
             actor_agent_id: engineer.agent_profile.id,
@@ -166,6 +184,11 @@ fn project_environment_controls_task_readiness_and_emits_one_ready_event() {
         .expect("ready snapshot should load");
     assert_eq!(ready_snapshot.ready_tasks.len(), 1);
     assert!(ready_snapshot.waiting_tasks.is_empty());
+    assert!(ready_snapshot
+        .task_readiness
+        .iter()
+        .find(|item| item.task_id == task.id)
+        .is_some_and(|item| item.can_start));
     let ready_events = app
         .list_agent_inbox_events(engineer.agent_profile.id, true, 100)
         .expect("engineer inbox should load")

@@ -155,6 +155,26 @@ export type CompanyProjectTask = {
 };
 
 export type ProjectTaskExecution = {
+  readiness: {
+    task_id: string;
+    readiness: "ready" | "waiting";
+    can_start: boolean;
+    waiting_reasons: Array<{ kind: "dependency" | "gate" | "environment" | "blocker"; code: string; summary: string; related_id: string | null }>;
+    suggested_actions: string[];
+    dependencies: Array<{ dependency: CompanyProject["task_dependencies"][number]; dependency_task: CompanyProjectTask | null; satisfied: boolean }>;
+    gate_requirements: Array<{
+      requirement: { task_id: string; gate_id: string; required_status: string; created_at: string };
+      gate: { id: string; title: string; gate_type: string; status: string } | null;
+      satisfied: boolean;
+    }>;
+    environment_requirements: Array<{
+      requirement: { task_id: string; environment_id: string; required_revision: string | null; required_services: string[]; require_healthy: boolean; created_at: string };
+      environment: { id: string; display_name: string; environment_key: string; status: string; observed_revision: string | null } | null;
+      services: Array<{ id: string; service_key: string; health_status: string; observed_revision: string | null }>;
+      satisfied: boolean;
+    }>;
+    open_blockers: Array<{ id: string; attempt_id: string | null; blocker_type: string; status: "open" | "resolved" | "waived"; summary: string; resolution_condition: string; resolution_summary: string | null; owner_agent_id: string | null; created_at: string; resolved_at: string | null }>;
+  };
   attempts: Array<{ id: string; attempt_number: number; attempt_type: string; status: string; objective: string; result_summary: string | null; failure_category: string | null; agent_id: string; started_at: string | null; finished_at: string | null; created_at: string }>;
   blockers: Array<{ id: string; attempt_id: string | null; blocker_type: string; status: "open" | "resolved" | "waived"; summary: string; resolution_condition: string; resolution_summary: string | null; owner_agent_id: string | null; created_at: string; resolved_at: string | null }>;
   relations: Array<{ id: string; source_task_id: string; target_task_id: string; relation_type: string; created_at: string }>;

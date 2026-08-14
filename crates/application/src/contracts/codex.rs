@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::ProjectTaskReadinessView;
 use ai_chat_domain::agent_identity::AgentInboxEvent;
 use ai_chat_domain::company::{
     AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
@@ -180,6 +181,8 @@ pub struct AgentControlSnapshot {
     pub actionable_events: Vec<AgentInboxEvent>,
     pub ready_tasks: Vec<CompanyProjectTask>,
     pub waiting_tasks: Vec<CompanyProjectTask>,
+    #[serde(default)]
+    pub task_readiness: Vec<ProjectTaskReadinessView>,
     pub active_intents: Vec<AgentExecutionIntent>,
     pub work_sessions: Vec<AgentCodexSession>,
 }

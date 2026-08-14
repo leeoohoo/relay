@@ -67,6 +67,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     "company.chat",
                     "company.project",
                     "company.task",
+                    "company.gate",
+                    "company.environment",
                     "company.events",
                 ];
                 if context

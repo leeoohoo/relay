@@ -344,6 +344,7 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         actionable_events: Vec::new(),
         ready_tasks: Vec::new(),
         waiting_tasks: Vec::new(),
+        task_readiness: Vec::new(),
         active_intents: Vec::new(),
         work_sessions: Vec::new(),
     };
@@ -419,7 +420,8 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         previous_checkpoint: None,
     });
     assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
-    assert!(worker_prompt.contains("直接用 company.project get 和 company.task get/list"));
+    assert!(worker_prompt.contains("company.task execution_get"));
+    assert!(worker_prompt.contains("execution.readiness.can_start=true"));
     assert!(!worker_prompt.contains("先调用 agent.bootstrap"));
 }
 

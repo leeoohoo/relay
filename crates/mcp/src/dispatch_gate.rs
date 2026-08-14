@@ -18,7 +18,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     actor_agent_id: agent_id,
                     company_id,
                     project_id,
-                })?
+                })?,
+                "requirements": self.platform.list_project_gate_requirements(ListProjectGatesInput {
+                    actor_agent_id: agent_id,
+                    company_id,
+                    project_id,
+                })?,
             })),
             CompanyGateOperation::Create {
                 company_id,

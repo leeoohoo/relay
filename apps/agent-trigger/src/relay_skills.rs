@@ -78,6 +78,11 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
 }
 
 fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
+    let readiness_by_task = snapshot
+        .task_readiness
+        .iter()
+        .map(|readiness| (readiness.task_id, readiness))
+        .collect::<std::collections::HashMap<_, _>>();
     let unread_messages = snapshot
         .unread_messages
         .iter()
@@ -115,12 +120,18 @@ fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
         .iter()
         .take(20)
         .map(|task| {
+            let readiness = readiness_by_task.get(&task.id);
             json!({
                 "id": task.id,
                 "project_id": task.project_id,
                 "title": task.title,
                 "status": task.status,
                 "priority": task.priority,
+                "readiness": readiness.map(|item| json!({
+                    "can_start": item.can_start,
+                    "waiting_reasons": &item.waiting_reasons,
+                    "suggested_actions": &item.suggested_actions,
+                })),
             })
         })
         .collect::<Vec<_>>();
@@ -129,11 +140,17 @@ fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
         .iter()
         .take(20)
         .map(|task| {
+            let readiness = readiness_by_task.get(&task.id);
             json!({
                 "id": task.id,
                 "project_id": task.project_id,
                 "title": task.title,
                 "status": task.status,
+                "readiness": readiness.map(|item| json!({
+                    "can_start": item.can_start,
+                    "waiting_reasons": &item.waiting_reasons,
+                    "suggested_actions": &item.suggested_actions,
+                })),
             })
         })
         .collect::<Vec<_>>();
@@ -218,7 +235,7 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
          来源 Event IDs：{event_ids}\n\
          验收标准：\n{criteria}\n\
          {checkpoint}\
-         直接用 company.project get 和 company.task get/list 核实当前项目与任务实时状态。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
+         直接用 company.project get 和 company.task execution_get 核实当前项目、任务、门禁、环境、依赖和阻塞的实时状态。开始 Attempt 前必须确认 execution.readiness.can_start=true；若为 false，按 waiting_reasons 与 suggested_actions 推进或通知对应责任人，不得绕过门禁/环境，也不得反复启动无效 Attempt。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
          项目工作会话不承担 Inbox 分诊：忽略 Relay 工具响应中的 inbox_notice，不调用 agent.inbox.wait/ack，不因群聊、私聊或新事件中断当前 Intent。通信事件统一留给本 Agent 的控制会话；只有本 Intent 明确要求的最终项目同步可以在交付收口时发送一次。\n\
          完成必要的设计、实现、测试、文档和 Git 提交推送；不要直接写受保护默认分支。更新关联任务与项目状态。\n\
          长期记忆只保存稳定知识：跨项目通用内容使用 agent scope，当前项目特有内容使用 project scope 并带 project_id；阶段性线索使用 short_term。禁止保存聊天原文、任务正文、日志和凭证。\n\

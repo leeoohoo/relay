@@ -1,9 +1,10 @@
 use super::*;
 use ai_chat_domain::company::{
-    ProjectEvidence, ProjectTaskAttempt, ProjectTaskBlocker, ProjectTaskRelation,
-    TASK_ATTEMPT_STATUS_CANCELLED, TASK_ATTEMPT_STATUS_FAILED, TASK_ATTEMPT_STATUS_INTERRUPTED,
-    TASK_ATTEMPT_STATUS_QUEUED, TASK_ATTEMPT_STATUS_RUNNING, TASK_ATTEMPT_STATUS_SUCCEEDED,
-    TASK_BLOCKER_STATUS_OPEN, TASK_BLOCKER_STATUS_RESOLVED, TASK_BLOCKER_STATUS_WAIVED,
+    project_environment_requirement_satisfied, project_gate_requirement_satisfied, ProjectEvidence,
+    ProjectTaskAttempt, ProjectTaskBlocker, ProjectTaskRelation, TASK_ATTEMPT_STATUS_CANCELLED,
+    TASK_ATTEMPT_STATUS_FAILED, TASK_ATTEMPT_STATUS_INTERRUPTED, TASK_ATTEMPT_STATUS_QUEUED,
+    TASK_ATTEMPT_STATUS_RUNNING, TASK_ATTEMPT_STATUS_SUCCEEDED, TASK_BLOCKER_STATUS_OPEN,
+    TASK_BLOCKER_STATUS_RESOLVED, TASK_BLOCKER_STATUS_WAIVED,
 };
 
 const ATTEMPT_TYPES: &[&str] = &["execution", "review", "qa", "retest", "environment_check"];
@@ -65,6 +66,17 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<ProjectTaskExecutionView> {
         self.ensure_company_project_access(company_id, project_id, actor_agent_id)?;
         self.task_execution_view(project_id, task_id)
+    }
+
+    pub fn get_project_task_readiness(
+        &self,
+        actor_agent_id: Uuid,
+        company_id: Uuid,
+        project_id: Uuid,
+        task_id: Uuid,
+    ) -> AppResult<ProjectTaskReadinessView> {
+        self.ensure_company_project_access(company_id, project_id, actor_agent_id)?;
+        self.project_task_readiness_view(project_id, task_id)
     }
 
     pub fn start_project_task_attempt(
@@ -375,6 +387,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<ProjectTaskExecutionView> {
         self.ensure_execution_task(project_id, task_id)?;
         Ok(ProjectTaskExecutionView {
+            readiness: self.project_task_readiness_view(project_id, task_id)?,
             attempts: self.repo.list_project_task_attempts(task_id),
             blockers: self.repo.list_project_task_blockers(task_id),
             relations: self
@@ -389,6 +402,203 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .into_iter()
                 .filter(|item| item.task_id == Some(task_id))
                 .collect(),
+        })
+    }
+
+    pub(super) fn project_task_readiness_view(
+        &self,
+        project_id: Uuid,
+        task_id: Uuid,
+    ) -> AppResult<ProjectTaskReadinessView> {
+        self.ensure_execution_task(project_id, task_id)?;
+
+        let project_tasks = self.repo.list_company_project_tasks_result(project_id)?;
+        let dependencies = self
+            .repo
+            .list_company_project_task_dependencies(project_id)
+            .into_iter()
+            .filter(|dependency| dependency.task_id == task_id)
+            .map(|dependency| {
+                let dependency_task = project_tasks
+                    .iter()
+                    .find(|task| task.id == dependency.depends_on_task_id)
+                    .cloned();
+                let satisfied = dependency_task.as_ref().is_some_and(|task| {
+                    ai_chat_domain::company::project_task_dependency_satisfied(
+                        &dependency.dependency_condition,
+                        &task.status,
+                    )
+                });
+                ProjectTaskDependencyReadiness {
+                    dependency,
+                    dependency_task,
+                    satisfied,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let gates = self
+            .repo
+            .list_project_gates(project_id)
+            .into_iter()
+            .map(|gate| (gate.id, gate))
+            .collect::<HashMap<_, _>>();
+        let gate_requirements = self
+            .repo
+            .list_project_task_gate_requirements(project_id)
+            .into_iter()
+            .filter(|requirement| requirement.task_id == task_id)
+            .map(|requirement| {
+                let gate = gates.get(&requirement.gate_id).cloned();
+                let satisfied = gate
+                    .as_ref()
+                    .is_some_and(|gate| project_gate_requirement_satisfied(&requirement, gate));
+                ProjectTaskGateReadiness {
+                    requirement,
+                    gate,
+                    satisfied,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let environments = self
+            .repo
+            .list_project_environments(project_id)
+            .into_iter()
+            .map(|environment| (environment.id, environment))
+            .collect::<HashMap<_, _>>();
+        let environment_requirements = self
+            .repo
+            .list_project_task_environment_requirements(project_id)
+            .into_iter()
+            .filter(|requirement| requirement.task_id == task_id)
+            .map(|requirement| {
+                let environment = environments.get(&requirement.environment_id).cloned();
+                let services = environment
+                    .as_ref()
+                    .map(|environment| self.repo.list_project_environment_services(environment.id))
+                    .unwrap_or_default();
+                let satisfied = environment.as_ref().is_some_and(|environment| {
+                    project_environment_requirement_satisfied(&requirement, environment, &services)
+                });
+                ProjectTaskEnvironmentReadiness {
+                    requirement,
+                    environment,
+                    services,
+                    satisfied,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let open_blockers = self
+            .repo
+            .list_project_task_blockers(task_id)
+            .into_iter()
+            .filter(|blocker| blocker.status == TASK_BLOCKER_STATUS_OPEN)
+            .collect::<Vec<_>>();
+        let mut waiting_reasons = Vec::new();
+        for item in dependencies.iter().filter(|item| !item.satisfied) {
+            waiting_reasons.push(ProjectTaskWaitingReason {
+                kind: "dependency".into(),
+                code: "dependency_unresolved".into(),
+                summary: item
+                    .dependency_task
+                    .as_ref()
+                    .map(|task| format!("前置任务《{}》当前状态为 {}", task.title, task.status))
+                    .unwrap_or_else(|| "前置任务不存在或当前不可见".into()),
+                related_id: Some(item.dependency.depends_on_task_id),
+            });
+        }
+        for item in gate_requirements.iter().filter(|item| !item.satisfied) {
+            waiting_reasons.push(ProjectTaskWaitingReason {
+                kind: "gate".into(),
+                code: "gate_unresolved".into(),
+                summary: item
+                    .gate
+                    .as_ref()
+                    .map(|gate| {
+                        format!(
+                            "项目门禁《{}》当前状态为 {}，要求 {}",
+                            gate.title, gate.status, item.requirement.required_status
+                        )
+                    })
+                    .unwrap_or_else(|| "关联的项目门禁不存在".into()),
+                related_id: Some(item.requirement.gate_id),
+            });
+        }
+        for item in environment_requirements
+            .iter()
+            .filter(|item| !item.satisfied)
+        {
+            waiting_reasons.push(ProjectTaskWaitingReason {
+                kind: "environment".into(),
+                code: "environment_unready".into(),
+                summary: item
+                    .environment
+                    .as_ref()
+                    .map(|environment| {
+                        format!(
+                            "项目环境《{}》当前状态为 {}，实际版本为 {}",
+                            environment.display_name,
+                            environment.status,
+                            environment.observed_revision.as_deref().unwrap_or("未观测")
+                        )
+                    })
+                    .unwrap_or_else(|| "关联的项目环境不存在".into()),
+                related_id: Some(item.requirement.environment_id),
+            });
+        }
+        for blocker in &open_blockers {
+            waiting_reasons.push(ProjectTaskWaitingReason {
+                kind: "blocker".into(),
+                code: "blocker_open".into(),
+                summary: blocker.summary.clone(),
+                related_id: Some(blocker.id),
+            });
+        }
+
+        let mut suggested_actions = Vec::new();
+        if waiting_reasons
+            .iter()
+            .any(|reason| reason.kind == "dependency")
+        {
+            suggested_actions.push(
+                "检查前置任务负责人和真实进度；不要绕过依赖，必要时由项目经理调整依赖。".into(),
+            );
+        }
+        if waiting_reasons.iter().any(|reason| reason.kind == "gate") {
+            suggested_actions.push(
+                "使用 company.gate list 查看门禁与要求；具备权限的负责人在证据满足后执行 decide。"
+                    .into(),
+            );
+        }
+        if waiting_reasons
+            .iter()
+            .any(|reason| reason.kind == "environment")
+        {
+            suggested_actions.push(
+                "使用 company.environment list 查看环境、服务和任务要求；部署或检测完成后更新 observe。".into(),
+            );
+        }
+        if waiting_reasons
+            .iter()
+            .any(|reason| reason.kind == "blocker")
+        {
+            suggested_actions.push(
+                "使用 company.task execution_get 查看开放阻塞，满足解除条件后执行 blocker_resolve。".into(),
+            );
+        }
+        let can_start = waiting_reasons.is_empty();
+        Ok(ProjectTaskReadinessView {
+            task_id,
+            readiness: if can_start { "ready" } else { "waiting" }.into(),
+            can_start,
+            waiting_reasons,
+            suggested_actions,
+            dependencies,
+            gate_requirements,
+            environment_requirements,
+            open_blockers,
         })
     }
 

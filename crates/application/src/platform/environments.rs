@@ -129,6 +129,32 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         Ok(self.repo.list_project_environments(input.project_id))
     }
 
+    pub fn list_project_environment_requirements(
+        &self,
+        input: ListProjectEnvironmentsInput,
+    ) -> AppResult<Vec<ProjectTaskEnvironmentRequirement>> {
+        self.ensure_company_project_access(
+            input.company_id,
+            input.project_id,
+            input.actor_agent_id,
+        )?;
+        Ok(self
+            .repo
+            .list_project_task_environment_requirements(input.project_id))
+    }
+
+    pub fn list_project_environment_services_for_agent(
+        &self,
+        input: ListProjectEnvironmentsInput,
+    ) -> AppResult<Vec<ProjectEnvironmentService>> {
+        self.ensure_company_project_access(
+            input.company_id,
+            input.project_id,
+            input.actor_agent_id,
+        )?;
+        Ok(self.list_project_environment_services(input.project_id))
+    }
+
     pub fn create_project_environment(
         &self,
         input: CreateProjectEnvironmentInput,
