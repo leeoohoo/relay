@@ -180,6 +180,14 @@ impl IntoResponse for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         };
+        if !matches!(self.0, AppError::Internal(_)) {
+            tracing::warn!(
+                status = %status,
+                code = %self.0.code(),
+                error = %self.0,
+                "API request rejected"
+            );
+        }
 
         let body = Json(ApiErrorResponse {
             code: self.0.code().to_string(),

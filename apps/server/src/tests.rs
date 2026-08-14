@@ -128,6 +128,29 @@ fn local_project_import_copies_source_into_a_fresh_git_repository() {
 }
 
 #[test]
+fn host_project_paths_map_to_the_read_only_container_mount() {
+    let requested = FsPath::new("/Users/example/projects/demo");
+    assert_eq!(
+        map_host_folder_path(
+            requested,
+            Some(FsPath::new("/Users/example")),
+            Some(FsPath::new("/relay-host-imports")),
+        )
+        .expect("host path mapping"),
+        PathBuf::from("/relay-host-imports/projects/demo")
+    );
+    assert_eq!(
+        map_host_folder_path(
+            requested,
+            Some(FsPath::new("/opt/other")),
+            Some(FsPath::new("/relay-host-imports")),
+        )
+        .expect("unmapped path"),
+        requested
+    );
+}
+
+#[test]
 fn imported_project_is_published_to_the_provisioned_remote() {
     let root = std::env::temp_dir().join(format!("relay-project-publish-{}", Uuid::new_v4()));
     let project = root.join("project");

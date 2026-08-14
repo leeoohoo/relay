@@ -27,15 +27,29 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}, tok
   }
   if (token) headers.set("authorization", `Bearer ${token}`);
   const response = await fetch(apiUrl(path), { ...init, headers });
-  const body = await response.json().catch(() => null);
+  const rawBody = await response.text();
+  const body = rawBody ? (() => {
+    try {
+      return JSON.parse(rawBody);
+    } catch {
+      return null;
+    }
+  })() : null;
   if (!response.ok) {
     throw new ApiError(
-      body?.message ?? `请求失败 (${response.status})`,
+      body?.message ?? defaultApiErrorMessage(response.status),
       response.status,
       typeof body?.code === "string" ? body.code : null,
     );
   }
   return body as T;
+}
+
+function defaultApiErrorMessage(status: number) {
+  if (status === 408) return "请求处理超时，请检查网络后重试。";
+  if (status === 413) return "提交内容超过服务器允许的大小。";
+  if (status === 502 || status === 503 || status === 504) return "服务暂时不可用，请稍后重试。";
+  return `请求失败 (${status})`;
 }
 
 export function parseSseFrame(frame: string): ServerSentEvent | null {

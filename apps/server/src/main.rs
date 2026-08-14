@@ -113,6 +113,7 @@ struct AppState {
     git_credential_store: GitCredentialStore,
     message_attachments_root: PathBuf,
     folder_reference_allowed_roots: Arc<Vec<PathBuf>>,
+    git_import_timeout: StdDuration,
     codex_model_catalog_path: PathBuf,
     codex_control_store: CodexControlStore,
     harness_provisioner: HarnessProvisioner<RepositoryAdapter>,
@@ -350,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         git_credential_store,
         message_attachments_root,
         folder_reference_allowed_roots,
+        git_import_timeout: StdDuration::from_secs(config.git_import_timeout_seconds),
         codex_model_catalog_path,
         codex_control_store,
         harness_provisioner,
@@ -429,16 +431,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/projects",
-            get(list_company_console_projects).post(create_company_project_for_human),
+            get(list_company_console_projects),
         )
         .route(
             "/api/v1/companies/{company_id}/projects/{project_id}/discussion-threads",
             post(open_project_discussion_thread),
-        )
-        .route(
-            "/api/v1/companies/{company_id}/projects/import-folder",
-            post(import_company_project_folder_for_human)
-                .layer(DefaultBodyLimit::max(5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024)),
         )
         .route(
             "/api/v1/companies/{company_id}/memories",
@@ -743,6 +740,23 @@ async fn main() -> anyhow::Result<()> {
             StatusCode::REQUEST_TIMEOUT,
             StdDuration::from_secs(config.request_timeout_seconds),
         ))
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/companies/{company_id}/projects",
+                    post(create_company_project_for_human),
+                )
+                .route(
+                    "/api/v1/companies/{company_id}/projects/import-folder",
+                    post(import_company_project_folder_for_human).layer(DefaultBodyLimit::max(
+                        5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024,
+                    )),
+                )
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::REQUEST_TIMEOUT,
+                    StdDuration::from_secs(config.project_import_timeout_seconds),
+                )),
+        )
         .route(
             "/api/v1/companies/{company_id}/events",
             get(stream_company_events_for_human),
@@ -752,7 +766,7 @@ async fn main() -> anyhow::Result<()> {
             get(stream_company_events_for_agent),
         )
         .layer(cors_layer)
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().on_response(log_http_response))
         .with_state(app_state);
 
     let addr = SocketAddr::from((config.host.parse::<std::net::IpAddr>()?, config.port));
@@ -762,6 +776,16 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn log_http_response<B>(response: &Response<B>, latency: StdDuration, _span: &tracing::Span) {
+    if response.status().is_client_error() || response.status().is_server_error() {
+        tracing::warn!(
+            status = %response.status(),
+            latency_ms = latency.as_millis(),
+            "HTTP request failed"
+        );
+    }
 }
 
 async fn api_not_found() -> ApiError {

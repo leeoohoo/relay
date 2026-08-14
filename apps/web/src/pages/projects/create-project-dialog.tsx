@@ -24,7 +24,7 @@ export function CreateProjectDialog(props: {
   const [selectedFolderFiles, setSelectedFolderFiles] = useState<File[]>([]);
   const [selectedFolderPath, setSelectedFolderPath] = useState("");
   const [gitRemoteUrl, setGitRemoteUrl] = useState("");
-  const [defaultBranch, setDefaultBranch] = useState("main");
+  const [defaultBranch, setDefaultBranch] = useState("");
   const [busy, setBusy] = useState(false);
   const skillLanguage = props.consoleData.governance_policy.effective_settings.skill_language;
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -159,7 +159,7 @@ export function CreateProjectDialog(props: {
         ) : (
           <div className="form-grid">
             <Field label="来源 Git 地址"><input value={gitRemoteUrl} onChange={(event) => setGitRemoteUrl(event.target.value)} placeholder="https://github.com/org/repository.git" required /></Field>
-            <Field label="导入分支"><input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="main" required /></Field>
+            <Field label="导入分支（可选）"><input value={defaultBranch} onChange={(event) => setDefaultBranch(event.target.value)} placeholder="留空使用仓库默认分支" /></Field>
           </div>
         )}
         <div className="form-grid">

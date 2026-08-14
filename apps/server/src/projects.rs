@@ -52,7 +52,11 @@ pub(super) async fn create_company_project_for_human(
             })?;
             let source =
                 validate_project_source_folder(requested, &state.folder_reference_allowed_roots)?;
-            if destination.starts_with(&source) || source == workspace_root {
+            let requested_host_path = PathBuf::from(requested.trim());
+            if destination.starts_with(&requested_host_path)
+                || destination.starts_with(&source)
+                || source == workspace_root
+            {
                 return Err(AppError::Validation(
                     "managed destination cannot be inside the imported source folder".into(),
                 )
@@ -80,13 +84,13 @@ pub(super) async fn create_company_project_for_human(
                     AppError::Validation("git_remote_url is required for git source".into())
                 })?;
             let branch = input.default_branch.clone();
-            let destination_for_clone = destination.clone();
-            let remote_url = remote_url.to_string();
-            tokio::task::spawn_blocking(move || {
-                import_project_git(&remote_url, branch.as_deref(), &destination_for_clone)
-            })
-            .await
-            .map_err(|error| AppError::Internal(format!("Git import task failed: {error}")))??;
+            import_project_git(
+                remote_url,
+                branch.as_deref(),
+                &destination,
+                state.git_import_timeout,
+            )
+            .await?;
             collect_directory_structure(&destination)?
         }
         _ => {
