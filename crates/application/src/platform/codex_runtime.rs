@@ -83,7 +83,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 AppError::Unauthorized("human user is not an active company member".into())
             })?;
         self.repo
-            .get_company_agent_membership(input.agent_id)
+            .get_company_agent_membership_result(input.agent_id)?
             .filter(|membership| membership.company_id == input.company_id)
             .ok_or_else(|| AppError::NotFound("company Agent not found".into()))?;
         let sessions = self
@@ -180,7 +180,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<AgentCodexWorkDecision> {
         let membership = self
             .repo
-            .get_company_agent_membership(config.agent_profile_id)
+            .get_company_agent_membership_result(config.agent_profile_id)?
             .filter(|membership| {
                 membership.company_id == config.company_id
                     && membership.employment_status == "active"

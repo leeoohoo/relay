@@ -146,7 +146,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.ensure_agent_can_act(agent_id)?;
         let membership = self
             .repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| membership.employment_status == "active")
             .ok_or_else(|| {
                 AppError::Unauthorized("agent is not an active company member".into())
@@ -171,7 +171,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         self.ensure_agent_can_act(agent_id)?;
         self.repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| membership.employment_status == "active")
             .ok_or_else(|| AppError::Unauthorized("agent is not an active company member".into()))
     }
@@ -225,7 +225,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         let membership = self
             .repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| membership.company_id == company_id)
             .ok_or_else(|| {
                 AppError::Unauthorized("agent does not belong to the requested company".into())
@@ -304,7 +304,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         let membership = self
             .repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| membership.company_id == company_id)
             .ok_or_else(|| {
                 AppError::Unauthorized("agent does not belong to the requested company".into())
@@ -335,7 +335,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.ensure_company_human_manager(input.company_id, input.human_user_id)?;
         let mut membership = self
             .repo
-            .get_company_agent_membership(input.target_agent_id)
+            .get_company_agent_membership_result(input.target_agent_id)?
             .filter(|membership| membership.company_id == input.company_id)
             .ok_or_else(|| AppError::NotFound("company agent membership not found".into()))?;
         if membership.employment_status != expected_employment_status {

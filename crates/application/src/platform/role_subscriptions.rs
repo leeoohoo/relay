@@ -11,7 +11,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .list_project_member_event_subscriptions(project_id, agent_id);
         let membership = self
             .repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .ok_or_else(|| AppError::NotFound("company Agent membership not found".into()))?;
         let profession = infer_company_profession(Some(&membership.job_title));
         if !existing.is_empty() {
@@ -98,7 +98,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
             let Some(membership) = self
                 .repo
-                .get_company_agent_membership(member.agent_profile_id)
+                .get_company_agent_membership_result(member.agent_profile_id)?
             else {
                 continue;
             };

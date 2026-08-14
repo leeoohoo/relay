@@ -408,7 +408,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         self.ensure_company_human_manager(company_id, human_user_id)?;
         self.repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| {
                 membership.company_id == company_id && membership.employment_status == "active"
             })
@@ -463,7 +463,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         let membership = self
             .repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| membership.company_id == company_id)
             .ok_or_else(|| AppError::Unauthorized("agent does not belong to the company".into()))?;
         if membership.employment_status == "provisioning" {

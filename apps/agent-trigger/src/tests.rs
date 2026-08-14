@@ -422,6 +422,8 @@ fn prompts_treat_identity_as_authenticated_session_state() {
     assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
     assert!(worker_prompt.contains("company.task execution_get"));
     assert!(worker_prompt.contains("execution.readiness.can_start=true"));
+    assert!(worker_prompt.contains(&format!("company_id={}", project.company_id)));
+    assert!(worker_prompt.contains(&format!("project_id={}", project.id)));
     assert!(!worker_prompt.contains("先调用 agent.bootstrap"));
 }
 

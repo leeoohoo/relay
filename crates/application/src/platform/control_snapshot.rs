@@ -7,7 +7,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         company_id: Uuid,
     ) -> AppResult<AgentControlSnapshot> {
         self.repo
-            .get_company_agent_membership(agent_profile_id)
+            .get_company_agent_membership_result(agent_profile_id)?
             .filter(|membership| {
                 membership.company_id == company_id && membership.employment_status == "active"
             })

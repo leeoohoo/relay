@@ -228,6 +228,7 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
          不要重新确认、询问或汇报自己的身份，也不要为了身份调用 `agent.bootstrap`；认证异常应作为运行环境故障直接停止。\n\
          当前工作目录是该 Agent 在本项目的隔离工作区，worktree key 为 {worktree_key}，分支为 {branch}。\n\
          必须使用 `${employee_skill}`、`${profession_skill}`、`${session_skill}` 和 `${project_skill}`。职业 Skill 与项目 Rule 的流程和质量门槛不能省略。\n\
+         Relay 运行时标识：company_id={company_id}，project_id={project_id}。调用 company.project、company.task 或其他要求公司/项目参数的 Relay 工具时，必须直接使用这两个完整 UUID，不得从 Git 命名空间猜测，也不得为了查找它们扫描工作区或调用 `agent.bootstrap`。\n\
          本轮 Execution Intent ID：{intent_id}\n\
          目标：{objective}\n\
          优先级：{priority}\n\
@@ -250,6 +251,8 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
         profession_skill = context.relay_skills.profession_name,
         session_skill = context.relay_skills.session_name,
         project_skill = project_skill,
+        company_id = context.project.company_id,
+        project_id = context.project.id,
         intent_id = context.intent.id,
         objective = context.intent.objective,
         priority = context.intent.priority,

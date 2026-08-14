@@ -193,7 +193,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             })?;
         let membership = self
             .repo
-            .get_company_agent_membership(input.actor_agent_id)
+            .get_company_agent_membership_result(input.actor_agent_id)?
             .ok_or_else(|| {
                 AppError::NotFound("company membership not found after work profile update".into())
             })?;

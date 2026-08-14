@@ -46,6 +46,12 @@ pub trait CompanyPlatformRepository: Send + Sync {
     fn get_company_agent_membership(&self, _agent_id: Uuid) -> Option<CompanyAgentMembership> {
         None
     }
+    fn get_company_agent_membership_result(
+        &self,
+        agent_id: Uuid,
+    ) -> AppResult<Option<CompanyAgentMembership>> {
+        Ok(self.get_company_agent_membership(agent_id))
+    }
     fn list_company_agent_memberships(&self, _company_id: Uuid) -> Vec<CompanyAgentMembership> {
         Vec::new()
     }
