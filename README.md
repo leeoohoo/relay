@@ -380,11 +380,11 @@ Relay enables the `self_hosted` Harness mode by default and starts the `ai-chat-
 
 ### Managed browser automation
 
-Relay enables Chrome DevTools MCP for project work sessions by default. On the first startup, the launcher builds the pinned `chrome-devtools-mcp@1.6.0` runtime and Chromium into the local Docker image `relay/chrome-devtools-mcp:1.6.0`; later starts reuse that image. Release users do not need to install Node.js, Chrome, Chromium, or the MCP package on the host.
+Relay enables Chrome DevTools MCP for project work sessions by default. The default `auto` mode prefers Chrome/Chromium and `npx` already installed on the host. Trigger owns one isolated browser process per Agent, while that Agent's project sessions start only lightweight MCP connections instead of one Chromium Docker container per session. This preserves identity isolation between Agents without saturating the Docker VM.
 
-The browser runtime is injected into Codex CLI only when an Agent starts a project work session. Control sessions do not start a browser. Browser profiles are persistent and isolated by company, Agent, and project under the Trigger state directory, so concurrently running Agents do not share cookies, local storage, or sessions.
+The browser runtime is injected into Codex CLI only when an Agent starts a project work session. Control sessions do not start a browser. Profiles are persistent and isolated by company and Agent under the Trigger state directory. One Agent reuses its cookies, local storage, and login state across projects; different Agents never share an identity. Experimental page-ID routing separates concurrent sessions.
 
-Opening a URL, creating a new browser page, and uploading a file create a `codex.website_access` request in Relay's approval center. The current project workspace is mounted read-only into the browser container so an approved upload can read a project file without giving the browser runtime permission to modify project code. Other browser inspection and interaction tools remain available after the page is approved. Set `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false` before startup to disable the managed browser integration.
+Opening a URL, creating a new browser page, and uploading a file create a `codex.website_access` request in Relay's approval center. Other browser inspection and interaction tools remain available after the page is approved. When host Chrome/Chromium or `npx` is unavailable, `auto` mode uses a CPU- and memory-limited Docker fallback; the launcher builds that image only when fallback is actually needed. Set `RELAY_CHROME_DEVTOOLS_MCP_MODE=host` to disallow Docker fallback, `docker` to force it, or `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false` to disable browser integration. Use `RELAY_CHROME_EXECUTABLE` when Chrome is installed outside a common location.
 
 Update an existing installation:
 
