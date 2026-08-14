@@ -497,7 +497,10 @@ export function MessagesView(props: {
             mode={selectedIsGroup ? "group" : "direct"}
             token={props.token}
             realtimeEvent={props.realtimeEvent}
+            canManage={canSend}
             onTaskOpen={selectedProject ? openProjectTask : undefined}
+            onError={props.onError}
+            onNotice={props.onNotice}
             onClose={() => setShowMemberDetails(false)}
           />
         ) : null}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../api/client";
 import { applyCodexRealtimeEvent, fetchCodexRuntimeOverview } from "../api/codexRuntime";
 import type { CompanyRealtimeEvent } from "../api/types";
 import type { CodexTriggerRun, CodexTriggerView, CompanyAgent, CompanyProject, CompanyProjectTask } from "../types/platform";
@@ -21,7 +22,10 @@ export function GroupMembersDrawer(props: {
   mode: "group" | "direct";
   token: string;
   realtimeEvent: CompanyRealtimeEvent | null;
+  canManage: boolean;
   onTaskOpen?: (taskId: string) => void;
+  onError: (error: unknown) => void;
+  onNotice: (message: string) => void;
   onClose: () => void;
 }) {
   const agentIdsKey = props.agents.map((agent) => agent.agent_profile.id).join(",");
@@ -112,7 +116,16 @@ export function GroupMembersDrawer(props: {
               agent={agent}
               runtime={runtimeByAgent[agent.agent_profile.id] ?? emptyRuntime(true)}
               tasks={assignedTasks(props.project, agent.agent_profile.id)}
+              companyId={props.companyId}
+              token={props.token}
+              canManage={props.canManage}
+              onTriggerChanged={(trigger) => setRuntimeByAgent((current) => ({
+                ...current,
+                [agent.agent_profile.id]: { loading: false, trigger, error: null, stale: false },
+              }))}
               onTaskOpen={props.onTaskOpen}
+              onError={props.onError}
+              onNotice={props.onNotice}
             />
           ))}
           {!props.agents.length ? <div className="conversation-member-empty">当前会话没有可展示的 Agent 成员。</div> : null}
@@ -123,9 +136,25 @@ export function GroupMembersDrawer(props: {
   );
 }
 
-function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState; tasks: CompanyProjectTask[]; onTaskOpen?: (taskId: string) => void }) {
+function AgentRuntimeDetails(props: {
+  agent: CompanyAgent;
+  runtime: RuntimeState;
+  tasks: CompanyProjectTask[];
+  companyId: string;
+  token: string;
+  canManage: boolean;
+  onTriggerChanged: (trigger: CodexTriggerView) => void;
+  onTaskOpen?: (taskId: string) => void;
+  onError: (error: unknown) => void;
+  onNotice: (message: string) => void;
+}) {
+  const [actionBusy, setActionBusy] = useState(false);
   const operationalStatus = runtimeStatus(props.agent, props.runtime, props.tasks);
-  const runningRun = props.runtime.trigger?.recent_runs.find((run) => run.status === "running") ?? null;
+  const projectedState = props.runtime.trigger?.runtime?.state;
+  const recoveryProjected = projectedState === "recovering" || projectedState === "failed";
+  const runningRun = recoveryProjected
+    ? null
+    : props.runtime.trigger?.recent_runs.find((run) => run.status === "running") ?? null;
   const latestRun = runningRun ?? props.runtime.trigger?.recent_runs[0] ?? null;
   const currentTask = props.tasks.find((task) => task.status === "in_progress") ?? props.tasks[0] ?? null;
   const currentIntent = props.runtime.trigger?.active_intents.find((intent) => intent.status === "running")
@@ -135,6 +164,35 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
   const summary = props.agent.membership.employment_status === "active"
     ? runtimeSummary(props.runtime, latestRun, currentTask, operationalStatus)
     : "该 Agent 已暂停工作";
+  const trigger = props.runtime.trigger;
+  const triggerPaused = trigger?.config.status !== "active";
+  const continuationQueued = Boolean(trigger?.config.manual_run_requested_at || trigger?.config.wake_requested_at);
+  const canRequestContinuation = Boolean(trigger)
+    && props.agent.membership.employment_status === "active"
+    && (triggerPaused || (!continuationQueued
+      && (recoveryProjected || (!runningRun && !trigger?.config.lease_owner
+        && (operationalStatus === "continuing" || operationalStatus === "error")))));
+
+  async function recoverAgent() {
+    if (!trigger || actionBusy) return;
+    const action = triggerPaused ? "resume" : "run-now";
+    setActionBusy(true);
+    try {
+      const response = await api<{ trigger: CodexTriggerView }>(
+        `/api/v1/companies/${props.companyId}/agents/${props.agent.agent_profile.id}/codex-trigger/${action}`,
+        { method: "POST" },
+        props.token,
+      );
+      props.onTriggerChanged(response.trigger);
+      props.onNotice(triggerPaused
+        ? `${props.agent.agent_profile.display_name} 已恢复运行，将继续待处理工作`
+        : `${props.agent.agent_profile.display_name} 已请求立即接续`);
+    } catch (error) {
+      props.onError(error);
+    } finally {
+      setActionBusy(false);
+    }
+  }
 
   return (
     <details className={`group-runtime-member ${operationalStatus}`}>
@@ -149,14 +207,25 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
         <Icon name="chevron-down" />
       </summary>
       <div className="group-runtime-detail">
-        <div className="runtime-facts">
-          <span><small>连接</small><strong>{connectionLabel(props.agent.connection.status)}</strong></span>
-          <span><small>Trigger</small><strong>{triggerStatusLabel(props.runtime.trigger)}</strong></span>
-          {latestRun ? <span><small>{latestRun.status === "running" ? "已运行" : "最近执行"}</small><strong>{latestRun.status === "running" ? formatElapsed(latestRun.started_at) : formatTime(latestRun.started_at)}</strong></span> : null}
-          {props.runtime.trigger?.runtime?.session_kind ? <span><small>会话</small><strong>{props.runtime.trigger.runtime.session_kind === "project" ? "项目工作" : "控制分诊"}</strong></span> : null}
-          {props.runtime.trigger?.runtime?.heartbeat_at ? <span><small>心跳</small><strong>{formatTime(props.runtime.trigger.runtime.heartbeat_at)}</strong></span> : null}
+        <div className="runtime-overview-card">
+          <div className="runtime-facts">
+            <span><small>连接</small><strong>{connectionLabel(props.agent.connection.status)}</strong></span>
+            <span><small>Trigger</small><strong>{triggerStatusLabel(props.runtime.trigger)}</strong></span>
+            {latestRun ? <span><small>{latestRun.status === "running" ? "已运行" : "最近执行"}</small><strong>{latestRun.status === "running" ? formatElapsed(latestRun.started_at) : formatTime(latestRun.started_at)}</strong></span> : null}
+            {props.runtime.trigger?.runtime?.session_kind ? <span><small>会话</small><strong>{props.runtime.trigger.runtime.session_kind === "project" ? "项目工作" : "控制分诊"}</strong></span> : null}
+            {props.runtime.trigger?.runtime?.heartbeat_at ? <span><small>最近心跳</small><strong>{formatTime(props.runtime.trigger.runtime.heartbeat_at)}</strong></span> : null}
+          </div>
+          {props.canManage && canRequestContinuation ? (
+            <button type="button" className="runtime-recover-button" disabled={actionBusy} onClick={() => void recoverAgent()}>
+              <Icon name="play" />
+              <span><strong>{actionBusy ? "正在处理…" : triggerPaused ? "恢复运行" : "立即接续"}</strong><small>{triggerPaused ? "重新启用 Trigger" : "唤醒并继续未完成工作"}</small></span>
+            </button>
+          ) : null}
+          {props.canManage && !triggerPaused && continuationQueued && !runningRun ? (
+            <div className="runtime-continuation-queued"><span className="loader" /><span><strong>接续已排队</strong><small>Trigger 将继续未完成工作</small></span></div>
+          ) : null}
         </div>
-        {props.runtime.trigger?.runtime ? <div className={`runtime-projection ${props.runtime.trigger.runtime.state}`}><strong>{runtimeProjectionLabel(props.runtime.trigger.runtime.state)}</strong><span>{props.runtime.trigger.runtime.reason}</span></div> : null}
+        {props.runtime.trigger?.runtime ? <div className={`runtime-projection ${props.runtime.trigger.runtime.state}`}><span className="runtime-projection-icon"><Icon name={props.runtime.trigger.runtime.state === "failed" ? "alert" : props.runtime.trigger.runtime.state === "recovering" ? "refresh" : "play"} /></span><div><strong>{runtimeProjectionLabel(props.runtime.trigger.runtime.state)}</strong><span>{props.runtime.trigger.runtime.reason}</span></div></div> : null}
 
         {props.tasks.length ? (
           <section className="runtime-task-section">
@@ -171,7 +240,7 @@ function AgentRuntimeDetails(props: { agent: CompanyAgent; runtime: RuntimeState
         {props.runtime.stale ? <div className="runtime-stale"><Icon name="alert" /> <span><strong>运行状态暂未更新</strong><small>请求已自动降频，当前展示最后一次成功数据。</small></span></div> : null}
         {props.runtime.error ? <div className="runtime-error"><Icon name="alert" /> <span><strong>运行信息读取失败</strong><small>{props.runtime.error}</small></span></div> : null}
         {!props.runtime.loading && !props.runtime.error && !props.runtime.trigger ? <div className="runtime-empty">这个 Agent 尚未启用 Codex Trigger。</div> : null}
-        {latestRun ? <RunProcess run={latestRun} /> : null}
+        {latestRun ? <RunProcess run={latestRun} live={Boolean(runningRun)} recovering={recoveryProjected} /> : null}
 
         {props.runtime.trigger && props.runtime.trigger.recent_runs.length > (latestRun ? 1 : 0) ? (
           <section className="runtime-history-section">
@@ -210,13 +279,13 @@ function IntentProgress(props: {
   );
 }
 
-function RunProcess({ run }: { run: CodexTriggerRun }) {
+function RunProcess({ run, live, recovering }: { run: CodexTriggerRun; live: boolean; recovering: boolean }) {
   const activities = run.activity_log.slice(-12);
   return (
     <section className="runtime-process-section">
       <div className="runtime-process-head">
-        <h4>{run.status === "running" ? "当前执行过程" : "最近一次执行过程"}</h4>
-        <span className={`runtime-history-state ${run.status}`}>{runStatusLabel(run.status)}</span>
+        <h4>{live ? "当前执行过程" : "最近一次执行过程"}</h4>
+        <span className={`runtime-history-state ${recovering ? "pending" : run.status}`}>{recovering ? "等待恢复" : runStatusLabel(run.status)}</span>
       </div>
       <div className="runtime-current-step">
         <span>{activityPhaseLabel(run.activity_phase)}</span>

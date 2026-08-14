@@ -470,22 +470,28 @@ button.message-entity-reference:focus-visible {
 @keyframes runtime-pulse { 50% { opacity: .35; transform: scale(.75); } }
 .group-runtime-detail {
   display: grid;
-  gap: 10px;
-  padding: 0 9px 10px 47px;
+  gap: 9px;
+  padding: 2px 10px 12px 47px;
+}
+.runtime-overview-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
 }
 .runtime-facts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
+  gap: 6px;
 }
 .runtime-facts > span {
   min-width: 0;
   display: grid;
   gap: 2px;
-  border: 1px solid rgba(255, 255, 255, .045);
-  border-radius: 7px;
-  padding: 6px;
-  background: rgba(255, 255, 255, .018);
+  border: 1px solid rgba(108, 142, 160, .12);
+  border-radius: 9px;
+  padding: 8px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, .008));
 }
 .runtime-facts small,
 .runtime-task-section h4,
@@ -494,7 +500,7 @@ button.message-entity-reference:focus-visible {
 .runtime-intent-section h4 {
   margin: 0;
   color: #617582;
-  font-size: 7px;
+  font-size: 8px;
   font-weight: 750;
   letter-spacing: .04em;
   text-transform: uppercase;
@@ -502,25 +508,65 @@ button.message-entity-reference:focus-visible {
 .runtime-facts strong {
   overflow: hidden;
   color: #bfccd4;
-  font-size: 8px;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.runtime-recover-button {
+  min-width: 124px;
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 199, 111, .28);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #ffe0a8;
+  background: linear-gradient(145deg, rgba(255, 199, 111, .13), rgba(255, 199, 111, .045));
+  text-align: left;
+  cursor: pointer;
+}
+.runtime-recover-button:hover:not(:disabled) { border-color: rgba(255, 199, 111, .52); background: rgba(255, 199, 111, .16); transform: translateY(-1px); }
+.runtime-recover-button:disabled { opacity: .55; cursor: wait; }
+.runtime-recover-button > svg { width: 20px; height: 20px; padding: 5px; border-radius: 8px; color: #171009; background: #ffc76f; }
+.runtime-recover-button > span { min-width: 0; display: grid; gap: 2px; }
+.runtime-recover-button strong { font-size: 10px; }
+.runtime-recover-button small { color: #b79b6f; font-size: 7px; white-space: nowrap; }
+.runtime-continuation-queued {
+  min-width: 124px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(77, 226, 255, .18);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: #bceaf0;
+  background: rgba(77, 226, 255, .045);
+}
+.runtime-continuation-queued .loader { width: 14px; height: 14px; }
+.runtime-continuation-queued > span:last-child { display: grid; gap: 2px; }
+.runtime-continuation-queued strong { font-size: 9px; }
+.runtime-continuation-queued small { color: #71949e; font-size: 7px; white-space: nowrap; }
 
 .runtime-projection {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 10px 0;
-  padding: 9px 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(77, 226, 255, .13);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  font-size: 12px;
+  background: linear-gradient(90deg, rgba(77, 226, 255, .06), rgba(77, 226, 255, .015));
 }
-
-.runtime-projection strong { flex: 0 0 auto; }
-.runtime-projection span { color: var(--text-muted); line-height: 1.45; }
+.runtime-projection-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; color: #76e8f3; background: rgba(77, 226, 255, .1); }
+.runtime-projection-icon svg { width: 14px; height: 14px; }
+.runtime-projection > div { min-width: 0; display: grid; gap: 2px; }
+.runtime-projection strong { color: #d8e6ed; font-size: 10px; }
+.runtime-projection > div > span { color: #8196a3; font-size: 9px; line-height: 1.45; }
+.runtime-projection.recovering { border-color: rgba(255, 199, 111, .2); background: linear-gradient(90deg, rgba(255, 199, 111, .075), rgba(255, 199, 111, .015)); }
+.runtime-projection.recovering .runtime-projection-icon { color: #ffc76f; background: rgba(255, 199, 111, .1); }
 .runtime-projection.failed { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 
 .project-load-warnings {
@@ -548,6 +594,7 @@ button.message-entity-reference:focus-visible {
   display: grid;
   gap: 6px;
 }
+.runtime-task-section { border: 1px solid rgba(255, 255, 255, .045); border-radius: 10px; padding: 9px; background: rgba(255, 255, 255, .012); }
 .runtime-intent-section {
   border: 1px solid rgba(77, 226, 255, .1);
   border-radius: 7px;
@@ -565,8 +612,8 @@ button.message-entity-reference:focus-visible {
   align-items: center;
   gap: 6px;
   border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 4px;
+  border-radius: 7px;
+  padding: 6px;
   color: inherit;
   background: transparent;
   text-align: left;
@@ -578,7 +625,7 @@ button.message-entity-reference:focus-visible {
 .runtime-task strong {
   overflow: hidden;
   color: #bbc9d2;
-  font-size: 8px;
+  font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

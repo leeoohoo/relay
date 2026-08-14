@@ -354,6 +354,12 @@ describe("MessagesView group member runtime drawer", () => {
       if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
       if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
       if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: betweenRunsTrigger, sessions: [] }] };
+      if (path.endsWith("/agents/agent-1/codex-trigger/run-now")) return {
+        trigger: {
+          ...betweenRunsTrigger,
+          config: { ...betweenRunsTrigger.config, manual_run_requested_at: "2026-08-07T03:06:00Z" },
+        },
+      };
       throw new Error(`unexpected request: ${path}`);
     });
 
@@ -373,6 +379,56 @@ describe("MessagesView group member runtime drawer", () => {
     expect(await screen.findByText("待继续")).toBeInTheDocument();
     expect(screen.getByText("任务尚未完成，等待接续或外部条件 · 实现库存工作台")).toBeInTheDocument();
     expect(screen.queryByText("空闲")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("前端 Agent").closest("summary")!);
+    fireEvent.click(screen.getByRole("button", { name: /立即接续/ }));
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
+      "/api/v1/companies/company-1/agents/agent-1/codex-trigger/run-now",
+      { method: "POST" },
+      "token",
+    ));
+    expect(await screen.findByText("接续已排队")).toBeInTheDocument();
+  });
+
+  it("offers immediate continuation when a stale running projection is recovering", async () => {
+    const recoveringTrigger: CodexTriggerView = {
+      ...trigger,
+      runtime: {
+        state: "recovering",
+        reason: "运行心跳已停止，Relay 正在恢复或等待 Watchdog 接管",
+        session_kind: "project",
+        run_id: "run-1",
+        intent_id: null,
+        task_id: taskId,
+        waiting_on_type: null,
+        waiting_on_id: null,
+        heartbeat_at: "2026-08-07T03:02:00Z",
+        stale: true,
+      },
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: recoveringTrigger, sessions: [] }] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
+    fireEvent.click((await screen.findByText("前端 Agent")).closest("summary")!);
+    expect(screen.getAllByText("运行心跳已停止，Relay 正在恢复或等待 Watchdog 接管")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /立即接续/ })).toBeInTheDocument();
   });
 
   it("shows active intent details and restart handoffs without treating them as failures", async () => {
