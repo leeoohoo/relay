@@ -91,6 +91,16 @@ fn compact_surface_exposes_thirteen_tools_and_hides_legacy_names() {
     assert!(names.contains(&"company.gate"));
     assert!(names.contains(&"company.environment"));
     assert!(names.contains(&"company.events"));
+    for name in [
+        "agent.control_snapshot",
+        "company.gate",
+        "company.environment",
+    ] {
+        assert!(
+            is_public_tool_name(name),
+            "{name} must be invokable when advertised"
+        );
+    }
     assert!(!is_public_tool_name("agent.get_profile"));
     assert!(!is_public_tool_name("company.chat.message.send"));
     assert!(!is_public_tool_name("company.project.task.update"));
@@ -108,6 +118,81 @@ fn compact_surface_exposes_thirteen_tools_and_hides_legacy_names() {
         assert!(serde_json::to_string(&tool.input_schema)
             .expect("tool schema should serialize")
             .contains("idempotency_key"));
+    }
+}
+
+#[test]
+fn gate_and_environment_tools_classify_read_and_write_actions() {
+    for tool in ["company.gate", "company.environment"] {
+        assert!(!is_mutating_tool(tool, &json!({ "action": "list" })));
+        assert!(is_mutating_tool(tool, &json!({ "action": "create" })));
+    }
+    assert!(!is_mutating_tool(
+        "company.task",
+        &json!({ "action": "execution_get" })
+    ));
+}
+
+#[test]
+fn advertised_gate_and_environment_tools_reach_their_dispatchers() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "mcp-gate-environment@example.com".into(),
+            display_name: "MCP Gate Environment".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "MCP Gate Environment Company".into(),
+            slug: Some("mcp-gate-environment-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let manager = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Gate Manager".into(),
+            handle: "gate-manager".into(),
+            persona: "负责项目门禁与环境".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("manager should be created");
+    let project = app
+        .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            owner_agent_id: manager.agent_profile.id,
+            name: "MCP Gate Environment Project".into(),
+            description: None,
+            member_agent_ids: Vec::new(),
+            project_type: Some("web_application".into()),
+            project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: Some(100),
+            project_type_evidence: Vec::new(),
+            project_id: None,
+        })
+        .expect("project should be created");
+    let gateway = McpGateway::new(app, None);
+
+    for tool in ["company.gate", "company.environment"] {
+        let invocation = gateway
+            .invoke(
+                Some(&manager.agent_key_plaintext),
+                tool,
+                json!({
+                    "action": "list",
+                    "company_id": company.company.id,
+                    "project_id": project.project.id,
+                }),
+            )
+            .unwrap_or_else(|error| panic!("{tool} must be invokable: {error}"));
+        assert_eq!(invocation.tool, tool);
     }
 }
 

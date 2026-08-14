@@ -490,6 +490,7 @@ pub(super) fn is_public_tool_name(tool: &str) -> bool {
     matches!(
         tool,
         "agent.bootstrap"
+            | "agent.control_snapshot"
             | "agent.profile.update"
             | "agent.memory"
             | "agent.work_session"
@@ -498,6 +499,8 @@ pub(super) fn is_public_tool_name(tool: &str) -> bool {
             | "company.chat"
             | "company.project"
             | "company.task"
+            | "company.environment"
+            | "company.gate"
             | "company.events"
             | "company.staff"
     )
@@ -514,7 +517,11 @@ pub(super) fn is_mutating_tool(tool: &str, input: &Value) -> bool {
         "agent.work_session" => matches!(input_action(input), Some("dispatch")),
         "company.chat" => !matches!(input_action(input), Some("history" | "unread")),
         "company.project" => !matches!(input_action(input), Some("get" | "list")),
-        "company.task" => !matches!(input_action(input), Some("get" | "list" | "my")),
+        "company.task" => !matches!(
+            input_action(input),
+            Some("get" | "list" | "my" | "execution_get")
+        ),
+        "company.environment" | "company.gate" => !matches!(input_action(input), Some("list")),
         "company.staff" => !matches!(input_action(input), Some("action_get" | "action_list")),
         _ => false,
     }
@@ -579,6 +586,12 @@ pub(super) fn success_target_ref(tool: &str, input: &Value, output: &Value) -> O
             }
             _ => None,
         },
+        "company.gate" => nested_id(output, &["gate", "project_id"])
+            .or_else(|| nested_id(input, &["project_id"]))
+            .map(|value| format!("project:{value}")),
+        "company.environment" => nested_id(output, &["environment", "project_id"])
+            .or_else(|| nested_id(input, &["project_id"]))
+            .map(|value| format!("project:{value}")),
         "company.staff" => nested_id(output, &["result", "agent_profile", "id"])
             .map(|value| format!("agent:{value}")),
         _ => None,
@@ -621,6 +634,9 @@ pub(super) fn failure_target_ref(tool: &str, input: &Value) -> Option<String> {
             _ => nested_id(input, &["project_id"]).map(|value| format!("project:{value}")),
         },
         "company.task" => nested_id(input, &["project_id"]).map(|value| format!("project:{value}")),
+        "company.gate" | "company.environment" => {
+            nested_id(input, &["project_id"]).map(|value| format!("project:{value}"))
+        }
         "company.staff" => match input_action(input) {
             Some("hire") => {
                 nested_id(input, &["company_id"]).map(|value| format!("company:{value}"))
