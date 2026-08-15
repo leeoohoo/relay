@@ -706,6 +706,10 @@ async fn run_trigger_loop(
                 config.logical_cpus,
             );
             agent_claims_blocked_by_resources = concurrency_slots > 0 && available_slots == 0;
+            if agent_claims_blocked_by_resources {
+                next_memory_probe =
+                    next_memory_probe.min(tokio::time::Instant::now() + StdDuration::from_secs(2));
+            }
             if available_slots > 0 {
                 let claim_started = std::time::Instant::now();
                 let claim_result =

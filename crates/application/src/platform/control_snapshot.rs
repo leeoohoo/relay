@@ -19,6 +19,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|company| company.status == "active")
             .ok_or_else(|| AppError::NotFound("active company not found".into()))?;
 
+        self.agent_control_snapshot_for_active_member(agent_profile_id, company_id)
+    }
+
+    pub(super) fn agent_control_snapshot_for_active_member(
+        &self,
+        agent_profile_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<AgentControlSnapshot> {
         let now = now_utc();
         let projects = self
             .repo

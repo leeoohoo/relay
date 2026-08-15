@@ -184,6 +184,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         &self,
         config: &AgentCodexTriggerConfig,
     ) -> AppResult<AgentCodexWorkDecision> {
+        self.decide_agent_codex_work_with_membership(config)
+            .map(|(decision, _)| decision)
+    }
+
+    pub fn decide_agent_codex_work_with_membership(
+        &self,
+        config: &AgentCodexTriggerConfig,
+    ) -> AppResult<(AgentCodexWorkDecision, CompanyAgentMembership)> {
         let membership = self
             .repo
             .get_company_agent_membership_result(config.agent_profile_id)?
@@ -199,8 +207,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|company| company.status == "active")
             .ok_or_else(|| AppError::NotFound("active company not found".into()))?;
         let now = now_utc();
-        let mut control_snapshot =
-            self.agent_control_snapshot(config.agent_profile_id, config.company_id)?;
+        let mut control_snapshot = self
+            .agent_control_snapshot_for_active_member(config.agent_profile_id, config.company_id)?;
         let projects = self
             .repo
             .list_company_projects_result(config.company_id)?
@@ -239,8 +247,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
         }
         if recovered_intent {
-            control_snapshot =
-                self.agent_control_snapshot(config.agent_profile_id, config.company_id)?;
+            control_snapshot = self.agent_control_snapshot_for_active_member(
+                config.agent_profile_id,
+                config.company_id,
+            )?;
         }
         let pending_events = control_snapshot.actionable_events.clone();
         let active_tasks = control_snapshot.ready_tasks.clone();
@@ -346,19 +356,22 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         } else {
             AGENT_CODEX_TRIGGER_TYPE_SCHEDULED
         };
-        Ok(AgentCodexWorkDecision {
-            should_run,
-            trigger_type: trigger_type.into(),
-            project,
-            git,
-            pending_inbox_count: pending_events.len(),
-            active_task_count: active_tasks.len(),
-            waiting_task_count,
-            asset_refresh_due: asset_refresh.is_some(),
-            pending_execution_intent_count,
-            resume_existing_intents_directly,
-            control_snapshot,
-        })
+        Ok((
+            AgentCodexWorkDecision {
+                should_run,
+                trigger_type: trigger_type.into(),
+                project,
+                git,
+                pending_inbox_count: pending_events.len(),
+                active_task_count: active_tasks.len(),
+                waiting_task_count,
+                asset_refresh_due: asset_refresh.is_some(),
+                pending_execution_intent_count,
+                resume_existing_intents_directly,
+                control_snapshot,
+            },
+            membership,
+        ))
     }
 
     pub fn insert_agent_codex_trigger_run(&self, run: AgentCodexTriggerRun) -> AppResult<()> {

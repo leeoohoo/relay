@@ -558,6 +558,21 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "agent does not belong to the requested company".into(),
             ));
         }
+        self.agent_memory_overview_for_verified_context(
+            actor_agent_id,
+            company_id,
+            project_id,
+            session_id,
+        )
+    }
+
+    fn agent_memory_overview_for_verified_context(
+        &self,
+        actor_agent_id: Uuid,
+        company_id: Uuid,
+        project_id: Option<Uuid>,
+        session_id: Option<Uuid>,
+    ) -> AppResult<AgentMemoryOverview> {
         let now = now_utc();
         self.repo.archive_expired_agent_memories(company_id, now)?;
         let mut visible = self
@@ -651,6 +666,29 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<Vec<AgentMemory>> {
         Ok(self
             .agent_memory_overview_for_context(actor_agent_id, company_id, None, session_id)?
+            .long_term)
+    }
+
+    pub fn agent_long_term_memories_for_control_session_with_verified_identity(
+        &self,
+        agent: &AgentProfile,
+        membership: &CompanyAgentMembership,
+        company_id: Uuid,
+        session_id: Option<Uuid>,
+    ) -> AppResult<Vec<AgentMemory>> {
+        if matches!(agent.status, AgentStatus::Frozen) {
+            return Err(AppError::Conflict("agent is frozen by owner".into()));
+        }
+        if membership.agent_profile_id != agent.id
+            || membership.company_id != company_id
+            || membership.employment_status != "active"
+        {
+            return Err(AppError::Unauthorized(
+                "agent is not an active member of the requested company".into(),
+            ));
+        }
+        Ok(self
+            .agent_memory_overview_for_verified_context(agent.id, company_id, None, session_id)?
             .long_term)
     }
 

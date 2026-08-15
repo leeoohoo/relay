@@ -110,7 +110,8 @@ pub(super) async fn execute_trigger(
     }
     let company_settings = codex_control.company_cli_settings(trigger.company_id)?;
     let effective_settings = resolve_effective_cli_settings(trigger, &company_settings);
-    let decision = protect_trigger_decision(|| platform.decide_agent_codex_work(trigger))?;
+    let (decision, membership) =
+        protect_trigger_decision(|| platform.decide_agent_codex_work_with_membership(trigger))?;
     if !decision.should_run {
         return Ok(TriggerExecution {
             succeeded: true,
@@ -131,17 +132,18 @@ pub(super) async fn execute_trigger(
         });
     }
     let agent = platform.get_agent_profile_by_id(trigger.agent_profile_id)?;
-    let membership = platform.get_active_company_agent_membership(trigger.agent_profile_id)?;
     let control_workspace = workspace_manager
         .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?;
     let control_session_id = platform
         .get_agent_codex_session(trigger.agent_profile_id, "control")
         .map(|session| session.id);
-    let control_memories = platform.agent_long_term_memories_for_control_session(
-        trigger.agent_profile_id,
-        trigger.company_id,
-        control_session_id,
-    )?;
+    let control_memories = platform
+        .agent_long_term_memories_for_control_session_with_verified_identity(
+            &agent,
+            &membership,
+            trigger.company_id,
+            control_session_id,
+        )?;
     let skill_language = platform.effective_company_skill_language(trigger.company_id);
     let control_skills = prepare_relay_skills(
         &control_workspace.path,

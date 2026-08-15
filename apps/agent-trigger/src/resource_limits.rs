@@ -6,7 +6,7 @@ const GIB: u64 = 1024 * MIB;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES: u64 = 1536 * MIB;
 const ESTIMATED_NEW_TRIGGER_MEMORY_BYTES: u64 = 512 * MIB;
 const LOAD_THROTTLE_RATIO: f64 = 0.70;
-const LOAD_PAUSE_RATIO: f64 = 0.90;
+const LOAD_PAUSE_RATIO: f64 = 1.50;
 
 #[derive(Debug)]
 pub(super) struct ResourcePressureState {
@@ -385,7 +385,8 @@ mod tests {
         assert_eq!(load_bounded_claim_slots(4, None, 8), 4);
         assert_eq!(load_bounded_claim_slots(4, Some(5.5), 8), 4);
         assert_eq!(load_bounded_claim_slots(4, Some(5.6), 8), 1);
-        assert_eq!(load_bounded_claim_slots(4, Some(7.2), 8), 0);
+        assert_eq!(load_bounded_claim_slots(4, Some(7.2), 8), 1);
+        assert_eq!(load_bounded_claim_slots(4, Some(12.0), 8), 0);
     }
 
     #[cfg(target_os = "linux")]
