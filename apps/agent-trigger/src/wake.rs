@@ -170,7 +170,9 @@ fn classify_control_paths(
 ) -> QueueChecks {
     let mut checks = QueueChecks::default();
     for path in paths {
-        if path.starts_with(requests_dir) {
+        if path.parent() == Some(requests_dir)
+            && path.extension().and_then(|value| value.to_str()) == Some("json")
+        {
             checks.control = true;
         }
         if path == preferences_path {
@@ -255,6 +257,24 @@ mod tests {
         );
         assert!(classify_control_paths(
             &[root.join("runtime.json")],
+            &root.join("requests"),
+            &root.join("trigger-preferences.json")
+        )
+        .is_empty());
+        assert!(classify_control_paths(
+            &[root.join("requests")],
+            &root.join("requests"),
+            &root.join("trigger-preferences.json")
+        )
+        .is_empty());
+        assert!(classify_control_paths(
+            &[root.join("requests/.request.json.tmp")],
+            &root.join("requests"),
+            &root.join("trigger-preferences.json")
+        )
+        .is_empty());
+        assert!(classify_control_paths(
+            &[root.join("requests/nested/request.json")],
             &root.join("requests"),
             &root.join("trigger-preferences.json")
         )

@@ -23,14 +23,22 @@ impl CodexControlStore {
     }
 
     pub(super) fn lock(&self) -> AppResult<ControlLock> {
-        self.ensure_layout()?;
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(self.control_root.join(".lock"))
-            .map_err(file_error)?;
+        let open_lock = || {
+            OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .open(self.control_root.join(".lock"))
+        };
+        let file = match open_lock() {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.ensure_layout()?;
+                open_lock().map_err(file_error)?
+            }
+            Err(error) => return Err(file_error(error)),
+        };
         set_private_file_permissions(&file)?;
         file.lock_exclusive().map_err(file_error)?;
         Ok(ControlLock(file))
@@ -184,8 +192,11 @@ pub(super) fn create_private_dir(path: &Path) -> AppResult<()> {
     fs::create_dir_all(path).map_err(file_error)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(file_error)?;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let metadata = fs::metadata(path).map_err(file_error)?;
+        if metadata.mode() & 0o777 != 0o700 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(file_error)?;
+        }
     }
     Ok(())
 }
@@ -193,9 +204,12 @@ pub(super) fn create_private_dir(path: &Path) -> AppResult<()> {
 pub(super) fn set_private_file_permissions(file: &File) -> AppResult<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(file_error)?;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let metadata = file.metadata().map_err(file_error)?;
+        if metadata.mode() & 0o777 != 0o600 {
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(file_error)?;
+        }
     }
     Ok(())
 }
