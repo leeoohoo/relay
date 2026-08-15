@@ -1,3 +1,4 @@
+#[cfg(target_os = "windows")]
 use std::process::Command as StdCommand;
 
 const MIB: u64 = 1024 * 1024;
@@ -227,46 +228,64 @@ fn parse_meminfo_bytes(contents: &str, key: &str) -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 fn total_memory_bytes() -> Option<u64> {
-    command_output("sysctl", &["-n", "hw.memsize"])?
-        .trim()
-        .parse()
-        .ok()
+    let name = b"hw.memsize\0";
+    let mut value = 0_u64;
+    let mut size = std::mem::size_of::<u64>();
+    // SAFETY: `name` is NUL terminated and the output buffer and length match a u64.
+    let status = unsafe {
+        libc::sysctlbyname(
+            name.as_ptr().cast(),
+            (&mut value as *mut u64).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (status == 0 && size == std::mem::size_of::<u64>()).then_some(value)
 }
 
 #[cfg(target_os = "macos")]
 fn platform_available_memory_bytes() -> Option<u64> {
-    parse_vm_stat_available_bytes(&command_output("vm_stat", &[])?)
+    let mut statistics = std::mem::MaybeUninit::<libc::vm_statistics64_data_t>::zeroed();
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: Mach writes at most `count` integer slots into the correctly sized structure.
+    let status = unsafe {
+        libc::host_statistics64(
+            macos_host_self(),
+            libc::HOST_VM_INFO64,
+            statistics.as_mut_ptr().cast(),
+            &mut count,
+        )
+    };
+    if status != libc::KERN_SUCCESS {
+        return None;
+    }
+    // SAFETY: a successful host_statistics64 call initialized the output structure.
+    let statistics = unsafe { statistics.assume_init() };
+    // SAFETY: sysconf has no memory-safety preconditions for this constant.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return None;
+    }
+    u64::from(statistics.free_count)
+        .checked_add(u64::from(statistics.inactive_count))?
+        .checked_add(u64::from(statistics.speculative_count))?
+        .checked_mul(page_size as u64)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn macos_host_self() -> libc::mach_port_t {
+    // libc deprecates this binding in favor of a larger Mach wrapper crate;
+    // the system call itself remains the stable API required here.
+    unsafe { libc::mach_host_self() }
 }
 
 #[cfg(target_os = "macos")]
 fn platform_one_minute_load_average() -> Option<f64> {
-    command_output("sysctl", &["-n", "vm.loadavg"])?
-        .trim()
-        .trim_start_matches('{')
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
-}
-
-#[cfg(target_os = "macos")]
-fn parse_vm_stat_available_bytes(contents: &str) -> Option<u64> {
-    let page_size = contents
-        .lines()
-        .next()?
-        .split("page size of ")
-        .nth(1)?
-        .split_whitespace()
-        .next()?
-        .parse::<u64>()
-        .ok()?;
-    let available_pages = contents.lines().skip(1).filter_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        matches!(name, "Pages free" | "Pages inactive" | "Pages speculative")
-            .then(|| value.trim().trim_end_matches('.').parse::<u64>().ok())
-            .flatten()
-    });
-    available_pages.sum::<u64>().checked_mul(page_size)
+    let mut load = [0.0_f64; 1];
+    // SAFETY: the buffer contains exactly one f64 and `nelem` matches its length.
+    (unsafe { libc::getloadavg(load.as_mut_ptr(), 1) } == 1).then_some(load[0])
 }
 
 #[cfg(target_os = "windows")]
@@ -307,7 +326,7 @@ fn platform_one_minute_load_average() -> Option<f64> {
     None
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn command_output(command: &str, args: &[&str]) -> Option<String> {
     let output = StdCommand::new(command).args(args).output().ok()?;
     output
@@ -380,8 +399,12 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_vm_stat_parser_counts_reclaimable_pages() {
-        let contents = "Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 10.\nPages active: 99.\nPages inactive: 20.\nPages speculative: 5.\n";
-        assert_eq!(parse_vm_stat_available_bytes(contents), Some(35 * 4096));
+    fn macos_resource_probe_uses_native_system_apis() {
+        let total = total_memory_bytes().expect("total memory");
+        let available = platform_available_memory_bytes().expect("available memory");
+        let load = platform_one_minute_load_average().expect("load average");
+        assert!(total > 0);
+        assert!(available > 0);
+        assert!(load >= 0.0);
     }
 }

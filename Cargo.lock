@@ -23,6 +23,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "libc",
  "notify",
  "reqwest",
  "serde_json",
