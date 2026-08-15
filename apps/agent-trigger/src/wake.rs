@@ -35,6 +35,14 @@ impl QueueChecks {
         self.control |= other.control;
     }
 
+    pub(super) const fn allows_blocking_maintenance(
+        self,
+        agent_runs_idle: bool,
+        plugin_operations_idle: bool,
+    ) -> bool {
+        agent_runs_idle && plugin_operations_idle && !self.agents && !self.plugins
+    }
+
     fn is_empty(self) -> bool {
         !self.agents && !self.plugins && !self.control
     }
@@ -231,6 +239,14 @@ mod tests {
         assert!(filter
             .classify(signal(3, Some("codex.run.updated")))
             .is_empty());
+    }
+
+    #[test]
+    fn blocking_maintenance_yields_to_execution_queues() {
+        assert!(QueueChecks::default().allows_blocking_maintenance(true, true));
+        assert!(!QueueChecks::all().allows_blocking_maintenance(true, true));
+        assert!(!QueueChecks::default().allows_blocking_maintenance(false, true));
+        assert!(!QueueChecks::default().allows_blocking_maintenance(true, false));
     }
 
     #[test]

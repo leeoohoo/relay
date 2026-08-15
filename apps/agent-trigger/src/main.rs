@@ -567,10 +567,7 @@ async fn run_trigger_loop(
     let mut running_agents = HashSet::new();
     let mut plugin_operations = FuturesUnordered::new();
     let mut shutdown = Box::pin(shutdown_signal());
-    let mut next_model_discovery = tokio::time::Instant::now();
-    let mut next_default_auth_discovery = tokio::time::Instant::now();
-    let mut next_mcp_discovery = tokio::time::Instant::now();
-    let mut next_plugin_discovery = tokio::time::Instant::now();
+    let mut blocking_maintenance = BlockingMaintenance::new();
     let mut discovery_fingerprint = discovery::CodexDiscoveryFingerprint::capture(
         codex_control,
         codex_runner,
@@ -578,7 +575,6 @@ async fn run_trigger_loop(
     );
     let mut next_discovery_fingerprint_check =
         tokio::time::Instant::now() + config.discovery_fingerprint_interval;
-    let mut next_update_check = tokio::time::Instant::now();
     let mut next_watchdog = tokio::time::Instant::now();
     let mut next_browser_cleanup = tokio::time::Instant::now();
     let mut next_memory_probe = tokio::time::Instant::now();
@@ -616,7 +612,11 @@ async fn run_trigger_loop(
         }
     }
     loop {
-        let mut discovery_executed = false;
+        if (queue_checks.agents || queue_checks.plugins || queue_checks.control)
+            && blocking_maintenance.is_running()
+        {
+            blocking_maintenance.abort_for_execution();
+        }
         if tokio::time::Instant::now() >= next_memory_probe {
             if resource_pressure.refresh(config.minimum_available_memory_bytes, config.logical_cpus)
             {
@@ -682,19 +682,7 @@ async fn run_trigger_loop(
                     plugins = changes.plugins,
                     "Codex discovery inputs changed"
                 );
-                let now = tokio::time::Instant::now();
-                if changes.auth {
-                    next_default_auth_discovery = now;
-                }
-                if changes.mcp {
-                    next_mcp_discovery = now;
-                }
-                if changes.models {
-                    next_model_discovery = now;
-                }
-                if changes.plugins {
-                    next_plugin_discovery = now;
-                }
+                blocking_maintenance.request_changes(changes);
             }
             discovery_fingerprint = current;
             next_discovery_fingerprint_check =
@@ -705,59 +693,18 @@ async fn run_trigger_loop(
             while let Some(request) = codex_control.claim_next_request()? {
                 process_codex_control_request(codex_control, codex_runner, config, request).await;
                 publish_codex_runtime_probe(codex_control, codex_runner)?;
-                let now = tokio::time::Instant::now();
-                next_model_discovery = now;
-                next_default_auth_discovery = now;
-                next_mcp_discovery = now;
-                next_plugin_discovery = now;
+                blocking_maintenance.request_all_discovery();
             }
         }
-        if tokio::time::Instant::now() >= next_update_check {
-            refresh_codex_latest_version(codex_control, codex_runner, config).await;
-            next_update_check = tokio::time::Instant::now() + config.codex_update_check_interval;
-        }
-        if tokio::time::Instant::now() >= next_model_discovery {
-            let result = refresh_codex_model_catalog(codex_control, codex_runner, config).await;
-            let succeeded = result.is_ok();
-            if let Err(error) = result {
-                tracing::warn!(
-                    error = %sanitize_error(&error.to_string()),
-                    "failed to refresh the local Codex model catalog"
-                );
-            }
-            next_model_discovery = tokio::time::Instant::now()
-                + discovery::discovery_retry_delay(config.model_discovery_interval, succeeded);
-            discovery_executed = true;
-        }
-        if tokio::time::Instant::now() >= next_default_auth_discovery {
-            let succeeded = refresh_codex_default_auth(codex_control, codex_runner).await;
-            next_default_auth_discovery = tokio::time::Instant::now()
-                + discovery::discovery_retry_delay(
-                    config.default_auth_discovery_interval,
-                    succeeded,
-                );
-            discovery_executed = true;
-        }
-        if tokio::time::Instant::now() >= next_mcp_discovery {
-            let succeeded = refresh_codex_mcp_catalog(codex_control, codex_runner).await;
-            next_mcp_discovery = tokio::time::Instant::now()
-                + discovery::discovery_retry_delay(config.mcp_discovery_interval, succeeded);
-            discovery_executed = true;
-        }
-        if tokio::time::Instant::now() >= next_plugin_discovery {
-            let result =
-                refresh_codex_plugin_catalogs(platform, codex_control, codex_runner, config).await;
-            let succeeded = result.is_ok();
-            if let Err(error) = result {
-                tracing::warn!(
-                    error = %sanitize_error(&error.to_string()),
-                    "failed to refresh the local Codex plugin catalog"
-                );
-            }
-            next_plugin_discovery = tokio::time::Instant::now()
-                + discovery::discovery_retry_delay(config.plugin_discovery_interval, succeeded);
-            discovery_executed = true;
-        }
+        let blocking_maintenance_allowed = queue_checks
+            .allows_blocking_maintenance(running.is_empty(), plugin_operations.is_empty());
+        blocking_maintenance.try_start(
+            blocking_maintenance_allowed,
+            platform,
+            codex_control,
+            codex_runner,
+            config,
+        );
         if queue_checks.plugins && plugin_operations.is_empty() {
             queue_checks.plugins = false;
             match platform.claim_codex_plugin_operations(
@@ -837,6 +784,7 @@ async fn run_trigger_loop(
         }
 
         if config.run_once {
+            blocking_maintenance.abort_for_execution();
             while let Some(agent_id) = running.next().await {
                 running_agents.remove(&agent_id);
             }
@@ -844,29 +792,18 @@ async fn run_trigger_loop(
             break;
         }
 
-        if discovery_executed {
-            discovery_fingerprint = discovery::CodexDiscoveryFingerprint::capture(
-                codex_control,
-                codex_runner,
-                &config.model_discovery_profiles,
-            );
-        }
-
         let next_maintenance = [
             next_discovery_fingerprint_check,
-            next_model_discovery,
-            next_default_auth_discovery,
-            next_mcp_discovery,
-            next_plugin_discovery,
-            next_update_check,
             next_watchdog,
             next_browser_cleanup,
             next_memory_probe,
+            blocking_maintenance.next_deadline(),
         ]
         .into_iter()
         .min()
         .expect("maintenance deadlines are available");
         let scheduled_deadline = scheduled_instant(next_agent_due_at);
+        let blocking_maintenance_running = blocking_maintenance.is_running();
         let shutdown_requested = tokio::select! {
             _ = tokio::time::sleep_until(next_maintenance) => false,
             _ = tokio::time::sleep_until(next_fallback) => {
@@ -901,9 +838,19 @@ async fn run_trigger_loop(
                 queue_checks.plugins = true;
                 false
             },
+            completion = blocking_maintenance.wait(), if blocking_maintenance_running => {
+                blocking_maintenance.complete(completion, config);
+                discovery_fingerprint = discovery::CodexDiscoveryFingerprint::capture(
+                    codex_control,
+                    codex_runner,
+                    &config.model_discovery_profiles,
+                );
+                false
+            },
             _ = &mut shutdown => true,
         };
         if shutdown_requested {
+            blocking_maintenance.abort_for_execution();
             tracing::info!(
                 lease_owner = %config.lease_owner,
                 running_cycles = running.len(),
@@ -957,6 +904,7 @@ mod codex_control;
 mod discovery;
 mod execution;
 mod execution_result;
+mod maintenance;
 mod observability;
 mod relay_skills;
 mod resource_limits;
@@ -966,6 +914,7 @@ mod wake;
 use codex_control::*;
 use execution::*;
 use execution_result::*;
+use maintenance::*;
 use relay_skills::*;
 use resource_limits::*;
 use wake::*;
