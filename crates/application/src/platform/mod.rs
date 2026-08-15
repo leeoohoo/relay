@@ -104,6 +104,7 @@ use crate::service::PlatformRepository;
 mod auth;
 mod chat;
 mod chat_internal;
+mod chat_unread;
 mod codex_profiles;
 mod codex_runtime;
 mod company;
