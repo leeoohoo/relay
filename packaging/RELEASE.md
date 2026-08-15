@@ -29,6 +29,9 @@ npx --yes @relay-ai/relay update
 - 修复数据库查询异常被错误转换成“Agent 不属于公司”，导致正常项目成员无法调用项目和任务工具的问题。
 - 补齐 `replace_session` 数据库约束，使损坏或权限缓存过期的项目 worker 可以创建新一代工作会话。
 - 项目 worker 现在直接获得完整 `company_id` 与 `project_id`，不再扫描工作区或从 Git 命名空间猜测运行参数。
+- 项目 Gate 与 Environment 已接入 MCP 执行链，Agent 可以读取真实门禁、环境要求与 readiness，不再只展示不用。
+- 浏览器运行时改为按 Agent 复用宿主机 Chrome，减少重复 Chromium 容器造成的 CPU 和内存压力，并保留受限 Docker 兜底。
+- Codex Prompt 上限提高至 100,000 字符；控制快照会去除重复消息、按预算分页，并统一清理不安全控制字符，避免 Agent 因上下文增长而无法启动。
 - 安装目录和持久化数据目录彻底分离，npm 启动器更新应用文件时不会覆盖公司、Agent、项目、PostgreSQL、Harness 或工作区数据。
 
 ## 发布与平台
