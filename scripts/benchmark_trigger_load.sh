@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PG_CONTAINER="${PG_CONTAINER:-ai-chat-postgres}"
 SERVER_PORT="${RELAY_LOAD_TEST_PORT:-18089}"
 FAKE_CODEX_SECONDS="${RELAY_LOAD_FAKE_CODEX_SECONDS:-1.0}"
+LOAD_SCENARIOS="${RELAY_LOAD_TEST_SCENARIOS:-1 3 10}"
+LOG_STATEMENTS="${RELAY_LOAD_TEST_LOG_STATEMENTS:-false}"
+VERIFY_CANCELLATION="${RELAY_LOAD_TEST_VERIFY_CANCELLATION:-false}"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/relay-trigger-load.XXXXXX")"
 DATABASE_NAME="relay_load_$(date +%s)_${RANDOM}"
 PG_HOST_PORT="${PG_HOST_PORT:-}"
@@ -15,6 +18,10 @@ TRIGGER_PID=""
 
 if [[ ! "$DATABASE_NAME" =~ ^relay_load_[0-9]+_[0-9]+$ ]]; then
   echo "Refusing to use unsafe load-test database name: $DATABASE_NAME" >&2
+  exit 1
+fi
+if [[ ! "$FAKE_CODEX_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Invalid fake Codex duration: $FAKE_CODEX_SECONDS" >&2
   exit 1
 fi
 
@@ -153,6 +160,10 @@ run_scenario() {
   local sample_file="$TEMP_ROOT/scenario-${requested}.samples"
   : >"$sample_file"
   sleep 1.2
+  if [[ "$LOG_STATEMENTS" == "true" ]]; then
+    docker exec "$PG_CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+      -c "ALTER DATABASE \"$DATABASE_NAME\" SET log_statement = 'all';" >/dev/null
+  fi
   pg_query "
     select pg_terminate_backend(pid)
     from pg_stat_activity
@@ -248,6 +259,71 @@ run_scenario() {
     '{agents:$agents,succeeded:$succeeded,end_to_end_ms:$end_to_end_ms,wake_ms:$wake_ms,active_window_ms:$active_ms,peak_concurrency:$peak_concurrency,trigger_tree_cpu_percent:{average:$average_cpu_percent,peak:$peak_cpu_percent},trigger_tree_peak_rss_kib:$peak_rss_kib,trigger_tree_peak_processes:$peak_processes,peak_db_connections:$peak_db_connections,database_transactions:$database_transactions,samples:$samples}'
 }
 
+run_cancellation_scenario() {
+  if ! awk -v seconds="$FAKE_CODEX_SECONDS" 'BEGIN { exit !(seconds >= 2) }'; then
+    echo "Cancellation verification requires fake Codex duration >= 2 seconds" >&2
+    return 1
+  fi
+  local agent_id="${AGENT_IDS[0]}"
+  local marker pause_requested_at state result cancel_latency_ms
+  marker="$(pg_query 'select clock_timestamp();')"
+  post_json "/api/v1/companies/$COMPANY_ID/agents/$agent_id/codex-trigger/run-now" \
+    '{}' -H "authorization: Bearer $OWNER_TOKEN" >/dev/null
+  state=""
+  for _ in {1..100}; do
+    state="$(pg_query "
+      select status
+      from agent_codex_trigger_runs
+      where agent_profile_id = '$agent_id'
+        and started_at >= timestamptz '$marker'
+      order by started_at desc
+      limit 1;
+    ")"
+    [[ "$state" == "running" ]] && break
+    if [[ -n "$state" ]]; then
+      echo "Cancellation fixture became terminal before pause: $state" >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  if [[ "$state" != "running" ]]; then
+    echo "Cancellation fixture did not start" >&2
+    return 1
+  fi
+  pause_requested_at="$(pg_query 'select clock_timestamp();')"
+  post_json "/api/v1/companies/$COMPANY_ID/agents/$agent_id/codex-trigger/pause" \
+    '{}' -H "authorization: Bearer $OWNER_TOKEN" >/dev/null
+  result=""
+  for _ in {1..100}; do
+    result="$(pg_query "
+      select status || '|' || coalesce(
+        round(extract(epoch from (finished_at - timestamptz '$pause_requested_at')) * 1000)::text,
+        ''
+      )
+      from agent_codex_trigger_runs
+      where agent_profile_id = '$agent_id'
+        and started_at >= timestamptz '$marker'
+      order by started_at desc
+      limit 1;
+    ")"
+    [[ "${result%%|*}" != "running" ]] && break
+    sleep 0.05
+  done
+  IFS='|' read -r state cancel_latency_ms <<<"$result"
+  if [[ "$state" != "cancelled" ]]; then
+    echo "Cancellation fixture ended with unexpected status: ${state:-missing}" >&2
+    return 1
+  fi
+  if [[ ! "$cancel_latency_ms" =~ ^[0-9]+$ ]] || (( cancel_latency_ms > 2000 )); then
+    echo "Cancellation took too long: ${cancel_latency_ms:-missing}ms" >&2
+    return 1
+  fi
+  jq -cn \
+    --arg status "$state" \
+    --argjson cancel_latency_ms "$cancel_latency_ms" \
+    '{cancellation_status:$status,cancel_latency_ms:$cancel_latency_ms}'
+}
+
 echo "Building release Server and Trigger..."
 if [[ "${RELAY_LOAD_TEST_SKIP_BUILD:-false}" != "true" ]]; then
   cargo build --release -p ai-chat-server -p ai-chat-agent-trigger \
@@ -255,6 +331,7 @@ if [[ "${RELAY_LOAD_TEST_SKIP_BUILD:-false}" != "true" ]]; then
 fi
 
 FAKE_CODEX="$TEMP_ROOT/fake-codex.sh"
+printf '%s\n' "$FAKE_CODEX_SECONDS" >"$TEMP_ROOT/fake-codex-seconds"
 cat >"$FAKE_CODEX" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -281,7 +358,7 @@ for argument in "$@"; do
   fi
   previous="$argument"
 done
-sleep "${RELAY_LOAD_FAKE_CODEX_SECONDS:-1.0}"
+sleep "$(sed -n '1p' "$(dirname "$0")/fake-codex-seconds")"
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread_id"
 printf '%s\n' '{"type":"turn.started"}'
 printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"load fixture completed"}}'
@@ -340,6 +417,19 @@ for index in {1..10}; do
     -X PUT -H "authorization: Bearer $OWNER_TOKEN" >/dev/null
 done
 
+# Trigger configurations are intentionally created as immediately due. Keep the
+# fixture agents dormant until each scenario explicitly requests a manual run,
+# otherwise startup work from all ten agents contaminates the 1/3-Agent samples.
+pg_query "
+  update agent_codex_trigger_configs
+  set next_run_at = clock_timestamp() + interval '7 days',
+      manual_run_requested_at = null,
+      wake_requested_at = null,
+      wake_reason = null,
+      lease_owner = null,
+      lease_expires_at = null;
+" >/dev/null
+
 env \
   DATABASE_URL="$DATABASE_URL" \
   AGENT_TRIGGER_MCP_URL="$API_BASE_URL/mcp" \
@@ -378,10 +468,17 @@ if [[ "$trigger_started" != "true" ]]; then
   exit 1
 fi
 
-echo "Running isolated 1/3/10-Agent control-session load scenarios..."
-run_scenario 1
-run_scenario 3
-run_scenario 10
+echo "Running isolated Agent control-session load scenarios: $LOAD_SCENARIOS"
+for scenario in $LOAD_SCENARIOS; do
+  if [[ ! "$scenario" =~ ^(1|3|10)$ ]]; then
+    echo "Unsupported load scenario: $scenario (allowed: 1, 3, 10)" >&2
+    exit 1
+  fi
+  run_scenario "$scenario"
+done
+if [[ "$VERIFY_CANCELLATION" == "true" ]]; then
+  run_cancellation_scenario
+fi
 
 browser_processes="$(ps -axo command | grep -E '[c]hrome-devtools-mcp|[C]hromium.*relay-trigger-load' | grep -c "$TEMP_ROOT" || true)"
 if [[ "$browser_processes" != "0" ]]; then

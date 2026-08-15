@@ -25,22 +25,23 @@ use ai_chat_domain::{
         company_profession_by_key, company_project_type_by_key, infer_company_profession,
         AgentCodexRunActivity, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
         AgentExecutionIntent, AgentMemory, CodexPluginCatalogSnapshot, CodexPluginOperation,
-        CompanyProject, CompanyProjectRule, AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY,
-        AGENT_CODEX_APPROVAL_POLICY_NEVER, AGENT_CODEX_APPROVAL_SCOPE_KEY,
-        AGENT_CODEX_APPROVAL_TARGET_KEY, AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS,
-        AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS, AGENT_CODEX_RUN_STATUS_CANCELLED,
-        AGENT_CODEX_RUN_STATUS_FAILED, AGENT_CODEX_RUN_STATUS_RESTARTED,
-        AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
-        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
-        AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
-        AGENT_CODEX_SESSION_STATUS_ACTIVE, AGENT_CODEX_SESSION_STATUS_ARCHIVED,
-        AGENT_CODEX_SETTING_INHERIT, AGENT_EXECUTION_CAPABILITY_BROWSER,
-        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_COMPLETED,
-        AGENT_EXECUTION_INTENT_STATUS_FAILED, AGENT_EXECUTION_INTENT_STATUS_PENDING,
-        AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
-        AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXPIRED,
-        AGENT_TOOL_APPROVAL_STATUS_FAILED, AGENT_TOOL_APPROVAL_STATUS_REJECTED,
-        CODEX_PLUGIN_OPERATION_REFRESH, COMPANY_SKILL_LANGUAGE_EN,
+        CompanyProject, CompanyProjectRule, CompanyRealtimeSignal,
+        AGENT_CODEX_APPROVAL_LOCAL_TARGET_KEY, AGENT_CODEX_APPROVAL_POLICY_NEVER,
+        AGENT_CODEX_APPROVAL_SCOPE_KEY, AGENT_CODEX_APPROVAL_TARGET_KEY,
+        AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS, AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS,
+        AGENT_CODEX_RUN_STATUS_CANCELLED, AGENT_CODEX_RUN_STATUS_FAILED,
+        AGENT_CODEX_RUN_STATUS_RESTARTED, AGENT_CODEX_RUN_STATUS_RUNNING,
+        AGENT_CODEX_RUN_STATUS_SUCCEEDED, AGENT_CODEX_RUN_STATUS_TIMED_OUT,
+        AGENT_CODEX_SANDBOX_READ_ONLY, AGENT_CODEX_SESSION_KIND_CONTROL,
+        AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
+        AGENT_CODEX_SESSION_STATUS_ARCHIVED, AGENT_CODEX_SETTING_INHERIT,
+        AGENT_EXECUTION_CAPABILITY_BROWSER, AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION,
+        AGENT_EXECUTION_INTENT_STATUS_COMPLETED, AGENT_EXECUTION_INTENT_STATUS_FAILED,
+        AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
+        AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
+        AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
+        AGENT_TOOL_APPROVAL_STATUS_REJECTED, CODEX_PLUGIN_OPERATION_REFRESH,
+        COMPANY_SKILL_LANGUAGE_EN,
     },
 };
 use ai_chat_infrastructure::{
@@ -159,55 +160,6 @@ struct PlatformCodexApprovalHandler {
 struct PlatformCodexProgressHandler {
     platform: TriggerPlatform,
     run_id: Uuid,
-}
-
-#[derive(Clone)]
-struct PlatformRunCancellationHandler {
-    platform: TriggerPlatform,
-    agent_id: Uuid,
-    project_id: Option<Uuid>,
-}
-
-impl CodexCancellationHandler for PlatformRunCancellationHandler {
-    fn should_cancel(&self) -> bool {
-        match self.platform.is_agent_codex_trigger_active(self.agent_id) {
-            Ok(false) => return true,
-            Ok(true) => {}
-            Err(error) => {
-                tracing::error!(
-                    agent_id = %self.agent_id,
-                    error = %error,
-                    "failed to read Agent Trigger state; cancelling the Codex run defensively"
-                );
-                return true;
-            }
-        }
-        let Some(project_id) = self.project_id else {
-            return false;
-        };
-        match self.platform.is_company_project_paused(project_id) {
-            Ok(paused) => paused,
-            Err(error) => {
-                tracing::error!(
-                    project_id = %project_id,
-                    error = %error,
-                    "failed to read project pause state; cancelling the Codex run defensively"
-                );
-                true
-            }
-        }
-    }
-
-    fn cancellation_reason(&self) -> String {
-        if self
-            .platform
-            .is_agent_codex_trigger_active(self.agent_id)
-            .is_ok_and(|active| !active)
-        {
-            return "Codex run cancelled because the Agent Trigger was paused by Human".into();
-        }
-        "Codex run cancelled because the project was paused".into()
-    }
 }
 
 impl CodexProgressHandler for PlatformCodexProgressHandler {
@@ -584,7 +536,7 @@ async fn run_trigger_loop(
     let _realtime_listener = spawn_postgres_realtime_listener(
         database_url.to_string(),
         "relay-trigger-realtime",
-        realtime_sender,
+        realtime_sender.clone(),
     );
     let mut realtime_filter = RealtimeWakeFilter::default();
     let mut control_watcher = match ControlFileWatcher::start(codex_control.control_root()) {
@@ -769,6 +721,7 @@ async fn run_trigger_loop(
                         codex_runner,
                         codex_control,
                         config,
+                        realtime_sender.clone(),
                         trigger,
                     ));
                 }
@@ -900,6 +853,7 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+mod cancellation;
 mod codex_control;
 mod discovery;
 mod execution;
@@ -911,6 +865,7 @@ mod resource_limits;
 mod trigger_config;
 mod wake;
 
+use cancellation::*;
 use codex_control::*;
 use execution::*;
 use execution_result::*;

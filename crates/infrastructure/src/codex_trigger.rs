@@ -234,8 +234,18 @@ pub trait CodexProgressHandler: Send + Sync {
     fn report(&self, event: CodexProgressEvent);
 }
 
+#[async_trait]
 pub trait CodexCancellationHandler: Send + Sync {
     fn should_cancel(&self) -> bool;
+
+    async fn wait_for_cancellation(&self) {
+        loop {
+            sleep(Duration::from_millis(500)).await;
+            if self.should_cancel() {
+                return;
+            }
+        }
+    }
 
     fn cancellation_reason(&self) -> String {
         "Codex run cancelled because the project was paused".into()
@@ -247,12 +257,7 @@ async fn wait_for_cancellation(handler: Option<&Arc<dyn CodexCancellationHandler
         std::future::pending::<()>().await;
         return;
     };
-    loop {
-        sleep(Duration::from_millis(500)).await;
-        if handler.should_cancel() {
-            return;
-        }
-    }
+    handler.wait_for_cancellation().await;
 }
 
 #[derive(Debug, Clone)]

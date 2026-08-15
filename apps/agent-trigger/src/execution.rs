@@ -31,6 +31,7 @@ pub(super) async fn process_claimed_trigger(
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
     service_config: &TriggerServiceConfig,
+    realtime_sender: tokio::sync::broadcast::Sender<CompanyRealtimeSignal>,
     trigger: AgentCodexTriggerConfig,
 ) -> Uuid {
     let execution = execute_trigger(
@@ -40,6 +41,7 @@ pub(super) async fn process_claimed_trigger(
         codex_runner,
         codex_control,
         service_config,
+        &realtime_sender,
         &trigger,
     )
     .await;
@@ -96,6 +98,7 @@ pub(super) async fn execute_trigger(
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
     service_config: &TriggerServiceConfig,
+    realtime_sender: &tokio::sync::broadcast::Sender<CompanyRealtimeSignal>,
     trigger: &AgentCodexTriggerConfig,
 ) -> AppResult<TriggerExecution> {
     if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
@@ -249,6 +252,7 @@ pub(super) async fn execute_trigger(
             &control_memories,
             &control_settings,
             &token.plaintext_token,
+            realtime_sender,
             false,
             false,
         )
@@ -353,6 +357,7 @@ pub(super) async fn execute_trigger(
             &skill_language,
             &effective_settings,
             &token.plaintext_token,
+            realtime_sender,
             &intent,
         )
         .await;
@@ -641,6 +646,7 @@ async fn execute_project_intent(
     skill_language: &str,
     settings: &EffectiveCodexCliSettings,
     run_token: &str,
+    realtime_sender: &tokio::sync::broadcast::Sender<CompanyRealtimeSignal>,
     intent: &AgentExecutionIntent,
 ) -> AppResult<(CodexRunResult, AgentCodexSession)> {
     let project_view = platform.get_company_project(GetCompanyProjectInput {
@@ -717,6 +723,7 @@ async fn execute_project_intent(
         &memories,
         settings,
         run_token,
+        realtime_sender,
         replace_session,
         intent
             .required_capabilities
@@ -761,6 +768,7 @@ async fn run_codex_stage(
     _memories: &[AgentMemory],
     settings: &EffectiveCodexCliSettings,
     run_token: &str,
+    realtime_sender: &tokio::sync::broadcast::Sender<CompanyRealtimeSignal>,
     replace_session: bool,
     browser_enabled: bool,
 ) -> AppResult<CodexRunResult> {
@@ -852,8 +860,12 @@ async fn run_codex_stage(
             }) as Arc<dyn CodexProgressHandler>),
             cancellation_handler: Some(Arc::new(PlatformRunCancellationHandler {
                 platform: platform.clone(),
+                realtime_sender: realtime_sender.clone(),
+                company_id: trigger.company_id,
+                trigger_config_id: trigger.id,
                 agent_id: trigger.agent_profile_id,
                 project_id,
+                reason: Arc::new(Mutex::new(None)),
             }) as Arc<dyn CodexCancellationHandler>),
         }),
     )

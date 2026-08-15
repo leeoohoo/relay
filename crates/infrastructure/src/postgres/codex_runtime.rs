@@ -562,21 +562,7 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         codex_thread_id: Option<String>,
     ) -> AppResult<()> {
         let updated = self.with_client(|client| {
-            let mut tx = client.transaction()?;
-            let Some(row) = tx.query_opt(
-                "SELECT activity_log FROM agent_codex_trigger_runs WHERE id = $1 FOR UPDATE",
-                &[&run_id],
-            )?
-            else {
-                return Ok(false);
-            };
-            let Json(mut activity_log): Json<Vec<AgentCodexRunActivity>> = row.get("activity_log");
-            activity_log.push(activity.clone());
-            if activity_log.len() > 40 {
-                let excess = activity_log.len() - 40;
-                activity_log.drain(0..excess);
-            }
-            tx.execute(
+            client.execute(
                 r#"
                 UPDATE agent_codex_trigger_runs
                 SET activity_phase = $2,
@@ -585,7 +571,20 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     heartbeat_at = $4,
                     state_reason = $3,
                     codex_thread_id = COALESCE($5, codex_thread_id),
-                    activity_log = $6
+                    activity_log = (
+                        SELECT COALESCE(
+                            jsonb_agg(recent.entry ORDER BY recent.ordinal),
+                            '[]'::jsonb
+                        )
+                        FROM (
+                            SELECT item.entry, item.ordinal
+                            FROM jsonb_array_elements(
+                                activity_log || jsonb_build_array($6::jsonb)
+                            ) WITH ORDINALITY AS item(entry, ordinal)
+                            ORDER BY item.ordinal DESC
+                            LIMIT 40
+                        ) recent
+                    )
                 WHERE id = $1
                 "#,
                 &[
@@ -594,13 +593,11 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     &activity.summary,
                     &activity.at,
                     &codex_thread_id,
-                    &Json(&activity_log),
+                    &Json(&activity),
                 ],
-            )?;
-            tx.commit()?;
-            Ok(true)
+            )
         })?;
-        if !updated {
+        if updated == 0 {
             return Err(AppError::NotFound("Codex trigger run not found".into()));
         }
         Ok(())
