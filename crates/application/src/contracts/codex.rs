@@ -185,6 +185,8 @@ pub struct AgentControlSnapshot {
     pub task_readiness: Vec<ProjectTaskReadinessView>,
     pub active_intents: Vec<AgentExecutionIntent>,
     pub work_sessions: Vec<AgentCodexSession>,
+    #[serde(default)]
+    pub work_sessions_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

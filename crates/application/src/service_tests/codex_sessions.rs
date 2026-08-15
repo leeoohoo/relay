@@ -139,6 +139,55 @@ fn run_token_issue_atomically_rejects_missing_or_frozen_agents() {
 }
 
 #[test]
+fn control_snapshot_marks_session_history_when_the_bounded_page_is_truncated() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "session-page-owner@example.com".into(),
+            display_name: "Session Page Owner".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Session Page Company".into(),
+            slug: Some("session-page-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let agent = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Session Page Agent".into(),
+            handle: "session-page-agent".into(),
+            persona: "验证会话快照边界".into(),
+            org_unit_id: None,
+            job_title: Some("软件工程师".into()),
+            role_key: None,
+            reports_to_membership_id: None,
+        })
+        .expect("agent should be created");
+    for index in 0..51 {
+        app.save_agent_codex_session(scoped_session(
+            agent.agent_profile.id,
+            format!("project:{index}"),
+            AGENT_CODEX_SESSION_KIND_PROJECT,
+            Some(Uuid::new_v4()),
+            &format!("session-page-thread-{index}"),
+        ))
+        .expect("session should be saved");
+    }
+
+    let snapshot = app
+        .agent_control_snapshot(agent.agent_profile.id, company.company.id)
+        .expect("control snapshot should load");
+
+    assert_eq!(snapshot.work_sessions.len(), 50);
+    assert!(snapshot.work_sessions_truncated);
+}
+
+#[test]
 fn repeated_execution_intent_dedupe_key_returns_existing_work() {
     let app = PlatformApp::new(MemoryPlatformRepository::default());
     let human = app

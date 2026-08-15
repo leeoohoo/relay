@@ -364,6 +364,7 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         task_readiness: Vec::new(),
         active_intents: Vec::new(),
         work_sessions: Vec::new(),
+        work_sessions_truncated: false,
     };
     let control_prompt = build_wakeup_prompt(WakeupPromptContext {
         agent: &agent,

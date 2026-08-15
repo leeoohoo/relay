@@ -15,7 +15,8 @@ use scheduling::{
     made_structured_progress,
 };
 use session_state::{
-    apply_codex_result_to_run, empty_stage_session, fail_run, persist_codex_stage_session,
+    apply_codex_result_to_run, empty_stage_session, fail_run, load_stage_session,
+    persist_codex_stage_session, StageSessionState,
 };
 pub(super) use session_state::{
     codex_session_key, codex_session_key_matches, protect_trigger_decision,
@@ -134,7 +135,17 @@ pub(super) async fn execute_trigger(
     let agent = platform.get_agent_profile_by_id(trigger.agent_profile_id)?;
     let control_workspace = workspace_manager
         .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?;
-    let control_session = platform.get_agent_codex_session(trigger.agent_profile_id, "control");
+    let StageSessionState {
+        existing: control_session,
+        previous_generation: control_previous_generation,
+        history_complete: control_session_history_complete,
+    } = load_stage_session(
+        platform,
+        trigger.agent_profile_id,
+        "control",
+        &decision.control_snapshot.work_sessions,
+        decision.control_snapshot.work_sessions_truncated,
+    );
     let control_memories = platform
         .agent_long_term_memories_for_control_session_with_verified_identity(
             &agent,
@@ -302,6 +313,8 @@ pub(super) async fn execute_trigger(
             &control_result,
             false,
             control_session,
+            control_previous_generation,
+            control_session_history_complete,
         )?;
         run.codex_thread_id = Some(control_session.codex_thread_id.clone());
         run.final_message_summary = control_result
@@ -371,6 +384,8 @@ pub(super) async fn execute_trigger(
             &token.plaintext_token,
             realtime_sender,
             &intent,
+            &decision.control_snapshot.work_sessions,
+            decision.control_snapshot.work_sessions_truncated,
         )
         .await;
         let worker_result = match handle_browser_capability_upgrade(
@@ -660,6 +675,8 @@ async fn execute_project_intent(
     run_token: &str,
     realtime_sender: &tokio::sync::broadcast::Sender<CompanyRealtimeSignal>,
     intent: &AgentExecutionIntent,
+    snapshot_sessions: &[AgentCodexSession],
+    snapshot_sessions_truncated: bool,
 ) -> AppResult<(CodexRunResult, AgentCodexSession)> {
     let project_view = platform.get_company_project(GetCompanyProjectInput {
         actor_agent_id: trigger.agent_profile_id,
@@ -686,7 +703,17 @@ async fn execute_project_intent(
     .await?;
     let scope_key = format!("project:{}", intent.project_id);
     let replace_session = intent.action_type == AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION;
-    let existing_session = platform.get_agent_codex_session(trigger.agent_profile_id, &scope_key);
+    let StageSessionState {
+        existing: existing_session,
+        previous_generation,
+        history_complete: session_history_complete,
+    } = load_stage_session(
+        platform,
+        trigger.agent_profile_id,
+        &scope_key,
+        snapshot_sessions,
+        snapshot_sessions_truncated,
+    );
     let worker_session_id = (!replace_session)
         .then(|| existing_session.as_ref().map(|session| session.id))
         .flatten();
@@ -759,6 +786,8 @@ async fn execute_project_intent(
             &result,
             replace_session,
             existing_session,
+            previous_generation,
+            session_history_complete,
         )?
     } else {
         existing_session

@@ -70,6 +70,7 @@ fn control_prompt_compacts_large_snapshots_and_normalizes_user_controls() {
         task_readiness: Vec::new(),
         active_intents: Vec::new(),
         work_sessions: Vec::new(),
+        work_sessions_truncated: false,
     };
     let prompt = build_wakeup_prompt(WakeupPromptContext {
         agent: &agent,

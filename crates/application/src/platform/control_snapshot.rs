@@ -120,7 +120,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         active_intents.retain(|intent| active_project_ids.contains(&intent.project_id));
         active_intents.sort_by(|left, right| left.created_at.cmp(&right.created_at));
 
-        let work_sessions = self.repo.list_agent_codex_sessions(agent_profile_id, 50);
+        let mut work_sessions = self.repo.list_agent_codex_sessions(agent_profile_id, 51);
+        let work_sessions_truncated = work_sessions.len() > 50;
+        work_sessions.truncate(50);
         let snapshot_version = format!(
             "{}:{}:{}:{}:{}:{}",
             now.timestamp_millis(),
@@ -142,6 +144,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             task_readiness,
             active_intents,
             work_sessions,
+            work_sessions_truncated,
         })
     }
 

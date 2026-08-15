@@ -1,5 +1,39 @@
 use super::*;
 
+pub(super) struct StageSessionState {
+    pub(super) existing: Option<AgentCodexSession>,
+    pub(super) previous_generation: Option<i32>,
+    pub(super) history_complete: bool,
+}
+
+pub(super) fn load_stage_session(
+    platform: &TriggerPlatform,
+    agent_id: Uuid,
+    scope_key: &str,
+    snapshot_sessions: &[AgentCodexSession],
+    snapshot_truncated: bool,
+) -> StageSessionState {
+    let mut state = StageSessionState {
+        existing: snapshot_sessions
+            .iter()
+            .find(|session| {
+                session.scope_key == scope_key
+                    && session.status == AGENT_CODEX_SESSION_STATUS_ACTIVE
+            })
+            .cloned(),
+        previous_generation: snapshot_sessions
+            .iter()
+            .filter(|session| session.scope_key == scope_key)
+            .map(|session| session.generation)
+            .max(),
+        history_complete: !snapshot_truncated,
+    };
+    if state.existing.is_none() && snapshot_truncated {
+        state.existing = platform.get_agent_codex_session(agent_id, scope_key);
+    }
+    state
+}
+
 pub(super) fn persist_codex_stage_session(
     platform: &TriggerPlatform,
     agent_id: Uuid,
@@ -12,6 +46,8 @@ pub(super) fn persist_codex_stage_session(
     result: &CodexRunResult,
     replace_session: bool,
     existing: Option<AgentCodexSession>,
+    previous_generation: Option<i32>,
+    history_complete: bool,
 ) -> AppResult<AgentCodexSession> {
     let thread_id = result.thread_id.clone().ok_or_else(|| {
         AppError::Validation("successful Codex run did not return a thread ID".into())
@@ -26,12 +62,17 @@ pub(super) fn persist_codex_stage_session(
             platform.save_agent_codex_session(archived)?;
         }
     }
-    let previous_generation = existing.as_ref().map(|session| session.generation);
+    let previous_generation = existing
+        .as_ref()
+        .map(|session| session.generation)
+        .or(previous_generation);
     let existing = (!replace_session).then_some(existing).flatten();
     let generation = if let Some(session) = existing.as_ref() {
         session.generation
     } else if let Some(previous_generation) = previous_generation {
         previous_generation.saturating_add(1)
+    } else if history_complete {
+        1
     } else {
         platform
             .list_agent_codex_sessions(agent_id, 100)
