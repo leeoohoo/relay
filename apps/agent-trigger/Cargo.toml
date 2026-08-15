@@ -22,3 +22,6 @@ ai-chat-application = { path = "../../crates/application" }
 ai-chat-domain = { path = "../../crates/domain" }
 ai-chat-infrastructure = { path = "../../crates/infrastructure" }
 ai-chat-shared = { path = "../../crates/shared" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

@@ -201,13 +201,14 @@ pub(super) fn create_private_dir(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-pub(super) fn set_private_file_permissions(file: &File) -> AppResult<()> {
+pub(super) fn set_private_file_permissions(_file: &File) -> AppResult<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let metadata = file.metadata().map_err(file_error)?;
+        let metadata = _file.metadata().map_err(file_error)?;
         if metadata.mode() & 0o777 != 0o600 {
-            file.set_permissions(fs::Permissions::from_mode(0o600))
+            _file
+                .set_permissions(fs::Permissions::from_mode(0o600))
                 .map_err(file_error)?;
         }
     }

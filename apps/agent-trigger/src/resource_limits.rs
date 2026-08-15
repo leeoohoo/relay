@@ -1,5 +1,5 @@
 #[cfg(target_os = "windows")]
-use std::process::Command as StdCommand;
+use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
@@ -290,12 +290,12 @@ fn platform_one_minute_load_average() -> Option<f64> {
 
 #[cfg(target_os = "windows")]
 fn total_memory_bytes() -> Option<u64> {
-    windows_memory_kib("TotalVisibleMemorySize")?.checked_mul(1024)
+    windows_memory_status().map(|status| status.ullTotalPhys)
 }
 
 #[cfg(target_os = "windows")]
 fn platform_available_memory_bytes() -> Option<u64> {
-    windows_memory_kib("FreePhysicalMemory")?.checked_mul(1024)
+    windows_memory_status().map(|status| status.ullAvailPhys)
 }
 
 #[cfg(target_os = "windows")]
@@ -304,11 +304,20 @@ fn platform_one_minute_load_average() -> Option<f64> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_memory_kib(field: &str) -> Option<u64> {
-    let query = format!("(Get-CimInstance Win32_OperatingSystem).{field}");
-    command_output("powershell.exe", &["-NoProfile", "-Command", &query])?
-        .lines()
-        .find_map(|line| line.trim().parse().ok())
+fn windows_memory_status() -> Option<MEMORYSTATUSEX> {
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        dwMemoryLoad: 0,
+        ullTotalPhys: 0,
+        ullAvailPhys: 0,
+        ullTotalPageFile: 0,
+        ullAvailPageFile: 0,
+        ullTotalVirtual: 0,
+        ullAvailVirtual: 0,
+        ullAvailExtendedVirtual: 0,
+    };
+    // SAFETY: `status` has the exact Windows MEMORYSTATUSEX layout and a valid length field.
+    (unsafe { GlobalMemoryStatusEx(&mut status) } != 0).then_some(status)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -324,16 +333,6 @@ fn platform_available_memory_bytes() -> Option<u64> {
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn platform_one_minute_load_average() -> Option<f64> {
     None
-}
-
-#[cfg(target_os = "windows")]
-fn command_output(command: &str, args: &[&str]) -> Option<String> {
-    let output = StdCommand::new(command).args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).ok())
-        .flatten()
 }
 
 #[cfg(test)]
@@ -406,5 +405,15 @@ mod tests {
         assert!(total > 0);
         assert!(available > 0);
         assert!(load >= 0.0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_resource_probe_uses_native_system_apis() {
+        let total = total_memory_bytes().expect("total memory");
+        let available = platform_available_memory_bytes().expect("available memory");
+        assert!(total > 0);
+        assert!(available > 0);
+        assert!(available <= total);
     }
 }
