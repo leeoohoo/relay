@@ -214,7 +214,7 @@ fn host_browser_mcp_connects_to_the_runner_pool_with_page_routing() {
 }
 
 #[test]
-fn host_browser_is_reused_across_projects_for_the_same_agent() {
+fn host_browser_is_shared_by_the_trigger_with_one_tab_per_agent() {
     let root = std::env::temp_dir().join(format!(
         "relay-host-browser-pool-test-{}",
         Uuid::new_v4().simple()
@@ -248,6 +248,14 @@ fn host_browser_is_reused_across_projects_for_the_same_agent() {
         .managed_browser_mcp_server(company, Uuid::new_v4(), Uuid::new_v4(), &workspace)
         .expect("other Agent host browser")
         .expect("enabled host browser");
+    let same_agent_other_company = runner
+        .managed_browser_mcp_server(Uuid::new_v4(), agent, Uuid::new_v4(), &workspace)
+        .expect("same Agent in another company host browser")
+        .expect("enabled host browser");
+    let other_company = runner
+        .managed_browser_mcp_server(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), &workspace)
+        .expect("other company host browser")
+        .expect("enabled host browser");
     let first_url = first
         .args
         .iter()
@@ -263,9 +271,32 @@ fn host_browser_is_reused_across_projects_for_the_same_agent() {
         .iter()
         .find(|argument| argument.starts_with("--browserUrl="))
         .expect("other Agent browser URL");
+    let same_agent_other_company_url = same_agent_other_company
+        .args
+        .iter()
+        .find(|argument| argument.starts_with("--browserUrl="))
+        .expect("same Agent in another company browser URL");
+    let other_company_url = other_company
+        .args
+        .iter()
+        .find(|argument| argument.starts_with("--browserUrl="))
+        .expect("other company browser URL");
 
     assert_eq!(first_url, second_url);
-    assert_ne!(first_url, other_agent_url);
+    assert_eq!(first_url, other_agent_url);
+    assert_eq!(first_url, same_agent_other_company_url);
+    assert_eq!(first_url, other_company_url);
+    assert_eq!(first.prompt_hint, second.prompt_hint);
+    assert_eq!(first.prompt_hint, same_agent_other_company.prompt_hint);
+    assert_ne!(first.prompt_hint, other_agent.prompt_hint);
+    assert_ne!(other_agent.prompt_hint, other_company.prompt_hint);
+    assert!(first
+        .env
+        .get(RELAY_BROWSER_PAGE_ID_ENV)
+        .is_some_and(|page_id| first
+            .prompt_hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains(page_id))));
     assert_eq!(first.command, second.command);
     drop(runner);
     std::fs::remove_dir_all(root).expect("cleanup host browser profiles");
@@ -336,6 +367,7 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-browser",
         tool_timeout_sec: Some(180),
         default_tools_approval_mode: "auto".into(),
         tool_approval_modes: BTreeMap::from([("navigate_page".into(), "prompt".into())]),
+        prompt_hint: None,
     };
     let result = tokio::runtime::Runtime::new()
         .expect("runtime")

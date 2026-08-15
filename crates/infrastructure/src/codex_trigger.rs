@@ -177,6 +177,7 @@ pub struct ManagedCodexMcpServer {
     pub tool_timeout_sec: Option<u64>,
     pub default_tools_approval_mode: String,
     pub tool_approval_modes: BTreeMap<String, String>,
+    pub prompt_hint: Option<String>,
 }
 
 impl ManagedCodexMcpServer {

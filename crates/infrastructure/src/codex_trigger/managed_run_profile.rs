@@ -394,6 +394,7 @@ enabled = false
                 tool_timeout_sec: None,
                 default_tools_approval_mode: "auto".into(),
                 tool_approval_modes: BTreeMap::new(),
+                prompt_hint: None,
             }],
             approval_handler: None,
             progress_handler: None,

@@ -1,7 +1,14 @@
 use super::*;
 
 impl CodexTriggerRunner {
-    pub async fn run(&self, request: CodexRunRequest) -> AppResult<CodexRunResult> {
+    pub async fn run(&self, mut request: CodexRunRequest) -> AppResult<CodexRunResult> {
+        append_managed_mcp_prompt_hints(
+            &mut request.prompt,
+            request
+                .managed_mcp_servers
+                .iter()
+                .filter_map(|server| server.prompt_hint.as_deref()),
+        );
         validate_request(&request)?;
         if let Some(thread_id) = request.existing_thread_id.as_deref() {
             let resumed = self
@@ -586,6 +593,29 @@ impl CodexTriggerRunner {
             .filter(|line| line.starts_with('[') && line.ends_with(']'))
             .filter_map(|line| first_section_name(&line[1..line.len() - 1], "mcp_servers."))
             .collect())
+    }
+}
+
+fn append_managed_mcp_prompt_hints<'a>(prompt: &mut String, hints: impl Iterator<Item = &'a str>) {
+    let hints = hints.collect::<Vec<_>>();
+    if hints.is_empty() {
+        return;
+    }
+    prompt.push_str("\n\n<relay_managed_mcp>\n");
+    prompt.push_str(&hints.join("\n"));
+    prompt.push_str("\n</relay_managed_mcp>");
+}
+
+#[cfg(test)]
+mod prompt_hint_tests {
+    use super::append_managed_mcp_prompt_hints;
+
+    #[test]
+    fn managed_mcp_hint_is_appended_to_the_runtime_prompt() {
+        let mut prompt = "work".to_string();
+        append_managed_mcp_prompt_hints(&mut prompt, ["use pageId page-1"].into_iter());
+        assert!(prompt.contains("<relay_managed_mcp>"));
+        assert!(prompt.contains("use pageId page-1"));
     }
 }
 

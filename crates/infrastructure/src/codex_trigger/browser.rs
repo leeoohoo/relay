@@ -12,6 +12,8 @@ const DEFAULT_BROWSER_MCP_PACKAGE: &str = "chrome-devtools-mcp@1.6.0";
 const BROWSER_PROFILE_CONTAINER_PATH: &str = "/relay-browser-profile";
 const HOST_BROWSER_ENDPOINT_FILE: &str = ".relay-devtools-endpoint";
 const HOST_BROWSER_START_TIMEOUT: Duration = Duration::from_secs(12);
+const MAX_BROWSER_DEBUG_RESPONSE_BYTES: u64 = 1024 * 1024;
+pub(super) const RELAY_BROWSER_PAGE_ID_ENV: &str = "RELAY_BROWSER_PAGE_ID";
 pub(super) const BROWSER_ARTIFACTS_RELATIVE_PATH: &str = ".relay/browser-artifacts";
 pub(super) const CHROMIUM_RUNTIME_FILES: [&str; 4] = [
     "SingletonLock",
@@ -45,6 +47,7 @@ struct HostBrowserProcess {
     endpoint: String,
     child: Option<Child>,
     last_used_at: std::time::Instant,
+    agent_pages: HashMap<Uuid, String>,
 }
 
 impl Drop for HostBrowserProcess {
@@ -68,7 +71,7 @@ pub(super) struct BrowserMcpConfig {
     docker_cpus: String,
     docker_memory: String,
     host_browser_idle_timeout: Duration,
-    pool: Arc<Mutex<HashMap<(Uuid, Uuid), HostBrowserProcess>>>,
+    pool: Arc<Mutex<Option<HostBrowserProcess>>>,
 }
 
 impl BrowserMcpConfig {
@@ -84,7 +87,7 @@ impl BrowserMcpConfig {
             docker_cpus: "1.0".into(),
             docker_memory: "768m".into(),
             host_browser_idle_timeout: Duration::from_secs(15 * 60),
-            pool: Arc::new(Mutex::new(HashMap::new())),
+            pool: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -159,7 +162,7 @@ impl BrowserMcpConfig {
             docker_cpus,
             docker_memory,
             host_browser_idle_timeout,
-            pool: Arc::new(Mutex::new(HashMap::new())),
+            pool: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -176,7 +179,7 @@ impl BrowserMcpConfig {
             docker_cpus: "1.0".into(),
             docker_memory: "768m".into(),
             host_browser_idle_timeout: Duration::from_secs(15 * 60),
-            pool: Arc::new(Mutex::new(HashMap::new())),
+            pool: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -196,7 +199,7 @@ impl BrowserMcpConfig {
             docker_cpus: "1.0".into(),
             docker_memory: "768m".into(),
             host_browser_idle_timeout: Duration::from_secs(15 * 60),
-            pool: Arc::new(Mutex::new(HashMap::new())),
+            pool: Arc::new(Mutex::new(None)),
         };
         config.uses_host().then_some(config)
     }
@@ -207,11 +210,8 @@ impl BrowserMcpConfig {
             && self.host_browser_executable.is_some()
     }
 
-    fn profile(&self, company_id: Uuid, agent_id: Uuid) -> PathBuf {
-        self.profile_root
-            .join(company_id.to_string())
-            .join(agent_id.to_string())
-            .join("native")
+    fn profile(&self) -> PathBuf {
+        self.profile_root.join("shared").join("native")
     }
 
     fn server(
@@ -235,34 +235,41 @@ impl BrowserMcpConfig {
         create_browser_artifacts(&workspace)?;
 
         if self.uses_host() {
-            return self.host_server(company_id, agent_id).map(Some);
+            return self.host_server(agent_id).map(Some);
         }
         self.docker_server(company_id, agent_id, project_id, &workspace)
             .map(Some)
     }
 
-    fn host_server(&self, company_id: Uuid, agent_id: Uuid) -> AppResult<ManagedCodexMcpServer> {
-        let endpoint = self.ensure_host_browser(company_id, agent_id)?;
+    fn host_server(&self, agent_id: Uuid) -> AppResult<ManagedCodexMcpServer> {
+        let endpoint = self.ensure_host_browser()?;
+        let page_id = self.ensure_agent_browser_page(&endpoint, agent_id)?;
         let command = self
             .host_mcp_command
             .as_ref()
             .expect("host mode checks the MCP command")
             .to_string_lossy()
             .into_owned();
-        Ok(managed_server(command, host_mcp_args(&endpoint), 45))
+        let mut server = managed_server(command, host_mcp_args(&endpoint), 45);
+        server
+            .env
+            .insert(RELAY_BROWSER_PAGE_ID_ENV.into(), page_id.clone());
+        server.prompt_hint = Some(format!(
+            "此 Trigger 设备上的所有 Agent 共用一个 Chrome。你的专属标签页 pageId 是 `{page_id}`。所有支持 pageId 的 chrome-devtools 页面工具都必须显式传入该 pageId；不要读取或操作其他 pageId。"
+        ));
+        Ok(server)
     }
 
-    fn ensure_host_browser(&self, company_id: Uuid, agent_id: Uuid) -> AppResult<String> {
-        let profile = self.profile(company_id, agent_id);
+    fn ensure_host_browser(&self) -> AppResult<String> {
+        let profile = self.profile();
         create_browser_profile(&profile)?;
         let profile = profile.canonicalize().map_err(|error| {
             AppError::Internal(format!("cannot resolve managed browser profile: {error}"))
         })?;
-        let key = (company_id, agent_id);
         let mut pool = self.pool.lock().map_err(|_| {
             AppError::Internal("managed browser process pool lock was poisoned".into())
         })?;
-        if let Some(process) = pool.get_mut(&key) {
+        if let Some(process) = pool.as_mut() {
             if browser_endpoint_ready(&process.endpoint) {
                 process.last_used_at = std::time::Instant::now();
                 if process
@@ -281,18 +288,16 @@ impl BrowserMcpConfig {
             if child_still_running {
                 return Ok(process.endpoint.clone());
             }
-            pool.remove(&key);
+            pool.take();
         }
 
         if let Some(endpoint) = read_reusable_endpoint(&profile) {
-            pool.insert(
-                key,
-                HostBrowserProcess {
-                    endpoint: endpoint.clone(),
-                    child: None,
-                    last_used_at: std::time::Instant::now(),
-                },
-            );
+            *pool = Some(HostBrowserProcess {
+                endpoint: endpoint.clone(),
+                child: None,
+                last_used_at: std::time::Instant::now(),
+                agent_pages: HashMap::new(),
+            });
             return Ok(endpoint);
         }
 
@@ -341,14 +346,12 @@ impl BrowserMcpConfig {
                         ))
                     },
                 )?;
-                pool.insert(
-                    key,
-                    HostBrowserProcess {
-                        endpoint: endpoint.clone(),
-                        child: Some(child),
-                        last_used_at: std::time::Instant::now(),
-                    },
-                );
+                *pool = Some(HostBrowserProcess {
+                    endpoint: endpoint.clone(),
+                    child: Some(child),
+                    last_used_at: std::time::Instant::now(),
+                    agent_pages: HashMap::new(),
+                });
                 return Ok(endpoint);
             }
             if child.try_wait().ok().flatten().is_some() {
@@ -366,16 +369,58 @@ impl BrowserMcpConfig {
         )))
     }
 
+    fn ensure_agent_browser_page(&self, endpoint: &str, agent_id: Uuid) -> AppResult<String> {
+        let page_url = agent_browser_page_url(agent_id);
+        let browser_pages = browser_debug_json(endpoint, "GET", "/json/list")?;
+        let browser_pages = browser_pages.as_array().ok_or_else(|| {
+            AppError::Internal("managed browser returned an invalid page list".into())
+        })?;
+        let mut pool = self.pool.lock().map_err(|_| {
+            AppError::Internal("managed browser process pool lock was poisoned".into())
+        })?;
+        let process = pool.as_mut().ok_or_else(|| {
+            AppError::Internal("managed browser process disappeared during page setup".into())
+        })?;
+        if let Some(page_id) = process.agent_pages.get(&agent_id).filter(|page_id| {
+            browser_pages
+                .iter()
+                .any(|page| page.get("id").and_then(Value::as_str) == Some(page_id.as_str()))
+        }) {
+            return Ok(page_id.clone());
+        }
+        if let Some(page_id) = browser_pages.iter().find_map(|page| {
+            (page.get("url").and_then(Value::as_str) == Some(page_url.as_str()))
+                .then(|| page.get("id").and_then(Value::as_str))
+                .flatten()
+        }) {
+            validate_safe_value(page_id, "managed browser page ID", 256)?;
+            process.agent_pages.insert(agent_id, page_id.to_string());
+            return Ok(page_id.to_string());
+        }
+
+        let encoded_url = page_url.replace('#', "%23");
+        let page = browser_debug_json(endpoint, "PUT", &format!("/json/new?{encoded_url}"))?;
+        let page_id = page
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::Internal("managed browser did not return a page ID".into()))?;
+        validate_safe_value(page_id, "managed browser page ID", 256)?;
+        process.agent_pages.insert(agent_id, page_id.to_string());
+        Ok(page_id.to_string())
+    }
+
     fn prune_idle_host_browsers(&self) -> AppResult<usize> {
         let mut pool = self.pool.lock().map_err(|_| {
             AppError::Internal("managed browser process pool lock was poisoned".into())
         })?;
-        let before = pool.len();
         let now = std::time::Instant::now();
-        pool.retain(|_, process| {
-            now.saturating_duration_since(process.last_used_at) < self.host_browser_idle_timeout
+        let expired = pool.as_ref().is_some_and(|process| {
+            now.saturating_duration_since(process.last_used_at) >= self.host_browser_idle_timeout
         });
-        Ok(before - pool.len())
+        if expired {
+            pool.take();
+        }
+        Ok(usize::from(expired))
     }
 
     fn docker_server(
@@ -497,7 +542,7 @@ impl CodexTriggerRunner {
             transport: CODEX_MCP_TRANSPORT_STDIO.into(),
             enabled,
             auth_status: Some("unsupported".into()),
-            address: host_available.then(|| "由 Trigger 按 Agent 复用宿主机浏览器".into()),
+            address: host_available.then(|| "由本地 Trigger 设备共享宿主机浏览器".into()),
             command,
             argument_count: 0,
             bearer_token_env_var: None,
@@ -536,6 +581,7 @@ fn managed_server(
         tool_timeout_sec: Some(180),
         default_tools_approval_mode: "approve".into(),
         tool_approval_modes,
+        prompt_hint: None,
     }
 }
 
@@ -675,6 +721,101 @@ fn browser_endpoint_ready(endpoint: &str) -> bool {
         .is_some_and(|read| read > 0 && response[..read].starts_with(b"HTTP/1.1 200"))
 }
 
+fn agent_browser_page_url(agent_id: Uuid) -> String {
+    format!("about:blank#relay-agent-{agent_id}")
+}
+
+fn browser_debug_json(endpoint: &str, method: &str, path: &str) -> AppResult<Value> {
+    let port = endpoint
+        .rsplit(':')
+        .next()
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| AppError::Internal("managed browser endpoint is invalid".into()))?;
+    let mut stream = TcpStream::connect_timeout(
+        &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+        Duration::from_secs(2),
+    )
+    .map_err(|error| AppError::Internal(format!("cannot connect to managed browser: {error}")))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| AppError::Internal(format!("cannot configure browser read: {error}")))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|error| AppError::Internal(format!("cannot configure browser write: {error}")))?;
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|error| AppError::Internal(format!("cannot request managed browser: {error}")))?;
+
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                response.extend_from_slice(&chunk[..read]);
+                if response.len() as u64 > MAX_BROWSER_DEBUG_RESPONSE_BYTES {
+                    return Err(AppError::Internal(
+                        "managed browser response exceeded the safe limit".into(),
+                    ));
+                }
+                if browser_http_response_is_complete(&response) {
+                    break;
+                }
+            }
+            Err(error)
+                if !response.is_empty()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+            {
+                break;
+            }
+            Err(error) => {
+                return Err(AppError::Internal(format!(
+                    "cannot read managed browser: {error}"
+                )))
+            }
+        }
+    }
+    let separator = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| AppError::Internal("managed browser returned invalid HTTP".into()))?;
+    let headers = String::from_utf8_lossy(&response[..separator]);
+    if !headers
+        .lines()
+        .next()
+        .is_some_and(|line| line.contains(" 200 "))
+    {
+        return Err(AppError::Internal(format!(
+            "managed browser request failed: {}",
+            headers.lines().next().unwrap_or("unknown response")
+        )));
+    }
+    serde_json::from_slice(&response[separator + 4..]).map_err(|error| {
+        AppError::Internal(format!("managed browser returned invalid JSON: {error}"))
+    })
+}
+
+fn browser_http_response_is_complete(response: &[u8]) -> bool {
+    let Some(separator) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = String::from_utf8_lossy(&response[..separator]);
+    let Some(content_length) = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    }) else {
+        return false;
+    };
+    response.len().saturating_sub(separator + 4) >= content_length
+}
+
 fn read_reusable_endpoint(profile: &Path) -> Option<String> {
     let endpoint = std::fs::read_to_string(profile.join(HOST_BROWSER_ENDPOINT_FILE)).ok()?;
     let endpoint = endpoint.trim().to_string();
@@ -771,32 +912,29 @@ mod idle_cleanup_tests {
         let mut config = BrowserMcpConfig::disabled();
         config.host_browser_idle_timeout = Duration::from_secs(60);
         let now = std::time::Instant::now();
-        let company_id = Uuid::new_v4();
-        let stale_agent_id = Uuid::new_v4();
-        let recent_agent_id = Uuid::new_v4();
         {
             let mut pool = config.pool.lock().expect("browser pool");
-            pool.insert(
-                (company_id, stale_agent_id),
-                HostBrowserProcess {
-                    endpoint: "http://127.0.0.1:19001".into(),
-                    child: None,
-                    last_used_at: now - Duration::from_secs(61),
-                },
-            );
-            pool.insert(
-                (company_id, recent_agent_id),
-                HostBrowserProcess {
-                    endpoint: "http://127.0.0.1:19002".into(),
-                    child: None,
-                    last_used_at: now,
-                },
-            );
+            *pool = Some(HostBrowserProcess {
+                endpoint: "http://127.0.0.1:19001".into(),
+                child: None,
+                last_used_at: now - Duration::from_secs(61),
+                agent_pages: HashMap::new(),
+            });
         }
 
         assert_eq!(config.prune_idle_host_browsers().expect("prune"), 1);
+        assert!(config.pool.lock().expect("browser pool").is_none());
+        {
+            let mut pool = config.pool.lock().expect("browser pool");
+            *pool = Some(HostBrowserProcess {
+                endpoint: "http://127.0.0.1:19002".into(),
+                child: None,
+                last_used_at: now,
+                agent_pages: HashMap::new(),
+            });
+        }
+        assert_eq!(config.prune_idle_host_browsers().expect("prune"), 0);
         let pool = config.pool.lock().expect("browser pool");
-        assert!(!pool.contains_key(&(company_id, stale_agent_id)));
-        assert!(pool.contains_key(&(company_id, recent_agent_id)));
+        assert!(pool.is_some());
     }
 }
