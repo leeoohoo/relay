@@ -15,58 +15,91 @@ pub(super) fn publish_codex_runtime_probe(
 pub(super) async fn refresh_codex_default_auth(
     codex_control: &CodexControlStore,
     codex_runner: &CodexTriggerRunner,
-) {
+) -> bool {
+    let started = std::time::Instant::now();
     let result = codex_runner.probe_default_auth().await;
-    let publish_result = match result {
-        Ok(probe) => codex_control.publish_default_auth_probe(
-            &probe.status,
-            probe.method,
-            probe.config,
-            None,
+    let (publish_result, discovery_succeeded) = match result {
+        Ok(probe) => (
+            codex_control.publish_default_auth_probe(
+                &probe.status,
+                probe.method,
+                probe.config,
+                None,
+            ),
+            true,
         ),
-        Err(error) => codex_control.publish_default_auth_probe(
-            CODEX_DEFAULT_AUTH_STATUS_UNKNOWN,
-            None,
-            CodexDefaultConfigSummary::default(),
-            Some(sanitize_error(&error.to_string())),
+        Err(error) => (
+            codex_control.publish_default_auth_probe(
+                CODEX_DEFAULT_AUTH_STATUS_UNKNOWN,
+                None,
+                CodexDefaultConfigSummary::default(),
+                Some(sanitize_error(&error.to_string())),
+            ),
+            false,
         ),
     };
-    if let Err(error) = publish_result {
-        tracing::warn!(
-            error = %sanitize_error(&error.to_string()),
-            "failed to publish the host Codex authentication status"
-        );
-    }
+    let succeeded = match publish_result {
+        Ok(_) => discovery_succeeded,
+        Err(error) => {
+            tracing::warn!(
+                error = %sanitize_error(&error.to_string()),
+                "failed to publish the host Codex authentication status"
+            );
+            false
+        }
+    };
+    tracing::info!(
+        succeeded,
+        duration_ms = started.elapsed().as_millis() as u64,
+        "Codex authentication discovery finished"
+    );
+    succeeded
 }
 
 pub(super) async fn refresh_codex_mcp_catalog(
     codex_control: &CodexControlStore,
     codex_runner: &CodexTriggerRunner,
-) {
+) -> bool {
+    let started = std::time::Instant::now();
     let selectors = match codex_control.list_mcp_target_selectors() {
         Ok(selectors) => selectors,
         Err(error) => {
             tracing::warn!(error = %sanitize_error(&error.to_string()), "failed to list Codex MCP target environments");
-            return;
+            return false;
         }
     };
+    let mut succeeded = true;
+    let environment_count = selectors.len();
     for selector in selectors {
-        refresh_codex_mcp_environment(codex_control, codex_runner, &selector).await;
+        succeeded &= refresh_codex_mcp_environment(codex_control, codex_runner, &selector).await;
     }
+    tracing::info!(
+        succeeded,
+        environments = environment_count,
+        duration_ms = started.elapsed().as_millis() as u64,
+        "Codex MCP discovery finished"
+    );
+    succeeded
 }
 
 pub(super) async fn refresh_codex_mcp_environment(
     codex_control: &CodexControlStore,
     codex_runner: &CodexTriggerRunner,
     selector: &str,
-) {
+) -> bool {
     let result = codex_runner.discover_mcp_servers(selector).await;
-    let publish_result = match result {
-        Ok(servers) => codex_control.publish_mcp_snapshot(selector, servers, None),
-        Err(error) => codex_control.publish_mcp_snapshot(
-            selector,
-            Vec::new(),
-            Some(sanitize_error(&error.to_string())),
+    let (publish_result, discovery_succeeded) = match result {
+        Ok(servers) => (
+            codex_control.publish_mcp_snapshot(selector, servers, None),
+            true,
+        ),
+        Err(error) => (
+            codex_control.publish_mcp_snapshot(
+                selector,
+                Vec::new(),
+                Some(sanitize_error(&error.to_string())),
+            ),
+            false,
         ),
     };
     if let Err(error) = publish_result {
@@ -75,7 +108,9 @@ pub(super) async fn refresh_codex_mcp_environment(
             error = %sanitize_error(&error.to_string()),
             "failed to publish the Codex MCP catalog"
         );
+        return false;
     }
+    discovery_succeeded
 }
 
 pub(super) async fn process_codex_control_request(
@@ -467,6 +502,7 @@ pub(super) async fn refresh_codex_plugin_catalog(
     config: &TriggerServiceConfig,
     target_selector: &str,
 ) -> AppResult<(String, bool)> {
+    let started = std::time::Instant::now();
     let discovery = codex_runner.discover_plugins(target_selector).await?;
     let fingerprint = codex_plugin_fingerprint(&discovery.installed);
     let installed = public_codex_plugin_items(&discovery.installed);
@@ -495,6 +531,7 @@ pub(super) async fn refresh_codex_plugin_catalog(
         runner_id = %config.plugin_host_id,
         target_selector,
         fingerprint = %fingerprint,
+        duration_ms = started.elapsed().as_millis() as u64,
         "local Codex plugin catalog refreshed by Trigger"
     );
     Ok((fingerprint, catalog_is_empty))

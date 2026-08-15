@@ -64,28 +64,35 @@ impl TriggerServiceConfig {
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
                 .map(|value| value.clamp(60, 86_400))
-                .unwrap_or(900),
+                .unwrap_or(21_600),
+        );
+        let discovery_fingerprint_interval = StdDuration::from_secs(
+            std::env::var("AGENT_TRIGGER_DISCOVERY_FINGERPRINT_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(5, 300))
+                .unwrap_or(30),
         );
         let default_auth_discovery_interval = StdDuration::from_secs(
             std::env::var("AGENT_TRIGGER_CODEX_AUTH_DISCOVERY_INTERVAL_SECONDS")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(15, 3_600))
-                .unwrap_or(60),
+                .map(|value| value.clamp(15, 86_400))
+                .unwrap_or(21_600),
         );
         let mcp_discovery_interval = StdDuration::from_secs(
             std::env::var("AGENT_TRIGGER_MCP_DISCOVERY_INTERVAL_SECONDS")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(15, 3_600))
-                .unwrap_or(60),
+                .map(|value| value.clamp(15, 86_400))
+                .unwrap_or(21_600),
         );
         let plugin_discovery_interval = StdDuration::from_secs(
             std::env::var("AGENT_TRIGGER_PLUGIN_DISCOVERY_INTERVAL_SECONDS")
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
                 .map(|value| value.clamp(30, 86_400))
-                .unwrap_or(300),
+                .unwrap_or(21_600),
         );
         let codex_auto_install = bool_env("AGENT_TRIGGER_CODEX_AUTO_INSTALL", false);
         let codex_install_url = std::env::var("AGENT_TRIGGER_CODEX_INSTALL_URL")
@@ -126,6 +133,7 @@ impl TriggerServiceConfig {
             run_once,
             model_catalog_path,
             model_discovery_profiles,
+            discovery_fingerprint_interval,
             model_discovery_interval,
             default_auth_discovery_interval,
             mcp_discovery_interval,
