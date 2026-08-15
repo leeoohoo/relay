@@ -18,7 +18,14 @@ use crate::postgres::PostgresPlatformRepository;
 pub type RepositoryAdapter = PostgresPlatformRepository;
 
 pub fn build_repository(config: &ApiConfig) -> anyhow::Result<RepositoryAdapter> {
-    PostgresPlatformRepository::connect(&config.database_url)
+    build_named_repository(config, "relay")
+}
+
+pub fn build_named_repository(
+    config: &ApiConfig,
+    application_name: &str,
+) -> anyhow::Result<RepositoryAdapter> {
+    PostgresPlatformRepository::connect_named(&config.database_url, application_name)
         .context("failed to connect PostgreSQL repository")
 }
 

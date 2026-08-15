@@ -11,7 +11,9 @@ use ai_chat_infrastructure::git_credentials::GitCredentialStore;
 use ai_chat_infrastructure::harness::{HarnessProjectGitProvisioner, HarnessProvisioner};
 use ai_chat_infrastructure::ownership_proof::OwnershipProofVerifierAdapter;
 use ai_chat_infrastructure::project_git::ProjectGitProvisioner;
-use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
+use ai_chat_infrastructure::{
+    build_named_repository, build_ownership_proof_verifier, RepositoryAdapter,
+};
 use ai_chat_mcp::{AiChatMcpHandler, McpGateway, STANDARD_MCP_PATH};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
@@ -35,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let api_config = ApiConfig::from_env();
     let verifier = build_ownership_proof_verifier(&api_config);
     let mcp_config = McpConfig::from_env();
-    let repository = build_repository(&api_config)?;
+    let repository = build_named_repository(&api_config, "relay-mcp-server")?;
     let harness = HarnessProvisioner::from_config(repository.clone(), &api_config)?;
     let git_credentials = GitCredentialStore::from_env()?;
     let project_git_provisioner = if harness.is_enabled() {

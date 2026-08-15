@@ -93,7 +93,9 @@ use ai_chat_infrastructure::project_git::{
     generated_repository_identifier, initial_project_access_token_identifier, ProvisionedProjectGit,
 };
 use ai_chat_infrastructure::realtime::spawn_postgres_realtime_listener;
-use ai_chat_infrastructure::{build_ownership_proof_verifier, build_repository, RepositoryAdapter};
+use ai_chat_infrastructure::{
+    build_named_repository, build_ownership_proof_verifier, RepositoryAdapter,
+};
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
 
 #[derive(Clone)]
@@ -277,7 +279,7 @@ async fn main() -> anyhow::Result<()> {
     {
         anyhow::bail!("HARNESS_BASE_URL must use https for official Harness in production");
     }
-    let repository = build_repository(&config)?;
+    let repository = build_named_repository(&config, "relay-server")?;
     let harness_provisioner = HarnessProvisioner::from_config(repository.clone(), &config)?;
     let verifier = build_ownership_proof_verifier(&config);
     let mcp_config = McpConfig::from_env();
@@ -304,8 +306,11 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| PathBuf::from(".relay-agent-trigger/codex-models.json"));
     let codex_control_store = CodexControlStore::from_env()?;
     let (realtime_sender, _) = broadcast::channel(2_048);
-    let _realtime_listener =
-        spawn_postgres_realtime_listener(config.database_url.clone(), realtime_sender.clone());
+    let _realtime_listener = spawn_postgres_realtime_listener(
+        config.database_url.clone(),
+        "relay-server-realtime",
+        realtime_sender.clone(),
+    );
     let mcp_gateway = McpGateway::new(platform.clone(), mcp_config.agent_key.clone())
         .with_project_git_provisioner(project_git_provisioner.clone());
     let standard_mcp_config = StreamableHttpServerConfig::default()

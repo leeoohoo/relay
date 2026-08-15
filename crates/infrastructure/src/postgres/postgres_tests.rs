@@ -6,6 +6,16 @@ fn integration_database_url() -> String {
 }
 
 #[test]
+fn named_postgres_config_overrides_url_application_name() {
+    let config = super::named_postgres_config(
+        "postgres://postgres:postgres@127.0.0.1:5432/ai_chat?application_name=old",
+        "relay-trigger",
+    )
+    .expect("named config");
+    assert_eq!(config.get_application_name(), Some("relay-trigger"));
+}
+
+#[test]
 fn postgres_pool_keeps_a_small_idle_floor_and_expands_on_demand() {
     assert_eq!(database_pool_sizes(None, None), (16, 1));
     assert_eq!(database_pool_sizes(Some("8"), Some("2")), (8, 2));

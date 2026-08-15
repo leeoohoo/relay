@@ -2,7 +2,7 @@ use std::thread;
 use std::time::Duration;
 
 use fallible_iterator::FallibleIterator;
-use postgres::{Client, NoTls};
+use postgres::NoTls;
 use rand::Rng;
 use tokio::sync::broadcast;
 
@@ -12,6 +12,7 @@ const REALTIME_CHANNEL: &str = "ai_chat_realtime_events";
 
 pub fn spawn_postgres_realtime_listener(
     database_url: String,
+    application_name: &'static str,
     sender: broadcast::Sender<CompanyRealtimeSignal>,
 ) -> thread::JoinHandle<()> {
     thread::Builder::new()
@@ -19,7 +20,7 @@ pub fn spawn_postgres_realtime_listener(
         .spawn(move || {
             let mut consecutive_failures = 0u32;
             loop {
-                match listen_once(&database_url, &sender) {
+                match listen_once(&database_url, application_name, &sender) {
                     Ok(()) => {
                         consecutive_failures = 0;
                         thread::sleep(Duration::from_millis(250));
@@ -50,9 +51,11 @@ fn reconnect_delay(consecutive_failures: u32) -> Duration {
 
 fn listen_once(
     database_url: &str,
+    application_name: &str,
     sender: &broadcast::Sender<CompanyRealtimeSignal>,
 ) -> anyhow::Result<()> {
-    let mut client = Client::connect(database_url, NoTls)?;
+    let config = crate::postgres::named_postgres_config(database_url, application_name)?;
+    let mut client = config.connect(NoTls)?;
     client.batch_execute(&format!("LISTEN {REALTIME_CHANNEL}"))?;
     let mut notifications = client.notifications();
     let mut iterator = notifications.blocking_iter();

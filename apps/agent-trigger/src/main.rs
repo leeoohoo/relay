@@ -44,7 +44,7 @@ use ai_chat_domain::{
     },
 };
 use ai_chat_infrastructure::{
-    build_repository,
+    build_named_repository,
     codex_control::{
         agent_trigger_batch_size_from_env, ClaimedCodexControlRequest, CodexControlRequestKind,
         CodexControlStore, CodexDefaultConfigSummary, CompanyCodexCliSettings,
@@ -520,7 +520,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let api_config = ApiConfig::from_env();
-    let repository = build_repository(&api_config)?;
+    let repository = build_named_repository(&api_config, "relay-trigger")?;
     let platform = PlatformApp::new(repository.clone());
     let harness = HarnessProvisioner::from_config(repository, &api_config)?;
     let workspace_manager = GitWorkspaceManager::from_env()?;
@@ -585,8 +585,11 @@ async fn run_trigger_loop(
     let mut resource_pressure = ResourcePressureState::default();
     let (realtime_sender, _) = tokio::sync::broadcast::channel(2_048);
     let mut realtime_receiver = realtime_sender.subscribe();
-    let _realtime_listener =
-        spawn_postgres_realtime_listener(database_url.to_string(), realtime_sender);
+    let _realtime_listener = spawn_postgres_realtime_listener(
+        database_url.to_string(),
+        "relay-trigger-realtime",
+        realtime_sender,
+    );
     let mut realtime_filter = RealtimeWakeFilter::default();
     let mut control_watcher = match ControlFileWatcher::start(codex_control.control_root()) {
         Ok(watcher) => Some(watcher),
