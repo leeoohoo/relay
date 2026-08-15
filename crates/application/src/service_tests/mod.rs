@@ -79,6 +79,7 @@ fn bootstrap_agent(
 
 mod auth_company;
 mod chat;
+mod chat_human;
 mod codex_approvals;
 mod codex_sessions;
 mod company_console;
