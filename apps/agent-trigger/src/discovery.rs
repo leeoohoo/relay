@@ -7,8 +7,11 @@ use std::{
 };
 
 use ai_chat_infrastructure::{codex_control::CodexControlStore, codex_trigger::CodexTriggerRunner};
+use ai_chat_shared::{now_utc, AppError, AppResult};
+use serde::{Deserialize, Serialize};
 
 const MAX_FINGERPRINT_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const DISCOVERY_SUCCESS_FILE: &str = "discovery-success.json";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct CodexDiscoveryChanges {
@@ -24,12 +27,26 @@ impl CodexDiscoveryChanges {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct CodexDiscoveryFingerprint {
     executable: u64,
     auth: u64,
     config: u64,
     plugins: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct CodexDiscoveryDelays {
+    pub(super) auth: Duration,
+    pub(super) mcp: Duration,
+    pub(super) models: Duration,
+    pub(super) plugins: Duration,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CodexDiscoverySuccess {
+    fingerprint: CodexDiscoveryFingerprint,
+    completed_at: i64,
 }
 
 impl CodexDiscoveryFingerprint {
@@ -95,6 +112,56 @@ pub(super) fn discovery_retry_delay(configured: Duration, succeeded: bool) -> Du
     } else {
         configured.min(Duration::from_secs(60))
     }
+}
+
+pub(super) fn initial_discovery_delays(
+    control: &CodexControlStore,
+    model_catalog_path: &Path,
+    plugin_catalog_available: bool,
+    fingerprint: CodexDiscoveryFingerprint,
+    configured: CodexDiscoveryDelays,
+) -> CodexDiscoveryDelays {
+    if !plugin_catalog_available
+        || !nonempty_file(model_catalog_path)
+        || !nonempty_file(&control.control_root().join("runtime.json"))
+        || !nonempty_file(&control.control_root().join("mcp-catalog.json"))
+    {
+        return CodexDiscoveryDelays::default();
+    }
+    let Ok(bytes) = fs::read(control.control_root().join(DISCOVERY_SUCCESS_FILE)) else {
+        return CodexDiscoveryDelays::default();
+    };
+    let Ok(success) = serde_json::from_slice::<CodexDiscoverySuccess>(&bytes) else {
+        return CodexDiscoveryDelays::default();
+    };
+    let age_seconds = now_utc().timestamp() - success.completed_at;
+    if success.fingerprint != fingerprint || age_seconds < 0 {
+        return CodexDiscoveryDelays::default();
+    }
+    let age = Duration::from_secs(age_seconds as u64);
+    CodexDiscoveryDelays {
+        auth: configured.auth.saturating_sub(age),
+        mcp: configured.mcp.saturating_sub(age),
+        models: configured.models.saturating_sub(age),
+        plugins: configured.plugins.saturating_sub(age),
+    }
+}
+
+pub(super) fn record_discovery_success(
+    control: &CodexControlStore,
+    fingerprint: CodexDiscoveryFingerprint,
+) -> AppResult<()> {
+    let bytes = serde_json::to_vec(&CodexDiscoverySuccess {
+        fingerprint,
+        completed_at: now_utc().timestamp(),
+    })
+    .map_err(|error| AppError::Internal(format!("cannot encode discovery cache: {error}")))?;
+    fs::write(control.control_root().join(DISCOVERY_SUCCESS_FILE), bytes)
+        .map_err(|error| AppError::Internal(format!("cannot save discovery cache: {error}")))
+}
+
+fn nonempty_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
 fn discovery_homes(control: &CodexControlStore) -> Vec<PathBuf> {
@@ -270,5 +337,43 @@ mod tests {
             discovery_retry_delay(Duration::from_secs(21_600), true),
             Duration::from_secs(21_600)
         );
+    }
+
+    #[test]
+    fn successful_discovery_is_reused_across_restarts_until_inputs_change() {
+        let root = test_root();
+        let control = CodexControlStore::new(root.join("control")).expect("control store");
+        let home = root.join("codex-home");
+        fs::create_dir_all(&home).expect("home");
+        let executable = root.join("codex");
+        let model_catalog = root.join("codex-models.json");
+        fs::write(&executable, b"binary").expect("executable");
+        fs::write(&model_catalog, b"{}").expect("model catalog");
+        fs::write(control.control_root().join("runtime.json"), b"{}").expect("runtime");
+        fs::write(control.control_root().join("mcp-catalog.json"), b"{}").expect("mcp catalog");
+        let first = CodexDiscoveryFingerprint::capture_paths(
+            &executable,
+            std::slice::from_ref(&home),
+            &["default".into()],
+        );
+        record_discovery_success(&control, first).expect("discovery cache");
+        let configured = CodexDiscoveryDelays {
+            auth: Duration::from_secs(300),
+            mcp: Duration::from_secs(300),
+            models: Duration::from_secs(300),
+            plugins: Duration::from_secs(300),
+        };
+        let cached = initial_discovery_delays(&control, &model_catalog, true, first, configured);
+        assert!(cached.mcp > Duration::ZERO);
+
+        fs::write(home.join("config.toml"), b"model = 'changed'").expect("config");
+        let changed = CodexDiscoveryFingerprint::capture_paths(
+            &executable,
+            std::slice::from_ref(&home),
+            &["default".into()],
+        );
+        let due = initial_discovery_delays(&control, &model_catalog, true, changed, configured);
+        let _ = fs::remove_dir_all(root);
+        assert_eq!(due, CodexDiscoveryDelays::default());
     }
 }

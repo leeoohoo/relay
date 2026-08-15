@@ -34,13 +34,13 @@ impl DueMaintenance {
 }
 
 impl BlockingMaintenance {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(initial_delays: discovery::CodexDiscoveryDelays) -> Self {
         let now = tokio::time::Instant::now();
         Self {
-            next_model_discovery: now,
-            next_default_auth_discovery: now,
-            next_mcp_discovery: now,
-            next_plugin_discovery: now,
+            next_model_discovery: now + initial_delays.models,
+            next_default_auth_discovery: now + initial_delays.auth,
+            next_mcp_discovery: now + initial_delays.mcp,
+            next_plugin_discovery: now + initial_delays.plugins,
             next_update_check: now,
             job: None,
         }
@@ -127,7 +127,7 @@ impl BlockingMaintenance {
         &mut self,
         completion: Result<BlockingMaintenanceResult, tokio::task::JoinError>,
         config: &TriggerServiceConfig,
-    ) {
+    ) -> bool {
         self.job.take();
         let now = tokio::time::Instant::now();
         let result = match completion {
@@ -140,9 +140,13 @@ impl BlockingMaintenance {
                 self.next_mcp_discovery = retry;
                 self.next_plugin_discovery = retry;
                 self.next_update_check = retry;
-                return;
+                return false;
             }
         };
+        let all_discovery_succeeded = result.model_succeeded == Some(true)
+            && result.auth_succeeded == Some(true)
+            && result.mcp_succeeded == Some(true)
+            && result.plugin_succeeded == Some(true);
         if let Some(succeeded) = result.model_succeeded {
             self.next_model_discovery =
                 now + discovery::discovery_retry_delay(config.model_discovery_interval, succeeded);
@@ -165,6 +169,7 @@ impl BlockingMaintenance {
         if result.update_checked {
             self.next_update_check = now + config.codex_update_check_interval;
         }
+        all_discovery_succeeded
     }
 
     pub(super) fn next_deadline(&self) -> tokio::time::Instant {
@@ -232,7 +237,7 @@ mod tests {
 
     #[test]
     fn discovery_changes_only_advance_affected_deadlines() {
-        let mut maintenance = BlockingMaintenance::new();
+        let mut maintenance = BlockingMaintenance::new(discovery::CodexDiscoveryDelays::default());
         let future = tokio::time::Instant::now() + StdDuration::from_secs(3600);
         maintenance.next_model_discovery = future;
         maintenance.next_default_auth_discovery = future;

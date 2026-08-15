@@ -519,12 +519,32 @@ async fn run_trigger_loop(
     let mut running_agents = HashSet::new();
     let mut plugin_operations = FuturesUnordered::new();
     let mut shutdown = Box::pin(shutdown_signal());
-    let mut blocking_maintenance = BlockingMaintenance::new();
     let mut discovery_fingerprint = discovery::CodexDiscoveryFingerprint::capture(
         codex_control,
         codex_runner,
         &config.model_discovery_profiles,
     );
+    let configured_discovery_delays = discovery::CodexDiscoveryDelays {
+        auth: config.default_auth_discovery_interval,
+        mcp: config.mcp_discovery_interval,
+        models: config.model_discovery_interval,
+        plugins: config.plugin_discovery_interval,
+    };
+    let plugin_catalog_available = platform
+        .codex_plugin_fingerprint(&config.plugin_host_id)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "cannot inspect cached Codex plugin discovery");
+            None
+        })
+        .is_some();
+    let initial_discovery_delays = discovery::initial_discovery_delays(
+        codex_control,
+        &config.model_catalog_path,
+        plugin_catalog_available,
+        discovery_fingerprint,
+        configured_discovery_delays,
+    );
+    let mut blocking_maintenance = BlockingMaintenance::new(initial_discovery_delays);
     let mut next_discovery_fingerprint_check =
         tokio::time::Instant::now() + config.discovery_fingerprint_interval;
     let mut next_watchdog = tokio::time::Instant::now();
@@ -796,12 +816,20 @@ async fn run_trigger_loop(
                 false
             },
             completion = blocking_maintenance.wait(), if blocking_maintenance_running => {
-                blocking_maintenance.complete(completion, config);
+                let discovery_succeeded = blocking_maintenance.complete(completion, config);
                 discovery_fingerprint = discovery::CodexDiscoveryFingerprint::capture(
                     codex_control,
                     codex_runner,
                     &config.model_discovery_profiles,
                 );
+                if discovery_succeeded {
+                    if let Err(error) = discovery::record_discovery_success(
+                        codex_control,
+                        discovery_fingerprint,
+                    ) {
+                        tracing::warn!(%error, "cannot persist successful Codex discovery cache");
+                    }
+                }
                 false
             },
             _ = &mut shutdown => true,
