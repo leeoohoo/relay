@@ -2,16 +2,22 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::ProjectTaskReadinessView;
+use ai_chat_domain::agent_identity::AgentInboxEvent;
 use ai_chat_domain::company::{
-    AgentCodexRunToken, AgentCodexTriggerConfig, AgentCodexTriggerRun, CodexPluginCatalogSnapshot,
-    CodexPluginOperation, CompanyCodexRunnerProfile, CompanyProject, CompanyProjectGitConfig,
+    AgentCodexRunToken, AgentCodexSession, AgentCodexTriggerConfig, AgentCodexTriggerRun,
+    AgentExecutionIntent, AgentRuntimeProjection, CodexPluginCatalogSnapshot, CodexPluginOperation,
+    CompanyCodexRunnerProfile, CompanyProject, CompanyProjectGitConfig, CompanyProjectTask,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanyAgentCodexTriggerView {
     pub config: AgentCodexTriggerConfig,
     pub recent_runs: Vec<AgentCodexTriggerRun>,
+    pub active_intents: Vec<AgentExecutionIntent>,
+    pub recent_sessions: Vec<AgentCodexSession>,
     pub runner_profile_id: Option<Uuid>,
+    pub runtime: AgentRuntimeProjection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +97,13 @@ pub struct GetCompanyAgentCodexTriggerForHumanInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompanyAgentCodexRuntimeOverview {
+    pub agent_id: Uuid,
+    pub trigger: Option<CompanyAgentCodexTriggerView>,
+    pub sessions: Vec<AgentCodexSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpsertCompanyAgentCodexTriggerForHumanInput {
     pub human_user_id: Uuid,
     pub company_id: Uuid,
@@ -151,6 +164,27 @@ pub struct AgentCodexWorkDecision {
     pub waiting_task_count: usize,
     pub asset_refresh_due: bool,
     pub pending_execution_intent_count: usize,
+    pub resume_existing_intents_directly: bool,
+    pub control_snapshot: AgentControlSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentControlSnapshot {
+    pub agent_profile_id: Uuid,
+    pub company_id: Uuid,
+    pub generated_at: DateTime<Utc>,
+    pub snapshot_version: String,
+    /// Pending message events visible to this Agent, including informational
+    /// group messages that must not wake the Agent on their own.
+    #[serde(default)]
+    pub unread_messages: Vec<AgentInboxEvent>,
+    pub actionable_events: Vec<AgentInboxEvent>,
+    pub ready_tasks: Vec<CompanyProjectTask>,
+    pub waiting_tasks: Vec<CompanyProjectTask>,
+    #[serde(default)]
+    pub task_readiness: Vec<ProjectTaskReadinessView>,
+    pub active_intents: Vec<AgentExecutionIntent>,
+    pub work_sessions: Vec<AgentCodexSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

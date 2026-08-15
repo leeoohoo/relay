@@ -157,6 +157,12 @@ fn profession_catalog_is_detailed_grouped_and_bilingual() {
         .skill_markdown
         .contains("问题接收、任务化与闭环"));
     assert!(project_manager
+        .skill_markdown
+        .contains("项目消息与任务状态值守"));
+    assert!(project_manager
+        .skill_markdown
+        .contains("高度敏感不等于制造高噪音"));
+    assert!(project_manager
         .skill_markdown_en
         .contains("Mandatory Phase-Gate Orchestration"));
     assert!(project_manager
@@ -165,6 +171,12 @@ fn profession_catalog_is_detailed_grouped_and_bilingual() {
     assert!(project_manager
         .skill_markdown_en
         .contains("Issue Intake and Task Closure"));
+    assert!(project_manager
+        .skill_markdown_en
+        .contains("Project Message and Task-State Watch"));
+    assert!(project_manager
+        .skill_markdown_en
+        .contains("newly Ready downstream"));
 
     let product_manager = catalog
         .iter()

@@ -59,6 +59,8 @@ pub struct ApiConfig {
     pub public_base_url: String,
     pub allowed_origins: Vec<String>,
     pub request_timeout_seconds: u64,
+    pub project_import_timeout_seconds: u64,
+    pub git_import_timeout_seconds: u64,
     pub max_request_body_bytes: usize,
     pub app_env: String,
     pub harness_mode: HarnessMode,
@@ -119,6 +121,16 @@ impl ApiConfig {
             .and_then(|value| value.parse().ok())
             .filter(|value| *value > 0)
             .unwrap_or(30);
+        let project_import_timeout_seconds = std::env::var("API_PROJECT_IMPORT_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(2 * 60 * 60);
+        let git_import_timeout_seconds = std::env::var("API_GIT_IMPORT_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(30 * 60);
         let max_request_body_bytes = std::env::var("API_MAX_REQUEST_BODY_BYTES")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -168,6 +180,8 @@ impl ApiConfig {
             public_base_url,
             allowed_origins,
             request_timeout_seconds,
+            project_import_timeout_seconds,
+            git_import_timeout_seconds,
             max_request_body_bytes,
             app_env,
             harness_mode,

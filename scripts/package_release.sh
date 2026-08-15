@@ -66,6 +66,7 @@ case "$PLATFORM" in
     cp "$ROOT_DIR/packaging/INSTALL-windows.md" "$PACKAGE_ROOT/INSTALL.md"
     chmod +x "$PACKAGE_ROOT/start.sh" "$PACKAGE_ROOT/scripts/"*.sh
     (cd "$TEMP_DIR" && zip -q -r "$OUTPUT_DIR/relay-windows-wsl2-x86_64.zip" "$PACKAGE_NAME")
+    tar -C "$TEMP_DIR" -czf "$OUTPUT_DIR/relay-windows-wsl2-x86_64.tar.gz" "$PACKAGE_NAME"
     ;;
 esac
 

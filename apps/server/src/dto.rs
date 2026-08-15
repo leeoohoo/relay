@@ -59,10 +59,14 @@ pub(super) struct ConsolePageQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct CodexRuntimeOverviewQuery {
+    pub(super) agent_ids: String,
+    pub(super) project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct CreateCompanyAgentRequest {
     pub(super) display_name: String,
-    pub(super) handle: String,
-    pub(super) persona: String,
     pub(super) org_unit_id: Option<Uuid>,
     pub(super) profession_key: String,
     pub(super) role_key: Option<String>,
@@ -220,6 +224,49 @@ pub(super) struct CreateCompanyProjectTaskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct OpenProjectTaskBlockerRequest {
+    pub(super) attempt_id: Option<Uuid>,
+    pub(super) blocker_type: String,
+    pub(super) summary: String,
+    pub(super) owner_agent_id: Option<Uuid>,
+    pub(super) resolution_condition: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ResolveProjectTaskBlockerRequest {
+    pub(super) status: String,
+    pub(super) resolution_summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct OpenProjectDiscussionThreadRequest {
+    pub(super) scope_type: String,
+    pub(super) subject_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct AddProjectTaskRelationRequest {
+    pub(super) target_task_id: Uuid,
+    pub(super) relation_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CreateProjectEvidenceRequest {
+    pub(super) attempt_id: Option<Uuid>,
+    pub(super) gate_id: Option<Uuid>,
+    pub(super) environment_id: Option<Uuid>,
+    pub(super) evidence_type: String,
+    pub(super) title: String,
+    pub(super) summary: String,
+    pub(super) result: String,
+    #[serde(default)]
+    pub(super) artifact_refs: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub(super) metrics: serde_json::Value,
+    pub(super) dedupe_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(super) struct UpdateCompanyProjectTaskRequest {
     pub(super) title: Option<String>,
     pub(super) description: Option<String>,
@@ -232,6 +279,65 @@ pub(super) struct UpdateCompanyProjectTaskRequest {
     #[serde(default)]
     pub(super) clear_due_at: bool,
     pub(super) depends_on_task_ids: Option<Vec<Uuid>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CreateProjectGateRequest {
+    pub(super) gate_key: String,
+    pub(super) gate_type: String,
+    pub(super) title: String,
+    pub(super) related_task_id: Option<Uuid>,
+    #[serde(default)]
+    pub(super) required_evidence: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct DecideProjectGateRequest {
+    pub(super) status: String,
+    pub(super) decision_summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SetProjectTaskGateRequirementRequest {
+    #[serde(default = "default_gate_required_status")]
+    pub(super) required_status: String,
+}
+
+fn default_gate_required_status() -> String {
+    "passed".into()
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CreateProjectEnvironmentRequest {
+    pub(super) environment_key: String,
+    pub(super) display_name: String,
+    pub(super) desired_revision: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ObserveProjectEnvironmentRequest {
+    pub(super) status: String,
+    pub(super) desired_revision: Option<String>,
+    pub(super) observed_revision: Option<String>,
+    pub(super) configuration_fingerprint: Option<String>,
+    #[serde(default)]
+    pub(super) health_summary: serde_json::Value,
+    pub(super) observed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub(super) services: Vec<ProjectEnvironmentServiceObservationInput>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SetProjectTaskEnvironmentRequirementRequest {
+    pub(super) required_revision: Option<String>,
+    #[serde(default)]
+    pub(super) required_services: Vec<String>,
+    #[serde(default = "default_true")]
+    pub(super) require_healthy: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]

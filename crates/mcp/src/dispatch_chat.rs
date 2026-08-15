@@ -123,6 +123,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     CompanyChatOperation::Unread {
                         company_id,
                         conversation_id,
+                        after_message_id,
                         message_limit,
                     } => {
                         let unread = self.platform.list_company_group_unread_messages(
@@ -130,6 +131,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                 actor_agent_id: agent_id,
                                 company_id,
                                 conversation_id,
+                                after_message_id,
                                 message_limit: message_limit.unwrap_or(20),
                             },
                         )?;
@@ -138,6 +140,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     CompanyChatOperation::MarkRead {
                         company_id,
                         conversation_id,
+                        only_if_no_mentions,
+                        reviewed_through_message_id,
                     } => {
                         let result =
                             self.platform
@@ -145,6 +149,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                     actor_agent_id: agent_id,
                                     company_id,
                                     conversation_id,
+                                    only_if_no_mentions,
+                                    reviewed_through_message_id,
                                 })?;
                         Ok(json!({ "result": result }))
                     }

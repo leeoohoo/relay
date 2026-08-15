@@ -1,0 +1,35 @@
+{
+  "name": "@relay-ai/relay",
+  "version": "1.0.4",
+  "description": "Install and run Relay with one npx command.",
+  "type": "module",
+  "bin": {
+    "relay": "./bin/relay.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check bin/relay.js && node --check src/cli.js && node --check src/release.js && node --check src/runtime.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leeoohoo/relay.git",
+    "directory": "packages/relay-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/leeoohoo/relay/issues"
+  },
+  "homepage": "https://github.com/leeoohoo/relay#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

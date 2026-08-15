@@ -23,6 +23,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                             | CONVERSATION_CONTEXT_COMPANY_ALL
                             | CONVERSATION_CONTEXT_COMPANY_GROUP
                             | CONVERSATION_CONTEXT_PROJECT_GROUP
+                            | CONVERSATION_CONTEXT_TASK_THREAD
+                            | CONVERSATION_CONTEXT_BLOCKER_THREAD
+                            | CONVERSATION_CONTEXT_GATE_THREAD
                     )
             })
             .ok_or_else(|| {
@@ -65,17 +68,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 notification_recipient_ids.push(owner_agent_id);
             }
         }
-        let mut wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
+        let wake_recipient_agent_ids = self.resolve_company_message_wake_recipients(
             &context,
             &notification_recipient_ids,
             &mentioned_agent_ids,
             input.mention_all,
         )?;
-        if let Some(owner_agent_id) = project_owner_followup_agent_id {
-            if !wake_recipient_agent_ids.contains(&owner_agent_id) {
-                wake_recipient_agent_ids.push(owner_agent_id);
-            }
-        }
         let message = MessageView {
             id: Uuid::new_v4(),
             conversation_id: input.conversation_id,
@@ -97,6 +95,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             runtime_generated,
             &notification_recipient_ids,
             MessageDeliveryPolicy {
+                project_id: context.project_id,
                 mentioned_agent_ids: &mentioned_agent_ids,
                 mention_all: input.mention_all,
                 wake_recipient_agent_ids: &wake_recipient_agent_ids,
@@ -149,14 +148,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ));
         }
 
-        let mut recipients = if context.context_type == CONVERSATION_CONTEXT_COMPANY_DIRECT
-            || mention_all
-            || normalized_mentions.is_empty()
-        {
-            participants
-        } else {
-            normalized_mentions.clone()
-        };
+        // Delivery and wake-up are deliberately separate concerns. Every
+        // conversation member receives an Inbox event for every message so
+        // their unread view is complete. Mentions only narrow the set that is
+        // woken immediately in `resolve_company_message_wake_recipients`.
+        let mut recipients = participants;
         if let Some(sender_agent_id) = sender_agent_id {
             recipients.retain(|agent_id| *agent_id != sender_agent_id);
         }
@@ -192,7 +188,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .iter()
             .copied()
             .filter(|agent_id| {
-                tasks.iter().any(|task| {
+                let message_subscription_allows_immediate = self
+                    .project_event_subscription_mode(project_id, *agent_id, EVENT_CATEGORY_MESSAGE)
+                    .is_ok_and(|mode| mode == EVENT_SUBSCRIPTION_IMMEDIATE);
+                let task_subscription_allows_immediate = self
+                    .project_event_subscription_mode(project_id, *agent_id, EVENT_CATEGORY_TASK)
+                    .is_ok_and(|mode| mode == EVENT_SUBSCRIPTION_IMMEDIATE);
+                let has_executable_task = tasks.iter().any(|task| {
                     task.assignee_agent_id == Some(*agent_id)
                         && matches!(
                             task.status.as_str(),
@@ -212,7 +214,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                                         )
                                     })
                             })
-                })
+                });
+                message_subscription_allows_immediate
+                    || (has_executable_task && task_subscription_allows_immediate)
             })
             .collect())
     }

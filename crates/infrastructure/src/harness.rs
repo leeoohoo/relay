@@ -23,8 +23,9 @@ use ai_chat_shared::{AppError, AppResult};
 use crate::config::{ApiConfig, HarnessMode};
 use crate::git_credentials::GitCredentialStore;
 use crate::project_git::{
-    generated_repository_identifier, initial_project_access_token_identifier,
-    ProjectGitProvisionRequest, ProjectGitProvisioner, ProvisionedProjectGit,
+    ensure_remote_default_branch, generated_repository_identifier,
+    initial_project_access_token_identifier, ProjectGitProvisionRequest, ProjectGitProvisioner,
+    ProvisionedProjectGit,
 };
 
 mod project;
@@ -92,6 +93,7 @@ impl<R: PlatformRepository> ProjectGitProvisioner for HarnessProjectGitProvision
                     request.project_id,
                     request.project_name.as_str(),
                     request.description.as_str(),
+                    request.initialize_default_branch,
                     &git_credentials,
                 )
                 .await
@@ -265,6 +267,7 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         project_id: Uuid,
         project_name: &str,
         description: &str,
+        initialize_default_branch: bool,
         git_credentials: &GitCredentialStore,
     ) -> AppResult<ProvisionedProjectGit> {
         let account = self
@@ -311,7 +314,7 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             is_public: false,
             readme: false,
         };
-        let repository = match self
+        let (repository, repository_created) = match self
             .request_json::<HarnessRepositoryResponse, _>(
                 Method::POST,
                 format!("{api_base_url}/api/v1/repos").as_str(),
@@ -320,7 +323,7 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             )
             .await
         {
-            Ok(repository) => repository,
+            Ok(repository) => (repository, true),
             Err(error) if error.is_already_exists() => self
                 .request_json::<HarnessRepositoryResponse, ()>(
                     Method::GET,
@@ -334,6 +337,7 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                     None,
                 )
                 .await
+                .map(|repository| (repository, false))
                 .map_err(|error| AppError::Internal(format!("read Harness repository: {error}")))?,
             Err(error) => {
                 return Err(AppError::Internal(format!(
@@ -352,8 +356,8 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
             Ok(token) => token,
             Err(error) => {
                 let original = AppError::Internal(format!("create Harness project token: {error}"));
-                let cleanup_error = self
-                    .cleanup_project_git_resources(
+                let cleanup_error = if repository_created {
+                    self.cleanup_project_git_resources(
                         human_user_id,
                         project_id,
                         repository_identifier.as_str(),
@@ -361,7 +365,16 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                         git_credentials,
                     )
                     .await
-                    .err();
+                } else {
+                    self.cleanup_project_git_credentials(
+                        human_user_id,
+                        project_id,
+                        None,
+                        git_credentials,
+                    )
+                    .await
+                }
+                .err();
                 return Err(with_cleanup_error(original, cleanup_error));
             }
         };
@@ -373,8 +386,8 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         let auth_profile = match auth_profile {
             Ok(profile) => profile,
             Err(error) => {
-                let cleanup_error = self
-                    .cleanup_project_git_resources(
+                let cleanup_error = if repository_created {
+                    self.cleanup_project_git_resources(
                         human_user_id,
                         project_id,
                         repository_identifier.as_str(),
@@ -382,18 +395,60 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
                         git_credentials,
                     )
                     .await
-                    .err();
+                } else {
+                    self.cleanup_project_git_credentials(
+                        human_user_id,
+                        project_id,
+                        Some(project_token.identifier.as_str()),
+                        git_credentials,
+                    )
+                    .await
+                }
+                .err();
                 return Err(with_cleanup_error(error, cleanup_error));
             }
         };
+        let default_branch = if repository.default_branch.trim().is_empty() {
+            "main".to_string()
+        } else {
+            repository.default_branch
+        };
+        if initialize_default_branch {
+            if let Err(error) = ensure_remote_default_branch(
+                project_id,
+                push_url.as_str(),
+                default_branch.as_str(),
+                auth_profile.as_str(),
+                project_name,
+                description,
+                git_credentials,
+            ) {
+                let cleanup_error = if repository_created {
+                    self.cleanup_project_git_resources(
+                        human_user_id,
+                        project_id,
+                        repository_identifier.as_str(),
+                        Some(project_token.identifier.as_str()),
+                        git_credentials,
+                    )
+                    .await
+                } else {
+                    self.cleanup_project_git_credentials(
+                        human_user_id,
+                        project_id,
+                        Some(project_token.identifier.as_str()),
+                        git_credentials,
+                    )
+                    .await
+                }
+                .err();
+                return Err(with_cleanup_error(error, cleanup_error));
+            }
+        }
         Ok(ProvisionedProjectGit {
             remote_url,
             push_url: Some(push_url),
-            default_branch: if repository.default_branch.trim().is_empty() {
-                "main".into()
-            } else {
-                repository.default_branch
-            },
+            default_branch,
             auth_profile,
             repository_identifier,
             access_token_identifier: project_token.identifier,

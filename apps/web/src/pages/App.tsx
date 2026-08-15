@@ -51,7 +51,9 @@ export function App() {
   const [approvals, setApprovals] = useState<AgentToolApproval[]>([]);
   const [dismissedApprovalIds, setDismissedApprovalIds] = useState<Set<string>>(() => new Set());
   const [realtimeEvent, setRealtimeEvent] = useState<CompanyRealtimeEvent | null>(null);
+  const [messageRealtimeEvents, setMessageRealtimeEvents] = useState<CompanyRealtimeEvent[]>([]);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const realtimeRefreshInFlightRef = useRef(false);
   const pendingRealtimeRegionsRef = useRef<Set<CompanyConsoleRegion>>(new Set());
 
   useEffect(() => {
@@ -108,6 +110,10 @@ export function App() {
   }, [selectedCompanyId, session?.token]);
 
   useEffect(() => {
+    setMessageRealtimeEvents([]);
+  }, [selectedCompanyId]);
+
+  useEffect(() => {
     setApprovals([]);
     setDismissedApprovalIds(new Set());
     if (!session || !selectedCompanyId || !companyConsole || !["owner", "admin"].includes(companyConsole.human_membership.role)) return;
@@ -125,10 +131,8 @@ export function App() {
       }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 5_000);
     return () => {
       active = false;
-      window.clearInterval(timer);
     };
   }, [session?.token, selectedCompanyId, companyConsole?.human_membership.role]);
 
@@ -137,6 +141,12 @@ export function App() {
     token: session?.token ?? null,
     onEvent: (event) => {
       setRealtimeEvent(event);
+      if (event.event_type === "message.created") {
+        // Message events can arrive immediately before inbox/runtime events. Keep
+        // them in a small independent queue so React batching cannot replace the
+        // message notification with the last event from the same SSE chunk.
+        setMessageRealtimeEvents((current) => [...current, event].slice(-200));
+      }
       if (event.event_type.startsWith("agent.runtime.approval_")) {
         void refreshApprovals().catch(() => undefined);
       }
@@ -144,17 +154,10 @@ export function App() {
         pendingRealtimeRegionsRef.current.add(region);
       }
       if (pendingRealtimeRegionsRef.current.size === 0) return;
-      if (realtimeRefreshTimerRef.current !== null) {
-        window.clearTimeout(realtimeRefreshTimerRef.current);
-      }
-      realtimeRefreshTimerRef.current = window.setTimeout(() => {
-        realtimeRefreshTimerRef.current = null;
-        if (selectedCompanyId && session?.token) {
-          const regions = new Set(pendingRealtimeRegionsRef.current);
-          pendingRealtimeRegionsRef.current.clear();
-          void refreshCompanyRegions(selectedCompanyId, session.token, regions);
-        }
-      }, 100);
+      // Keep the first timer as a fixed coalescing window. Clearing it for every
+      // event can indefinitely postpone a refresh under sustained traffic, and
+      // previously left a stale timer id that prevented scheduling altogether.
+      scheduleRealtimeRegionRefresh();
     },
   });
 
@@ -204,6 +207,23 @@ export function App() {
     } catch (requestError) {
       showError(requestError);
     }
+  }
+
+  function scheduleRealtimeRegionRefresh() {
+    if (realtimeRefreshTimerRef.current !== null || realtimeRefreshInFlightRef.current) return;
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      if (!selectedCompanyId || !session?.token || pendingRealtimeRegionsRef.current.size === 0) return;
+      const companyId = selectedCompanyId;
+      const token = session.token;
+      const regions = new Set(pendingRealtimeRegionsRef.current);
+      pendingRealtimeRegionsRef.current.clear();
+      realtimeRefreshInFlightRef.current = true;
+      void refreshCompanyRegions(companyId, token, regions).finally(() => {
+        realtimeRefreshInFlightRef.current = false;
+        if (pendingRealtimeRegionsRef.current.size > 0) scheduleRealtimeRegionRefresh();
+      });
+    }, 250);
   }
 
   async function loadMoreCompanyRegion(region: "agents" | "conversations" | "projects") {
@@ -432,6 +452,7 @@ export function App() {
               <ProjectsView
                 consoleData={companyConsole}
                 token={session.token}
+                realtimeEvent={realtimeEvent}
                 onChanged={refreshCompany}
                 onError={showError}
                 onClearError={() => setError("")}
@@ -453,6 +474,7 @@ export function App() {
                 humanUser={session.user}
                 token={session.token}
                 realtimeEvent={realtimeEvent}
+                messageRealtimeEvents={messageRealtimeEvents}
                 approvals={approvals}
                 onReview={reviewApproval}
                 onChanged={refreshCompany}

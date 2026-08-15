@@ -187,6 +187,7 @@ export function AgentRow(props: {
   const [roleKey, setRoleKey] = useState(props.agent.membership.role_key);
   const [professionKey, setProfessionKey] = useState(currentProfessionKey);
   const [busy, setBusy] = useState(false);
+  const persistedPermissionsKey = [...props.agent.membership.permissions].sort().join("\u0000");
   const unit = props.consoleData.org_units.find((item) => item.id === props.agent.membership.org_unit_id);
   const active = props.agent.membership.employment_status === "active";
   const provisioning = props.agent.membership.employment_status === "provisioning";
@@ -199,10 +200,19 @@ export function AgentRow(props: {
 
   useEffect(() => {
     setPermissions(props.agent.membership.permissions);
+  }, [persistedPermissionsKey]);
+
+  useEffect(() => {
     setScopeId(props.agent.membership.staffing_scope_org_unit_id ?? "");
+  }, [props.agent.membership.staffing_scope_org_unit_id]);
+
+  useEffect(() => {
     setRoleKey(props.agent.membership.role_key);
+  }, [props.agent.membership.role_key]);
+
+  useEffect(() => {
     setProfessionKey(currentProfessionKey);
-  }, [props.agent.membership.permissions, props.agent.membership.role_key, props.agent.membership.staffing_scope_org_unit_id, currentProfessionKey]);
+  }, [currentProfessionKey]);
 
   async function changeStatus(action: "activate" | "suspend" | "reactivate" | "terminate") {
     const labels = { activate: "激活", suspend: "暂停", reactivate: "重新激活", terminate: "永久裁撤" };

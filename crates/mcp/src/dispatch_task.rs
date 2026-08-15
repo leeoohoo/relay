@@ -1,5 +1,10 @@
 use super::handler::parse_input;
 use super::*;
+use ai_chat_application::{
+    AddProjectTaskRelationInput, CreateProjectEvidenceInput, FinishProjectTaskAttemptInput,
+    OpenProjectTaskBlockerInput, RemoveProjectTaskRelationInput, ResolveProjectTaskBlockerInput,
+    StartProjectTaskAttemptInput,
+};
 
 impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
     pub(super) fn execute_company_task_tool(
@@ -11,6 +16,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
     ) -> AppResult<Value> {
         match tool_name {
             "company.task" => {
+                validate_company_task_input(&input)?;
                 let input: CompanyTaskToolInput = parse_input(input)?;
                 let _ = input.idempotency_key;
                 match input.operation {
@@ -44,11 +50,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             .into_iter()
                             .filter(|entry| entry.task_id == task_id)
                             .collect::<Vec<_>>();
+                        let readiness = self.platform.get_project_task_readiness(
+                            agent_id, company_id, project_id, task_id,
+                        )?;
                         Ok(json!({
                             "task": task,
                             "project": project.project,
                             "dependencies": dependencies,
                             "status_history": status_history,
+                            "readiness": readiness,
                         }))
                     }
                     CompanyTaskOperation::List {
@@ -118,16 +128,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                             })
                                     })
                                     .collect::<Vec<_>>();
-                                let unresolved_dependencies = dependencies
-                                    .iter()
-                                    .filter(|dependency| {
-                                        dependency.get("resolved").and_then(|value| value.as_bool())
-                                            != Some(true)
-                                    })
-                                    .cloned()
-                                    .collect::<Vec<_>>();
-                                let can_start = unresolved_dependencies.is_empty();
-                                if can_start {
+                                let readiness = self.platform.get_project_task_readiness(
+                                    agent_id,
+                                    company_id,
+                                    project.project.id,
+                                    task.id,
+                                )?;
+                                if readiness.can_start {
                                     ready_count += 1;
                                 } else {
                                     waiting_count += 1;
@@ -137,15 +144,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                                     "project_name": project.project.name,
                                     "project_status": project.project.status,
                                     "task": task,
-                                    "readiness": if can_start { "ready" } else { "waiting_for_dependencies" },
-                                    "can_start": can_start,
+                                    "readiness": readiness.readiness,
+                                    "can_start": readiness.can_start,
                                     "dependencies": dependencies,
-                                    "unresolved_dependencies": unresolved_dependencies,
-                                    "guidance": if can_start {
-                                        "任务前置已满足，可以按职责开始处理。"
-                                    } else {
-                                        "前置任务尚未完成：本轮保持任务原状态，不发送等待占位消息，结束后由下一次定时检查重新判断。"
-                                    },
+                                    "waiting_reasons": readiness.waiting_reasons,
+                                    "suggested_actions": readiness.suggested_actions,
+                                    "gate_requirements": readiness.gate_requirements,
+                                    "environment_requirements": readiness.environment_requirements,
+                                    "open_blockers": readiness.open_blockers,
                                 }));
                             }
                         }
@@ -274,6 +280,97 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             "removed": true
                         }))
                     }
+                    CompanyTaskOperation::ExecutionGet {
+                        company_id,
+                        project_id,
+                        task_id,
+                    } => Ok(
+                        json!({ "execution": self.platform.get_project_task_execution(agent_id, company_id, project_id, task_id)? }),
+                    ),
+                    CompanyTaskOperation::AttemptStart {
+                        company_id,
+                        project_id,
+                        task_id,
+                        intent_id,
+                        attempt_type,
+                        objective,
+                    } => Ok(
+                        json!({ "attempt": self.platform.start_project_task_attempt(StartProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, intent_id, attempt_type: attempt_type.into_string(), objective })? }),
+                    ),
+                    CompanyTaskOperation::AttemptFinish {
+                        company_id,
+                        project_id,
+                        task_id,
+                        attempt_id,
+                        status,
+                        result_summary,
+                        failure_category,
+                    } => Ok(
+                        json!({ "attempt": self.platform.finish_project_task_attempt(FinishProjectTaskAttemptInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, status: status.into_string(), result_summary, failure_category })? }),
+                    ),
+                    CompanyTaskOperation::BlockerOpen {
+                        company_id,
+                        project_id,
+                        task_id,
+                        attempt_id,
+                        blocker_type,
+                        summary,
+                        owner_agent_id,
+                        resolution_condition,
+                    } => Ok(
+                        json!({ "blocker": self.platform.open_project_task_blocker(OpenProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, blocker_type: blocker_type.into_string(), summary, owner_agent_id, resolution_condition })? }),
+                    ),
+                    CompanyTaskOperation::BlockerResolve {
+                        company_id,
+                        project_id,
+                        task_id,
+                        blocker_id,
+                        status,
+                        resolution_summary,
+                    } => Ok(
+                        json!({ "blocker": self.platform.resolve_project_task_blocker(ResolveProjectTaskBlockerInput { actor_agent_id: agent_id, company_id, project_id, task_id, blocker_id, status: status.into_string(), resolution_summary })? }),
+                    ),
+                    CompanyTaskOperation::RelationAdd {
+                        company_id,
+                        project_id,
+                        source_task_id,
+                        target_task_id,
+                        relation_type,
+                    } => Ok(
+                        json!({ "relation": self.platform.add_project_task_relation(AddProjectTaskRelationInput { actor_agent_id: agent_id, company_id, project_id, source_task_id, target_task_id, relation_type: relation_type.into_string() })? }),
+                    ),
+                    CompanyTaskOperation::RelationRemove {
+                        company_id,
+                        project_id,
+                        relation_id,
+                    } => {
+                        self.platform.remove_project_task_relation(
+                            RemoveProjectTaskRelationInput {
+                                actor_agent_id: agent_id,
+                                company_id,
+                                project_id,
+                                relation_id,
+                            },
+                        )?;
+                        Ok(json!({ "relation_id": relation_id, "removed": true }))
+                    }
+                    CompanyTaskOperation::EvidenceCreate {
+                        company_id,
+                        project_id,
+                        task_id,
+                        attempt_id,
+                        gate_id,
+                        environment_id,
+                        evidence_type,
+                        title,
+                        summary,
+                        result,
+                        artifact_refs,
+                        metrics,
+                        dedupe_key,
+                    } => Ok(
+                        json!({ "evidence": self.platform.create_project_evidence(CreateProjectEvidenceInput { actor_agent_id: agent_id, company_id, project_id, task_id, attempt_id, gate_id, environment_id, evidence_type: evidence_type.into_string(), title, summary, result: result.into_string(), artifact_refs, metrics: Value::Object(metrics.into_iter().collect()), dedupe_key })? }),
+                    ),
                 }
             }
 

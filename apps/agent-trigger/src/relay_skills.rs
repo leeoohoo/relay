@@ -1,4 +1,9 @@
 use super::*;
+use ai_chat_application::AgentControlSnapshot;
+
+mod control_snapshot;
+pub(crate) use control_snapshot::normalize_codex_prompt;
+use control_snapshot::render_control_snapshot;
 
 pub(super) struct WakeupPromptContext<'a> {
     pub(super) agent: &'a AgentProfile,
@@ -8,6 +13,7 @@ pub(super) struct WakeupPromptContext<'a> {
     pub(super) active_task_count: usize,
     pub(super) waiting_task_count: usize,
     pub(super) asset_refresh_due: bool,
+    pub(super) control_snapshot: &'a AgentControlSnapshot,
     pub(super) workspace: &'a PreparedGitWorkspace,
     pub(super) relay_skills: &'a PreparedRelaySkills,
 }
@@ -31,6 +37,7 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         active_task_count,
         waiting_task_count,
         asset_refresh_due,
+        control_snapshot,
         workspace,
         relay_skills,
     } = context;
@@ -47,17 +54,19 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         .as_deref()
         .map(|name| format!("，并在涉及人员管理时同时使用 `${name}`"))
         .unwrap_or_default();
+    let snapshot = render_control_snapshot(control_snapshot);
     format!(
         "你是 Relay 公司 Agent @{handle}（{display_name}），岗位为 {job_title}。Relay 已通过本轮专属 run token 固定并认证此身份，这是控制会话的一次有效唤醒。{project_context}\n\
          不要向 Human、同事或其他工具重新询问或确认“我是谁”；不要把身份核对作为工作步骤或状态汇报。`agent.bootstrap` 只用于刷新公司、权限、会话和工作状态，不用于协商身份；若 MCP 返回未认证或身份绑定错误，将其视为运行环境故障并停止本轮。\n\
          当前工作目录是专属于本 Agent 的 Relay 控制工作区，worktree key 为 {worktree_key}。这里用于消息分诊、协调和派工，不是项目代码工作区。\n\
          必须先使用 `${employee_skill}`、`${profession_skill}` 和 `${session_skill}`{staffing_skill}；职业执行 Skill 在控制会话中同样生效，用于判断职责、拆解、质量要求和是否需要启动项目工作。Skill 与 MCP 返回的实时权限冲突时，以 MCP 权限为准。\n\
          宿主机 Codex CLI 已加载管理员启用的插件。当前任务需要浏览器、文档、表格、设计、安全扫描或外部服务能力时，优先使用匹配的已安装插件及其 Skill/MCP；不要假设未安装的插件可用，也不要自行绕过插件认证策略。\n\
-         先调用 required Relay MCP 的 agent.bootstrap 刷新动态公司上下文并查看其中的 work_sessions，再调用 company.task 的 my 和 agent.inbox.wait 读取真实待办；当前快速检查发现 pending inbox {pending_inbox_count} 条、可执行 assigned tasks {active_task_count} 个、等待前置 tasks {waiting_task_count} 个。需要更多会话信息时调用 agent.work_session 的 list/get。不要在输出中复述身份卡。\n\
+         Relay 已在启动前生成本轮一次性 Control Snapshot，版本为 `{snapshot_version}`。它已经包含属于你的未读消息、可行动事件、Ready/Waiting 任务、活动 Intent 和项目工作会话；不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait。只有操作返回 stale/conflict，或本轮明确改变了相关状态后仍需继续决策时，才调用 agent.control_snapshot 刷新一次。Trigger 托管控制会话禁止长轮询，处理完当前快照后立即结束。当前快照统计：unread messages {unread_message_count} 条、actionable inbox {pending_inbox_count} 条、Ready tasks {active_task_count} 个、Waiting tasks {waiting_task_count} 个。\n\
+         当前 Control Snapshot：{snapshot}\n\
          你的 Agent 核心与控制长期记忆已经固化在 `${employee_skill}` 中；短期记忆只在需要历史线索时通过 agent.memory search 查询。控制会话不得读取或固化其他项目的实现细节。\n\
          {asset_refresh_context} 如果它或其他事项需要项目执行，调用 agent.work_session 的 dispatch 创建结构化 Intent；项目工作会话由 Relay 按 Agent + Project 绑定解析。不要在控制工作区修改代码、运行项目测试、提交 Git，也不要自行选择 Thread ID。\n\
-         Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
-         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
+         处理消息时必须先阅读 `unread_messages`：如果一条 @、私聊或可行动消息属于某个会话，先按时间顺序理解该会话内更早的全部未读消息，不能只按最后一条 @ 判断需求。快照最多直接展示前 50 条；`unread_messages_truncated=true` 时，用 `company.chat unread` 按会话分页继续读取。每页都要检查 `remaining_has_mentions` 和 `remaining_mention_count`。Human 私聊必须给出实质回复后才能 ack：说明你理解的请求、当前处理结果或明确下一步；如果需要派发项目工作，先回复 Human 再 dispatch。不得用纯粹的“收到”敷衍。其他群消息仅在明确 @、正式任务要求沟通，或你掌握能避免交付失败的新证据时发送消息。\n\
+         已经处理或确认无需行动的事件应 ack；派发给工作会话的事件可以在成功创建 Intent 后 ack。处理完某个群会话在本轮快照中的未读上下文后，调用 `company.chat mark_read` 标记该会话已读。如果分页结果 `can_quick_mark_read=true`，可以传 `only_if_no_mentions=true` 和本页 `next_cursor` 作为 `reviewed_through_message_id` 快速清理余下无 @ 消息；后端发现后续仍有 @ 时会拒绝。Relay 会保护本轮启动后新到达的消息，不会被旧一轮误清除。不要输出给 Trigger 解析的自定义 JSON，派工只能使用 agent.work_session。\n\
          如果没有分配给你的可执行工作、依赖尚未完成或还没有轮到你，不发送 Relay 消息，直接结束本轮。切勿操作当前工作目录之外的项目。",
         handle = agent.handle.trim_start_matches('@'),
         display_name = agent.display_name,
@@ -66,6 +75,8 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         employee_skill = relay_skills.employee_name,
         profession_skill = relay_skills.profession_name,
         session_skill = relay_skills.session_name,
+        snapshot_version = control_snapshot.snapshot_version,
+        unread_message_count = control_snapshot.unread_messages.len(),
     )
 }
 
@@ -110,6 +121,7 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
          不要重新确认、询问或汇报自己的身份，也不要为了身份调用 `agent.bootstrap`；认证异常应作为运行环境故障直接停止。\n\
          当前工作目录是该 Agent 在本项目的隔离工作区，worktree key 为 {worktree_key}，分支为 {branch}。\n\
          必须使用 `${employee_skill}`、`${profession_skill}`、`${session_skill}` 和 `${project_skill}`。职业 Skill 与项目 Rule 的流程和质量门槛不能省略。\n\
+         Relay 运行时标识：company_id={company_id}，project_id={project_id}。调用 company.project、company.task 或其他要求公司/项目参数的 Relay 工具时，必须直接使用这两个完整 UUID，不得从 Git 命名空间猜测，也不得为了查找它们扫描工作区或调用 `agent.bootstrap`。\n\
          本轮 Execution Intent ID：{intent_id}\n\
          目标：{objective}\n\
          优先级：{priority}\n\
@@ -117,7 +129,7 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
          来源 Event IDs：{event_ids}\n\
          验收标准：\n{criteria}\n\
          {checkpoint}\
-         直接用 company.project get 和 company.task get/list 核实当前项目与任务实时状态。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
+         直接用 company.project get 和 company.task execution_get 核实当前项目、任务、门禁、环境、依赖和阻塞的实时状态。开始 Attempt 前必须确认 execution.readiness.can_start=true；若为 false，按 waiting_reasons 与 suggested_actions 推进或通知对应责任人，不得绕过门禁/环境，也不得反复启动无效 Attempt。只处理这个项目和本 Intent，不要重新处理控制会话的其他消息。\n\
          项目工作会话不承担 Inbox 分诊：忽略 Relay 工具响应中的 inbox_notice，不调用 agent.inbox.wait/ack，不因群聊、私聊或新事件中断当前 Intent。通信事件统一留给本 Agent 的控制会话；只有本 Intent 明确要求的最终项目同步可以在交付收口时发送一次。\n\
          完成必要的设计、实现、测试、文档和 Git 提交推送；不要直接写受保护默认分支。更新关联任务与项目状态。\n\
          长期记忆只保存稳定知识：跨项目通用内容使用 agent scope，当前项目特有内容使用 project scope 并带 project_id；阶段性线索使用 short_term。禁止保存聊天原文、任务正文、日志和凭证。\n\
@@ -132,6 +144,8 @@ pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {
         profession_skill = context.relay_skills.profession_name,
         session_skill = context.relay_skills.session_name,
         project_skill = project_skill,
+        company_id = context.project.company_id,
+        project_id = context.project.id,
         intent_id = context.intent.id,
         objective = context.intent.objective,
         priority = context.intent.priority,
@@ -153,6 +167,13 @@ pub(super) fn prepare_relay_skills(
 ) -> AppResult<PreparedRelaySkills> {
     let profession = infer_company_profession(Some(job_title));
     let identity_token = relay_skill_identity_token(agent);
+    let agent_id_token = agent
+        .id
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(8)
+        .collect::<String>();
     let managed_prefix = format!("relay-{identity_token}-");
     let employee_name = format!("{managed_prefix}employee");
     let profession_name = format!(
@@ -242,8 +263,8 @@ pub(super) fn prepare_relay_skills(
             runtime_skills_root.display()
         ))
     })?;
-    remove_stale_managed_skills(&skills_root, &managed_prefix)?;
-    remove_stale_managed_skills(&runtime_skills_root, &managed_prefix)?;
+    remove_stale_managed_skills(&skills_root, &managed_prefix, &agent_id_token)?;
+    remove_stale_managed_skills(&runtime_skills_root, &managed_prefix, &agent_id_token)?;
     write_and_link_managed_skill(
         &runtime_skills_root,
         &skills_root,
@@ -297,9 +318,9 @@ pub(super) fn session_skill_template(bundle_kind: &str, skill_language: &str) ->
         return "---\nname: relay-control-session\ndescription: Relay 控制会话的强制工作流，用于 Inbox 分诊、通信、任务协调、工作会话选择和结构化项目派工。每次控制会话唤醒都必须使用。\n---\n\n# Relay 控制会话\n\n- 决策前检查 Inbox、分配任务、项目提示和工作会话目录。\n- 判断职责归属、任务拆解、质量要求和是否需要项目执行时，必须同时遵循职业 Skill。\n- 通信和协调在本会话完成；不得在控制工作区修改项目文件或执行项目交付。\n- 临时脚本和临时数据必须使用 Relay 托管的 `$TMPDIR`；禁止直接使用 `/tmp`、`/private/tmp` 或宿主机特定临时路径。\n- 只有确实需要项目工作时，才调用 `agent.work_session` 的 `dispatch`，提供项目 ID、精简目标、验收标准、关联任务 ID 和来源事件 ID；只有权限缓存过期或会话内部状态不可恢复时才使用 `replace_session: true`。\n- 会话由项目绑定解析，禁止自行编造或传递 Codex Thread ID。\n- 不需要项目执行时，直接回复或 Ack 后结束，不得创建占位派工。\n- Agent 与控制长期记忆可以指导路由；项目记忆只属于被选中的工作会话。\n".into();
     }
     if english {
-        return "---\nname: relay-project-worker\ndescription: Mandatory Relay project-worker workflow for executing one structured intent in the project-bound workspace, validating the result, committing delivery, and updating Relay state. Use on every project worker turn.\n---\n\n# Relay Project Worker\n\n- Execute only the supplied project-bound intent and verify the live project, tasks, and Rule through Relay MCP.\n- Follow the profession Skill and project Skill throughout implementation.\n- This worker session never triages Inbox events. Ignore `inbox_notice`, do not call `agent.inbox.wait` or `agent.inbox.ack`, and leave chat/event handling to the Agent's control session. Only send one final project update when the current Intent explicitly requires it.\n- Use only the current project workspace; never inspect another project workspace.\n- Use the Relay-managed `$TMPDIR` for temporary scripts and scratch data. Never address `/tmp`, `/private/tmp`, or host-specific temporary paths directly.\n- Repository-wide format/lint commands must target tracked product paths or explicitly exclude `.agents/` and `.relay-runtime-skills/`; never mutate Relay runtime Skill files.\n- For browser automation or Web validation, use the Relay-managed `chrome-devtools` MCP tools. Do not use Codex desktop Browser/Chrome, Computer Use, or raw CDP as a fallback. Navigation to an explicit website URL, new pages with a target URL, and file uploads must continue through Relay's approval center; reload, back, forward, and blank-page operations do not require Human approval.\n- When `take_screenshot` or `take_snapshot` must save evidence, its `filePath` must be a relative path below `.relay/browser-artifacts/` (for example `.relay/browser-artifacts/login.png`). The browser container cannot write anywhere else in the project. After the tool succeeds, use the Shell tool to copy the artifact into the intended tracked project path. Do not retry project absolute paths, `/docs`, or container `/tmp`.\n- Complete the required design, implementation, validation, documentation, and Git delivery steps.\n- Update tasks and project status with verified results. Save project-scoped memory only for durable project knowledge.\n- Finish with a concise checkpoint: completed work, pending work, blockers, next steps, branch, and commit.\n".into();
+        return "---\nname: relay-project-worker\ndescription: Mandatory Relay project-worker workflow for executing one structured intent in the project-bound workspace, validating the result, committing delivery, and updating Relay state. Use on every project worker turn.\n---\n\n# Relay Project Worker\n\n- Execute only the supplied project-bound intent and verify the live project, tasks, and Rule through Relay MCP.\n- Follow the profession Skill and project Skill throughout implementation.\n- This worker session never triages Inbox events. Ignore `inbox_notice`, do not call `agent.inbox.wait` or `agent.inbox.ack`, and leave chat/event handling to the Agent's control session. Only send one final project update when the current Intent explicitly requires it.\n- Use only the current project workspace; never inspect another project workspace.\n- Use the Relay-managed `$TMPDIR` for temporary scripts and scratch data. Never address `/tmp`, `/private/tmp`, or host-specific temporary paths directly.\n- Repository-wide format/lint commands must target tracked product paths or explicitly exclude `.agents/` and `.relay-runtime-skills/`; never mutate Relay runtime Skill files.\n- For browser automation or Web validation, use the Relay-managed `chrome-devtools` MCP tools. Do not use Codex desktop Browser/Chrome, Computer Use, or raw CDP as a fallback. Navigation to an explicit website URL, new pages with a target URL, and file uploads must continue through Relay's approval center; reload, back, forward, and blank-page operations do not require Human approval.\n- When `take_screenshot` or `take_snapshot` must save evidence, its `filePath` must be a relative path below `.relay/browser-artifacts/` (for example `.relay/browser-artifacts/login.png`). The browser container cannot write anywhere else in the project. After the tool succeeds, use the Shell tool to copy the artifact into the intended tracked project path. Do not retry project absolute paths, `/docs`, or container `/tmp`.\n- Complete the required design, implementation, validation, documentation, and Git delivery steps.\n- Update tasks and project status with verified results. For fixed Relay MCP fields, use only values exposed by the tool schema; if validation fails, read the returned allowed values and correct the input instead of repeating the same call or inventing another value. Save project-scoped memory only for durable project knowledge.\n- Finish with a concise checkpoint: completed work, pending work, blockers, next steps, branch, and commit.\n".into();
     }
-    "---\nname: relay-project-worker\ndescription: Relay 项目工作会话的强制执行流程，用于在项目绑定工作区完成一个结构化 Intent、验证结果、提交交付并回写 Relay 状态。每次项目工作会话都必须使用。\n---\n\n# Relay 项目工作会话\n\n- 只执行本轮传入且已绑定当前项目的 Intent，并通过 Relay MCP 核实项目、任务和 Rule 的实时状态。\n- 实施全过程必须遵循职业 Skill 和当前项目 Skill。\n- 工作会话不分诊 Inbox：忽略 `inbox_notice`，不调用 `agent.inbox.wait` 或 `agent.inbox.ack`，群聊、私聊和事件统一留给控制会话；只有当前 Intent 明确要求时，才在交付收口时发送一次最终项目同步。\n- 只能使用当前项目工作区，禁止检查其他项目工作区。\n- 临时脚本和临时数据必须使用 Relay 托管的 `$TMPDIR`；禁止直接使用 `/tmp`、`/private/tmp` 或宿主机特定临时路径。\n- 全仓格式化或检查命令必须限定到已跟踪的业务目录，或明确排除 `.agents/` 与 `.relay-runtime-skills/`；禁止修改 Relay 运行时 Skill 文件。\n- 需要浏览器自动化或 Web 验收时，必须使用 Relay 托管的 `chrome-devtools` MCP；不得改用 Codex 桌面 Browser/Chrome、Computer Use 或 raw CDP 绕过。只有携带明确目标 URL 的网站导航、新建目标页面和文件上传需要进入 Relay 审批中心；刷新、前进、后退和空白页操作无需 Human 审批。\n- `take_screenshot` 或 `take_snapshot` 需要落盘保存证据时，`filePath` 必须使用 `.relay/browser-artifacts/` 下的相对路径（例如 `.relay/browser-artifacts/login.png`）；浏览器容器不能写入项目其他目录。工具成功后，再用 Shell 把证据复制到项目内需要提交的位置。禁止反复尝试项目绝对路径、`/docs` 或容器 `/tmp`。\n- 完成必要的设计、实现、验证、文档和 Git 交付步骤。\n- 使用已验证结果更新任务和项目状态；只有稳定的项目知识才能保存为 project scope 记忆。\n- 结束时提供精简检查点：已完成、未完成、阻塞、下一步、分支和 Commit。\n".into()
+    "---\nname: relay-project-worker\ndescription: Relay 项目工作会话的强制执行流程，用于在项目绑定工作区完成一个结构化 Intent、验证结果、提交交付并回写 Relay 状态。每次项目工作会话都必须使用。\n---\n\n# Relay 项目工作会话\n\n- 只执行本轮传入且已绑定当前项目的 Intent，并通过 Relay MCP 核实项目、任务和 Rule 的实时状态。\n- 实施全过程必须遵循职业 Skill 和当前项目 Skill。\n- 工作会话不分诊 Inbox：忽略 `inbox_notice`，不调用 `agent.inbox.wait` 或 `agent.inbox.ack`，群聊、私聊和事件统一留给控制会话；只有当前 Intent 明确要求时，才在交付收口时发送一次最终项目同步。\n- 只能使用当前项目工作区，禁止检查其他项目工作区。\n- 临时脚本和临时数据必须使用 Relay 托管的 `$TMPDIR`；禁止直接使用 `/tmp`、`/private/tmp` 或宿主机特定临时路径。\n- 全仓格式化或检查命令必须限定到已跟踪的业务目录，或明确排除 `.agents/` 与 `.relay-runtime-skills/`；禁止修改 Relay 运行时 Skill 文件。\n- 需要浏览器自动化或 Web 验收时，必须使用 Relay 托管的 `chrome-devtools` MCP；不得改用 Codex 桌面 Browser/Chrome、Computer Use 或 raw CDP 绕过。只有携带明确目标 URL 的网站导航、新建目标页面和文件上传需要进入 Relay 审批中心；刷新、前进、后退和空白页操作无需 Human 审批。\n- `take_screenshot` 或 `take_snapshot` 需要落盘保存证据时，`filePath` 必须使用 `.relay/browser-artifacts/` 下的相对路径（例如 `.relay/browser-artifacts/login.png`）；浏览器容器不能写入项目其他目录。工具成功后，再用 Shell 把证据复制到项目内需要提交的位置。禁止反复尝试项目绝对路径、`/docs` 或容器 `/tmp`。\n- 完成必要的设计、实现、验证、文档和 Git 交付步骤。\n- 使用已验证结果更新任务和项目状态。Relay MCP 的固定字段只能使用工具 Schema 暴露的枚举；遇到 validation error 时必须读取返回的合法值后修正参数，禁止原样重试或继续猜测新值。只有稳定的项目知识才能保存为 project scope 记忆。\n- 结束时提供精简检查点：已完成、未完成、阻塞、下一步、分支和 Commit。\n".into()
 }
 
 pub(super) fn build_project_skill_template(
@@ -348,6 +369,11 @@ pub(super) fn append_agent_long_term_memories(
     memories: &[AgentMemory],
     skill_language: &str,
 ) -> String {
+    let safety_limit = std::env::var("RELAY_MEMORY_INJECTION_SAFETY_LIMIT_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value >= 4_000)
+        .unwrap_or(32_000);
     if skill_language == COMPANY_SKILL_LANGUAGE_EN {
         let mut section = String::from(
             "\n\n## Distilled Long-term Agent Memory\n\nThese entries belong only to the current Agent and are loaded on every Codex wake-up. Use them as durable guidance. If they conflict with the latest Human instruction, project Rule, repository state, or MCP state, follow current verified facts and update the memory after validation.\n",
@@ -367,8 +393,8 @@ pub(super) fn append_agent_long_term_memories(
                     memory.confidence,
                     if memory.tags.is_empty() { String::new() } else { format!("; tags: {}", memory.tags.join(", ")) }
                 );
-                if used_characters + entry.chars().count() > 12_000 {
-                    section.push_str("\nAdditional long-term memories were omitted because of the context budget. Archive low-value entries or reduce long-term memory volume.\n");
+                if !memory.pinned && used_characters + entry.chars().count() > safety_limit {
+                    section.push_str("\nAdditional lower-priority memories were moved to on-demand retrieval because the configurable safety limit was reached. Pinned memories are never omitted by this guard.\n");
                     break;
                 }
                 used_characters += entry.chars().count();
@@ -404,9 +430,9 @@ pub(super) fn append_agent_long_term_memories(
                 }
             );
             let entry_characters = entry.chars().count();
-            if used_characters + entry_characters > 12_000 {
+            if !memory.pinned && used_characters + entry_characters > safety_limit {
                 section.push_str(
-                    "\n其余长期记忆因上下文预算未注入；请归档低价值记忆或降低长期记忆数量。\n",
+                    "\n其余低优先级记忆因达到可配置安全上限，已转为按需检索；Pinned 记忆不会被该保护规则省略。\n",
                 );
                 break;
             }
@@ -439,7 +465,7 @@ pub(super) fn relay_skill_identity_token(agent: &AgentProfile) -> String {
     let id = agent.id.to_string().replace('-', "");
     format!(
         "{}-{}",
-        handle.chars().take(36).collect::<String>(),
+        handle.chars().take(18).collect::<String>(),
         &id[..8]
     )
 }
@@ -563,6 +589,7 @@ pub(super) fn append_agent_identity_card(
 pub(super) fn remove_stale_managed_skills(
     skills_root: &Path,
     managed_prefix: &str,
+    agent_id_token: &str,
 ) -> AppResult<()> {
     for entry in fs::read_dir(skills_root).map_err(|error| {
         AppError::Validation(format!(
@@ -574,7 +601,11 @@ pub(super) fn remove_stale_managed_skills(
             AppError::Validation(format!("failed to inspect managed Relay skill: {error}"))
         })?;
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if file_name.starts_with(managed_prefix) {
+        let belongs_to_agent = file_name.starts_with("relay-")
+            && file_name
+                .split('-')
+                .any(|component| component == agent_id_token);
+        if file_name.starts_with(managed_prefix) || belongs_to_agent {
             remove_managed_skill_path(&entry.path()).map_err(|error| {
                 AppError::Validation(format!(
                     "failed to replace managed Relay skill {}: {error}",

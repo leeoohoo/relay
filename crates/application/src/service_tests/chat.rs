@@ -183,6 +183,7 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("group member should see unread company group messages");
@@ -215,6 +216,8 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
             conversation_id: default_group.preview.id,
+            only_if_no_mentions: false,
+            reviewed_through_message_id: None,
         })
         .expect("group member should mark the company group as read");
     assert_eq!(read.marked_read_count, 1);
@@ -223,6 +226,7 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: beta.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("messages arriving during a run should remain pending");
@@ -236,6 +240,7 @@ fn active_company_agents_can_chat_without_friendship() {
             actor_agent_id: gamma.agent_profile.id,
             company_id: company.company.id,
             conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
             message_limit: 20,
         })
         .expect("one member reading must not clear another member's unread state")
@@ -416,7 +421,7 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             handle: "human-message-alpha".into(),
             persona: "负责协调".into(),
             org_unit_id: None,
-            job_title: None,
+            job_title: Some("项目经理".into()),
             role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
             reports_to_membership_id: None,
         })
@@ -642,6 +647,15 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             depends_on_task_ids: Vec::new(),
         })
         .expect("owner should assign a ready project task");
+    app.repo
+        .save_project_member_event_subscriptions(vec![ProjectMemberEventSubscription {
+            project_id: project.project.id,
+            agent_profile_id: alpha.agent_profile.id,
+            event_category: EVENT_CATEGORY_MESSAGE.into(),
+            subscription_mode: EVENT_SUBSCRIPTION_DIGEST.into(),
+            updated_at: now_utc(),
+        }])
+        .expect("test should simulate a legacy project-manager message subscription");
     for agent_id in [alpha.agent_profile.id, beta.agent_profile.id] {
         let mut trigger = app
             .repo
@@ -666,7 +680,18 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .repo
         .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
         .expect("alpha trigger should exist");
-    assert!(alpha_project_trigger.wake_requested_at.is_none());
+    assert_eq!(
+        alpha_project_trigger.wake_requested_at,
+        Some(project_message.created_at)
+    );
+    assert!(app
+        .repo
+        .list_project_member_event_subscriptions(project.project.id, alpha.agent_profile.id)
+        .iter()
+        .any(|subscription| {
+            subscription.event_category == EVENT_CATEGORY_MESSAGE
+                && subscription.subscription_mode == EVENT_SUBSCRIPTION_IMMEDIATE
+        }));
     let beta_project_trigger = app
         .repo
         .get_agent_codex_trigger_config_by_agent(beta.agent_profile.id)
@@ -683,7 +708,9 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             event.event_type == "message.received"
                 && payload_uuid_field_optional(&event.payload_json, "message_id")
                     == Some(project_message.id)
-                && payload_uuid_field_optional(&event.payload_json, "project_id").is_none()
+                && payload_uuid_field_optional(&event.payload_json, "project_id")
+                    == Some(project.project.id)
+                && event.requires_action
         }));
     assert_eq!(ready_task.assignee_agent_id, Some(beta.agent_profile.id));
 
@@ -715,7 +742,6 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         owner_trigger.wake_requested_at,
         Some(member_update.created_at)
     );
-    assert_eq!(owner_trigger.wake_reason.as_deref(), Some("message"));
     let owner_events = app
         .list_agent_inbox_events(alpha.agent_profile.id, true, 100)
         .expect("project owner inbox should load")
@@ -727,6 +753,9 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         })
         .collect::<Vec<_>>();
     assert_eq!(owner_events.len(), 1);
+    assert_eq!(owner_events[0].event_class, "actionable");
+    assert!(owner_events[0].requires_action);
+    assert_eq!(owner_events[0].wake_policy, "immediate");
     assert_eq!(
         owner_events[0]
             .payload_json
@@ -740,6 +769,55 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
         .expect("project member trigger should exist")
         .wake_requested_at
         .is_none());
+
+    let mut owner_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
+        .expect("project manager trigger should exist");
+    owner_trigger.next_run_at = future_check;
+    owner_trigger.wake_requested_at = None;
+    owner_trigger.wake_reason = None;
+    app.repo
+        .save_agent_codex_trigger_config(owner_trigger)
+        .expect("test should reset task status wake state");
+    let completed_task = app
+        .update_company_project_task(UpdateCompanyProjectTaskInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            project_id: project.project.id,
+            task_id: ready_task.id,
+            title: None,
+            description: None,
+            status: Some(PROJECT_TASK_STATUS_DONE.into()),
+            priority: None,
+            assignee_agent_id: None,
+            due_at: None,
+        })
+        .expect("assigned Agent should complete its task");
+    assert_eq!(completed_task.status, PROJECT_TASK_STATUS_DONE);
+    let owner_trigger = app
+        .repo
+        .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
+        .expect("project manager trigger should exist");
+    assert_eq!(
+        owner_trigger.wake_requested_at,
+        Some(completed_task.updated_at)
+    );
+    assert_eq!(
+        owner_trigger.wake_reason.as_deref(),
+        Some(AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED)
+    );
+    assert!(app
+        .list_agent_inbox_events(alpha.agent_profile.id, true, 100)
+        .expect("project manager inbox should load")
+        .iter()
+        .any(|event| {
+            event.event_type == "company.project.task_status_changed"
+                && payload_uuid_field_optional(&event.payload_json, "task_id")
+                    == Some(completed_task.id)
+                && event.requires_action
+                && event.wake_policy == "immediate"
+        }));
 
     let mut owner_trigger = app
         .repo
@@ -804,14 +882,23 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             .and_then(|value| value.as_bool()),
         Some(true)
     );
-    assert!(app
+    let alpha_unmentioned_event = app
         .list_agent_inbox_events(alpha.agent_profile.id, true, 50)
         .expect("unmentioned Agent inbox should load")
-        .iter()
-        .all(|event| {
+        .into_iter()
+        .find(|event| {
             payload_uuid_field_optional(&event.payload_json, "message_id")
-                != Some(mentioned_message.id)
-        }));
+                == Some(mentioned_message.id)
+        })
+        .expect("every group member should receive the mentioned message as unread");
+    assert!(!alpha_unmentioned_event.requires_action);
+    assert_eq!(
+        alpha_unmentioned_event
+            .payload_json
+            .get("mentioned")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
     assert!(app
         .repo
         .get_agent_codex_trigger_config_by_agent(alpha.agent_profile.id)
@@ -824,6 +911,125 @@ fn human_company_messages_open_direct_chats_and_enqueue_agent_inbox_events() {
             .expect("mentioned Agent trigger should exist")
             .wake_requested_at,
         Some(mentioned_message.created_at)
+    );
+
+    let beta_snapshot = app
+        .agent_control_snapshot(beta.agent_profile.id, company.company.id)
+        .expect("mentioned Agent control snapshot should load unread context");
+    let beta_default_group_messages = beta_snapshot
+        .unread_messages
+        .iter()
+        .filter(|event| {
+            payload_uuid_field_optional(&event.payload_json, "conversation_id")
+                == Some(default_group.preview.id)
+        })
+        .collect::<Vec<_>>();
+    assert!(beta_default_group_messages
+        .windows(2)
+        .all(|messages| { messages[0].created_at <= messages[1].created_at }));
+    assert!(beta_default_group_messages.iter().any(|event| {
+        event
+            .payload_json
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            == Some("请大家查看今天的公司公告。")
+            && !event.requires_action
+    }));
+    assert!(beta_default_group_messages.iter().any(|event| {
+        payload_uuid_field_optional(&event.payload_json, "message_id") == Some(mentioned_message.id)
+            && event.requires_action
+    }));
+
+    let alpha_unread = app
+        .list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 100,
+        })
+        .expect("unmentioned Agent should read every group message");
+    assert!(alpha_unread.groups[0]
+        .unread_messages
+        .iter()
+        .any(|message| message.id == mentioned_message.id));
+
+    let beta_first_unread_page = app
+        .list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 1,
+        })
+        .expect("unread messages should support a per-conversation cursor page");
+    let first_group_page = &beta_first_unread_page.groups[0];
+    assert_eq!(first_group_page.page_unread_count, 1);
+    assert!(first_group_page.has_more);
+    assert_eq!(first_group_page.remaining_mention_count, 1);
+    assert!(first_group_page.remaining_has_mentions);
+    assert!(!first_group_page.can_quick_mark_read);
+    let first_page_cursor = first_group_page
+        .next_cursor
+        .expect("a page with remaining unread messages should return a cursor");
+    assert!(matches!(
+        app.mark_company_group_read(MarkCompanyGroupReadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: default_group.preview.id,
+            only_if_no_mentions: true,
+            reviewed_through_message_id: Some(first_page_cursor),
+        }),
+        Err(AppError::Conflict(_))
+    ));
+
+    let beta_second_unread_page = app
+        .list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: Some(first_page_cursor),
+            message_limit: 1,
+        })
+        .expect("the unread cursor should return the next page");
+    let second_group_page = &beta_second_unread_page.groups[0];
+    assert_eq!(second_group_page.page_mention_count, 1);
+    assert_eq!(second_group_page.remaining_mention_count, 0);
+    let reviewed_through_mention = second_group_page.unread_messages[0].id;
+    let quick_read = app
+        .mark_company_group_read(MarkCompanyGroupReadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: default_group.preview.id,
+            only_if_no_mentions: true,
+            reviewed_through_message_id: Some(reviewed_through_mention),
+        })
+        .expect("quick mark-read should succeed after all mentions were reviewed");
+    assert!(quick_read.quick_mark_read);
+    assert!(quick_read.marked_read_count >= 2);
+    assert_eq!(
+        app.list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: beta.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 20,
+        })
+        .expect("quick mark-read should clear only this Agent's unread state")
+        .total_unread_count,
+        0
+    );
+    assert!(
+        app.list_company_group_unread_messages(ListCompanyGroupUnreadInput {
+            actor_agent_id: alpha.agent_profile.id,
+            company_id: company.company.id,
+            conversation_id: Some(default_group.preview.id),
+            after_message_id: None,
+            message_limit: 20,
+        })
+        .expect("one Agent quick-reading must not affect another Agent")
+        .total_unread_count
+            > 0
     );
 
     assert!(matches!(

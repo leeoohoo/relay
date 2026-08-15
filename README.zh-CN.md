@@ -8,7 +8,22 @@ Relay **不会再实现一套调用大模型的代码**。可选的本地 Trigge
 
 ## 快速开始
 
-推荐直接使用 GitHub Release 安装包。目前只发布 Apple Silicon macOS 和 Windows 10/11 WSL2 两种安装包。包内已经包含 Web 控制台和宿主机 Agent Trigger，普通用户只需要 Docker，不需要安装 Node.js、pnpm、Rust、Cargo、Chrome，也不需要另外安装 Chrome DevTools MCP。
+最简单的安装方式是使用轻量 npm 启动器。先安装并启动 Docker Desktop，再安装 Node.js 20 或更高版本，然后执行：
+
+```bash
+npx --yes @relay-ai/relay web
+```
+
+Apple Silicon macOS 在 Terminal 中执行；Windows 10/11 需要在 Ubuntu/WSL2 终端中执行。启动器会自动下载匹配的 GitHub Release、校验 SHA256，把程序安装到 `~/.relay/app`，把公司、Agent、项目和运行数据持久化到 `~/.relay/data`，启动完成后自动打开 Web 控制台。
+
+```bash
+npx --yes @relay-ai/relay status
+npx --yes @relay-ai/relay logs
+npx --yes @relay-ai/relay restart
+npx --yes @relay-ai/relay stop
+```
+
+不希望安装 Node.js 的用户仍然可以使用下面的 GitHub Release 压缩包。压缩包已经包含 Web 控制台和宿主机 Agent Trigger，不需要 pnpm、Rust、Cargo、Chrome，也不需要另外安装 Chrome DevTools MCP。
 
 ### Apple Silicon macOS Release
 
@@ -363,11 +378,11 @@ Relay 默认启用 `self_hosted` Harness，并自动启动 `ai-chat-harness` Doc
 
 ### Relay 托管浏览器
 
-Relay 默认在项目工作会话中启用 Chrome DevTools MCP。首次启动时，启动器会把固定版本 `chrome-devtools-mcp@1.6.0` 和 Chromium 构建为本地 Docker 镜像 `relay/chrome-devtools-mcp:1.6.0`，后续启动直接复用。使用 Release 安装包的用户不需要在宿主机安装 Node.js、Chrome、Chromium 或 MCP 包。
+Relay 默认在项目工作会话中启用 Chrome DevTools MCP。默认的 `auto` 模式优先使用宿主机已有的 Chrome/Chromium 和 `npx`：Trigger 为每个 Agent 托管一个独立浏览器进程，该 Agent 的不同项目与工作会话只启动轻量 MCP 连接，不再为每个会话创建 Chromium Docker 容器。这样既保留 Agent 之间的登录态隔离，也能显著降低 Docker VM 的 CPU 和内存压力。
 
-只有 Agent 启动项目工作会话时，Relay 才会把浏览器能力动态注入 Codex CLI；控制会话不会启动浏览器。浏览器 Profile 持久化保存在 Trigger 状态目录中，并按照公司、Agent、项目三级隔离，因此多个 Agent 并行运行时不会共享 Cookie、Local Storage 或登录状态。
+只有 Agent 启动项目工作会话时，Relay 才会把浏览器能力动态注入 Codex CLI；控制会话不会启动浏览器。浏览器 Profile 持久化保存在 Trigger 状态目录中，并按照公司和 Agent 隔离；同一个 Agent 会跨项目复用自己的 Cookie、Local Storage 和登录状态，不同 Agent 不会共享身份。并发会话通过 page ID 路由避免操作错页面。
 
-打开网址、新建浏览器页面和上传文件会在 Relay 审批中心生成 `codex.website_access` 请求。当前项目工作区会以只读方式挂载进浏览器容器，因此获批后的上传操作可以读取项目文件，但浏览器运行时不能修改项目代码。页面获批后，Agent 可以继续使用页面检查和交互工具。若要关闭 Relay 托管浏览器，可在启动前设置 `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false`。
+打开网址、新建浏览器页面和上传文件会在 Relay 审批中心生成 `codex.website_access` 请求。页面获批后，Agent 可以继续使用页面检查和交互工具。若宿主机缺少 Chrome/Chromium 或 `npx`，`auto` 模式才会使用带 CPU、内存上限的 Docker 兜底；启动器也只在需要兜底时构建浏览器镜像。可设置 `RELAY_CHROME_DEVTOOLS_MCP_MODE=host` 禁止 Docker 兜底，设置为 `docker` 强制使用容器，或设置 `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false` 完全关闭。Chrome 不在常见位置时，可通过 `RELAY_CHROME_EXECUTABLE` 指定绝对路径。
 
 更新到最新版本：
 

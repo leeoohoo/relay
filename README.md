@@ -8,7 +8,22 @@ Relay does **not** implement another model-calling stack. Its optional local tri
 
 ## Quick Start
 
-The recommended GitHub Release packages currently target Apple Silicon macOS and Windows 10/11 through WSL2. They already contain the web console and host Agent Trigger, so normal users only need Docker; Node.js, pnpm, Rust, Cargo, Chrome, and a separate Chrome DevTools MCP installation are not required.
+The simplest installation uses the small npm launcher. Install and start Docker Desktop, install Node.js 20 or newer, then run:
+
+```bash
+npx --yes @relay-ai/relay web
+```
+
+Run this command in Terminal on Apple Silicon macOS, or inside the Ubuntu/WSL2 terminal on Windows 10/11. It downloads the matching GitHub Release, verifies its checksum, stores application files under `~/.relay/app`, keeps persistent data under `~/.relay/data`, starts Relay, and opens the web console.
+
+```bash
+npx --yes @relay-ai/relay status
+npx --yes @relay-ai/relay logs
+npx --yes @relay-ai/relay restart
+npx --yes @relay-ai/relay stop
+```
+
+The direct GitHub Release packages below remain available for users who do not want Node.js. They already contain the web console and host Agent Trigger, so archive users do not need pnpm, Rust, Cargo, Chrome, or a separate Chrome DevTools MCP installation.
 
 ### Apple Silicon macOS Release
 
@@ -365,11 +380,11 @@ Relay enables the `self_hosted` Harness mode by default and starts the `ai-chat-
 
 ### Managed browser automation
 
-Relay enables Chrome DevTools MCP for project work sessions by default. On the first startup, the launcher builds the pinned `chrome-devtools-mcp@1.6.0` runtime and Chromium into the local Docker image `relay/chrome-devtools-mcp:1.6.0`; later starts reuse that image. Release users do not need to install Node.js, Chrome, Chromium, or the MCP package on the host.
+Relay enables Chrome DevTools MCP for project work sessions by default. The default `auto` mode prefers Chrome/Chromium and `npx` already installed on the host. Trigger owns one isolated browser process per Agent, while that Agent's project sessions start only lightweight MCP connections instead of one Chromium Docker container per session. This preserves identity isolation between Agents without saturating the Docker VM.
 
-The browser runtime is injected into Codex CLI only when an Agent starts a project work session. Control sessions do not start a browser. Browser profiles are persistent and isolated by company, Agent, and project under the Trigger state directory, so concurrently running Agents do not share cookies, local storage, or sessions.
+The browser runtime is injected into Codex CLI only when an Agent starts a project work session. Control sessions do not start a browser. Profiles are persistent and isolated by company and Agent under the Trigger state directory. One Agent reuses its cookies, local storage, and login state across projects; different Agents never share an identity. Experimental page-ID routing separates concurrent sessions.
 
-Opening a URL, creating a new browser page, and uploading a file create a `codex.website_access` request in Relay's approval center. The current project workspace is mounted read-only into the browser container so an approved upload can read a project file without giving the browser runtime permission to modify project code. Other browser inspection and interaction tools remain available after the page is approved. Set `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false` before startup to disable the managed browser integration.
+Opening a URL, creating a new browser page, and uploading a file create a `codex.website_access` request in Relay's approval center. Other browser inspection and interaction tools remain available after the page is approved. When host Chrome/Chromium or `npx` is unavailable, `auto` mode uses a CPU- and memory-limited Docker fallback; the launcher builds that image only when fallback is actually needed. Set `RELAY_CHROME_DEVTOOLS_MCP_MODE=host` to disallow Docker fallback, `docker` to force it, or `RELAY_CHROME_DEVTOOLS_MCP_ENABLED=false` to disable browser integration. Use `RELAY_CHROME_EXECUTABLE` when Chrome is installed outside a common location.
 
 Update an existing installation:
 

@@ -8,6 +8,9 @@ pub const CONVERSATION_CONTEXT_COMPANY_DIRECT: &str = "company_direct";
 pub const CONVERSATION_CONTEXT_COMPANY_GROUP: &str = "company_group";
 pub const CONVERSATION_CONTEXT_COMPANY_ALL: &str = "company_all";
 pub const CONVERSATION_CONTEXT_PROJECT_GROUP: &str = "project_group";
+pub const CONVERSATION_CONTEXT_TASK_THREAD: &str = "task_thread";
+pub const CONVERSATION_CONTEXT_BLOCKER_THREAD: &str = "blocker_thread";
+pub const CONVERSATION_CONTEXT_GATE_THREAD: &str = "gate_thread";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationPreview {

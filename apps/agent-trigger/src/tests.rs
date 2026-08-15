@@ -335,6 +335,19 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         staffing_name: None,
         version_hash: "v1".into(),
     };
+    let control_snapshot = ai_chat_application::AgentControlSnapshot {
+        agent_profile_id: agent.id,
+        company_id: Uuid::new_v4(),
+        generated_at: now,
+        snapshot_version: "snapshot-v1".into(),
+        unread_messages: Vec::new(),
+        actionable_events: Vec::new(),
+        ready_tasks: Vec::new(),
+        waiting_tasks: Vec::new(),
+        task_readiness: Vec::new(),
+        active_intents: Vec::new(),
+        work_sessions: Vec::new(),
+    };
     let control_prompt = build_wakeup_prompt(WakeupPromptContext {
         agent: &agent,
         job_title: "软件工程师",
@@ -343,12 +356,19 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         active_task_count: 1,
         waiting_task_count: 0,
         asset_refresh_due: false,
+        control_snapshot: &control_snapshot,
         workspace: &workspace,
         relay_skills: &skills,
     });
     assert!(control_prompt.contains("run token 固定并认证此身份"));
     assert!(control_prompt.contains("不要向 Human、同事或其他工具重新询问或确认"));
-    assert!(control_prompt.contains("agent.bootstrap` 只用于刷新公司、权限、会话和工作状态"));
+    assert!(control_prompt
+        .contains("不要重复调用 agent.bootstrap、company.task my 或 agent.inbox.wait"));
+    assert!(control_prompt.contains("snapshot-v1"));
+    assert!(control_prompt.contains("unread_messages"));
+    assert!(control_prompt.contains("先按时间顺序理解该会话内更早的全部未读消息"));
+    assert!(control_prompt.contains("remaining_has_mentions"));
+    assert!(control_prompt.contains("only_if_no_mentions=true"));
     assert!(!control_prompt.contains("核对返回身份"));
 
     let project = CompanyProject {
@@ -400,7 +420,10 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         previous_checkpoint: None,
     });
     assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
-    assert!(worker_prompt.contains("直接用 company.project get 和 company.task get/list"));
+    assert!(worker_prompt.contains("company.task execution_get"));
+    assert!(worker_prompt.contains("execution.readiness.can_start=true"));
+    assert!(worker_prompt.contains(&format!("company_id={}", project.company_id)));
+    assert!(worker_prompt.contains(&format!("project_id={}", project.id)));
     assert!(!worker_prompt.contains("先调用 agent.bootstrap"));
 }
 
@@ -425,6 +448,8 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(chinese.contains("不得改用 Codex 桌面 Browser/Chrome"));
     assert!(chinese.contains("Relay 托管的 `$TMPDIR`"));
     assert!(chinese.contains("禁止直接使用 `/tmp`、`/private/tmp`"));
+    assert!(chinese.contains("固定字段只能使用工具 Schema 暴露的枚举"));
+    assert!(chinese.contains("禁止原样重试"));
 
     let english = session_skill_template(RELAY_SKILL_BUNDLE_PROJECT, "en");
     assert!(english.contains("Ignore `inbox_notice`"));
@@ -434,9 +459,96 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(english.contains("Do not use Codex desktop Browser/Chrome"));
     assert!(english.contains("Relay-managed `$TMPDIR`"));
     assert!(english.contains("Never address `/tmp`, `/private/tmp`"));
+    assert!(english.contains("use only values exposed by the tool schema"));
+    assert!(english.contains("instead of repeating the same call"));
 
     let control = session_skill_template(RELAY_SKILL_BUNDLE_CONTROL, "zh-CN");
     assert!(control.contains("Relay 托管的 `$TMPDIR`"));
+}
+
+#[test]
+fn long_agent_handles_keep_all_relay_skill_names_within_codex_limits() {
+    let workspace = std::env::temp_dir().join(format!(
+        "relay-long-skill-name-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    fs::create_dir_all(&workspace).expect("test workspace");
+    let agent_id = Uuid::new_v4();
+    let agent_id_token = agent_id
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(8)
+        .collect::<String>();
+    let old_skills_root = workspace.join(".agents/skills");
+    fs::create_dir_all(&old_skills_root).expect("old skills root");
+    let old_long_skill = old_skills_root.join(format!(
+        "relay-life-science-worldbuilding-{agent_id_token}-profession-research-specialist"
+    ));
+    fs::create_dir_all(&old_long_skill).expect("old long skill");
+    let agent = AgentProfile {
+        id: agent_id,
+        owner_user_id: Uuid::new_v4(),
+        display_name: "Researcher".into(),
+        handle: "life-science-worldbuilding-and-continuity-review".into(),
+        persona: "Review scientific continuity".into(),
+        collaboration_preference: "available".into(),
+        status: AgentStatus::Active,
+        created_at: now_utc(),
+    };
+    let project = CompanyProject {
+        id: Uuid::new_v4(),
+        company_id: Uuid::new_v4(),
+        name: "Novel".into(),
+        description: "Novel project".into(),
+        project_type: "novel_writing".into(),
+        project_type_source: "user".into(),
+        project_type_confidence: 100,
+        project_type_evidence: vec![],
+        status: "active".into(),
+        owner_agent_id: agent.id,
+        project_group_conversation_id: Uuid::new_v4(),
+        created_by_agent_id: agent.id,
+        updated_by_agent_id: None,
+        due_at: None,
+        created_at: now_utc(),
+        updated_at: now_utc(),
+        completed_at: None,
+    };
+
+    let prepared = prepare_relay_skills(
+        &workspace,
+        RELAY_SKILL_BUNDLE_PROJECT,
+        &agent,
+        "Research Specialist",
+        &[],
+        &[],
+        Some(&project),
+        None,
+        "en",
+    )
+    .expect("managed skills");
+
+    for name in [
+        Some(prepared.employee_name.as_str()),
+        Some(prepared.profession_name.as_str()),
+        Some(prepared.session_name.as_str()),
+        prepared.project_name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert!(
+            name.len() <= 64,
+            "Relay skill name exceeds Codex limit: {name}"
+        );
+    }
+    assert!(
+        !old_long_skill.exists(),
+        "legacy long Relay skill should be removed"
+    );
+
+    fs::remove_dir_all(workspace).expect("cleanup long skill name test");
 }
 
 #[test]
@@ -543,6 +655,9 @@ fn long_term_memories_are_injected_without_rotating_the_codex_session() {
         session_id: None,
         memory_tier: "long_term".into(),
         injection_mode: "always".into(),
+        classification_reason: "stable reusable procedure".into(),
+        estimated_ttl_days: None,
+        injection_cost_chars: 180,
         visibility: "both".into(),
         memory_type: "procedure".into(),
         topic_key: "always-run-migrations".into(),
@@ -557,6 +672,7 @@ fn long_term_memories_are_injected_without_rotating_the_codex_session() {
         source_refs: Vec::new(),
         supersedes_memory_id: None,
         expires_at: None,
+        archived_at: None,
         verified_by_agent_id: Some(agent.id),
         verified_by_human_user_id: None,
         verified_at: Some(now),

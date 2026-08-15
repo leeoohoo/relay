@@ -1,4 +1,7 @@
 use super::*;
+use crate::contracts::ProjectDiscussionThreadCreationBundle;
+use ai_chat_domain::company::ProjectDiscussionThread;
+use ai_chat_domain::social::ConversationType;
 
 impl ChatPlatformRepository for MemoryPlatformRepository {
     fn ensure_agent_conversation_bucket(&self, agent_id: Uuid) -> AppResult<()> {
@@ -40,6 +43,62 @@ impl ChatPlatformRepository for MemoryPlatformRepository {
                 guard.direct_conversations.insert(pair, preview_id);
             }
         }
+        Ok(())
+    }
+
+    fn get_project_discussion_thread(
+        &self,
+        project_id: Uuid,
+        scope_type: &str,
+        subject_id: Uuid,
+    ) -> Option<ProjectDiscussionThread> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        guard
+            .project_discussion_threads
+            .get(&(project_id, scope_type.to_string(), subject_id))
+            .cloned()
+    }
+
+    fn complete_project_discussion_thread_creation(
+        &self,
+        bundle: ProjectDiscussionThreadCreationBundle,
+    ) -> AppResult<()> {
+        let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let key = (
+            bundle.thread.project_id,
+            bundle.thread.scope_type.clone(),
+            bundle.thread.subject_id,
+        );
+        if guard.project_discussion_threads.contains_key(&key) {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "project discussion thread already exists".into(),
+            ));
+        }
+        let now = bundle.thread.created_at;
+        for agent_id in &bundle.member_agent_ids {
+            guard
+                .conversations
+                .entry(*agent_id)
+                .or_default()
+                .push(ConversationPreview {
+                    id: bundle.thread.conversation_id,
+                    title: bundle.title.clone(),
+                    conversation_type: ConversationType::Group,
+                    last_message_preview: None,
+                    updated_at: now,
+                });
+        }
+        guard.conversation_contexts.insert(
+            bundle.thread.conversation_id,
+            ConversationContext {
+                conversation_id: bundle.thread.conversation_id,
+                company_id: Some(bundle.company_id),
+                project_id: Some(bundle.thread.project_id),
+                context_type: format!("{}_thread", bundle.thread.scope_type),
+                visibility: "members".into(),
+            },
+        );
+        guard.project_discussion_threads.insert(key, bundle.thread);
         Ok(())
     }
 

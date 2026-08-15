@@ -100,7 +100,9 @@ export function MemoriesView(props: {
   const activeCount = memories.filter((memory) => memory.status === "active").length;
   const longTermCount = memories.filter((memory) => memory.status === "active" && memory.memory_tier === "long_term").length;
   const shortTermCount = memories.filter((memory) => memory.status === "active" && memory.memory_tier === "short_term").length;
-  const pinnedCount = memories.filter((memory) => memory.pinned).length;
+  const activeInjectionChars = memories
+    .filter((memory) => memory.status === "active" && memory.memory_tier === "long_term")
+    .reduce((total, memory) => total + memory.injection_cost_chars, 0);
   const agentNames = new Map(props.consoleData.agents.map((agent) => [agent.agent_profile.id, agent.agent_profile.display_name]));
   const projectNames = new Map(props.consoleData.projects.map((project) => [project.project.id, project.project.name]));
   const memoryPagination = usePagination(memories, 9, `${query}:${agentId}:${projectId}:${scope}:${memoryTier}:${status}`);
@@ -111,7 +113,7 @@ export function MemoriesView(props: {
         <Metric label="有效记忆" value={String(activeCount)} detail="全部为所属 Agent 私有" />
         <Metric label="长期记忆" value={String(longTermCount)} detail="按作用域注入对应会话" />
         <Metric label="短期记忆" value={String(shortTermCount)} detail="仅通过 MCP 按需检索" />
-        <Metric label="已置顶" value={String(pinnedCount)} detail="在同类记忆中优先展示" />
+        <Metric label="长期注入量" value={activeInjectionChars.toLocaleString()} detail={activeInjectionChars > 24_000 ? "偏高：建议整理低价值记忆" : "软治理，不做固定小额截断"} />
       </section>
 
       <section className="section-card memory-library-card">
@@ -149,6 +151,7 @@ export function MemoriesView(props: {
                   <span><strong>{memory.confidence}%</strong>置信度</span>
                   <span><strong>{memoryInjectionLabel(memory.injection_mode)}</strong>{memory.scope === "project" && memory.project_id ? `${projectNames.get(memory.project_id) ?? "相关项目"}工作会话` : memory.scope === "control" ? "仅控制会话" : memory.scope === "session" ? "仅指定会话" : "控制与项目工作会话"}</span>
                 </div>
+                <div className="memory-governance-note"><strong>{memory.injection_cost_chars.toLocaleString()} 字符</strong><span>{memory.classification_reason}</span>{memory.estimated_ttl_days ? <small>建议保留 {memory.estimated_ttl_days} 天{memory.expires_at ? ` · 到期 ${formatTime(memory.expires_at)}` : ""}</small> : null}</div>
                 <footer>
                   <div><span className="agent-avatar tiny">{(agentNames.get(memory.owner_agent_id) ?? "A").slice(0, 1)}</span><span><strong>{agentNames.get(memory.owner_agent_id) ?? "未知 Agent"}</strong><small>更新于 {formatTime(memory.updated_at)}{memory.source_refs.length ? ` · ${memory.source_refs.length} 个来源引用` : ""}</small></span></div>
                   <div className="memory-actions">

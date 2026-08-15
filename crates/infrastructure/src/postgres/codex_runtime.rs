@@ -261,14 +261,11 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 ),
                 abandoned_runs AS (
                     UPDATE agent_codex_trigger_runs run
-                    SET status = 'lease_lost',
+                    SET status = 'restarted',
                         finished_at = $2,
-                        error_message = COALESCE(
-                            run.error_message,
-                            'Codex trigger process stopped before the run completed'
-                        ),
-                        activity_phase = 'lease_lost',
-                        activity_summary = 'Trigger 进程中断，本轮已停止',
+                        error_message = NULL,
+                        activity_phase = 'continuing',
+                        activity_summary = 'Trigger 服务重启，本轮工作已保存并等待接续',
                         last_activity_at = $2
                     WHERE run.status = 'running'
                       AND run.trigger_config_id IN (SELECT id FROM abandoned_configs)
@@ -421,10 +418,13 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     trigger_type, status, codex_thread_id, codex_version,
                     exit_code, started_at, finished_at, final_message_summary,
                     error_message, activity_phase, activity_summary,
-                    last_activity_at, activity_log
+                    last_activity_at, activity_log, process_instance_id,
+                    heartbeat_at, state_reason, current_intent_id, current_task_id,
+                    waiting_on_type, waiting_on_id, session_kind, resumes_run_id
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                        $14, $15, $16, $17)
+                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+                        $25, $26)
                 "#,
                 &[
                     &run.id,
@@ -444,6 +444,15 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     &run.activity_summary,
                     &run.last_activity_at,
                     &Json(&run.activity_log),
+                    &run.process_instance_id,
+                    &run.heartbeat_at,
+                    &run.state_reason,
+                    &run.current_intent_id,
+                    &run.current_task_id,
+                    &run.waiting_on_type,
+                    &run.waiting_on_id,
+                    &run.session_kind,
+                    &run.resumes_run_id,
                 ],
             )?;
             Ok(())
@@ -480,7 +489,19 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     exit_code = $7,
                     finished_at = $8,
                     final_message_summary = $9,
-                    error_message = $10
+                    error_message = $10,
+                    activity_phase = $11,
+                    activity_summary = $12,
+                    last_activity_at = $13,
+                    process_instance_id = $14,
+                    heartbeat_at = $15,
+                    state_reason = $16,
+                    current_intent_id = $17,
+                    current_task_id = $18,
+                    waiting_on_type = $19,
+                    waiting_on_id = $20,
+                    session_kind = $21,
+                    resumes_run_id = $22
                 WHERE id = $1
                 "#,
                 &[
@@ -494,6 +515,18 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     &run.finished_at,
                     &run.final_message_summary,
                     &run.error_message,
+                    &run.activity_phase,
+                    &run.activity_summary,
+                    &run.last_activity_at,
+                    &run.process_instance_id,
+                    &run.heartbeat_at,
+                    &run.state_reason,
+                    &run.current_intent_id,
+                    &run.current_task_id,
+                    &run.waiting_on_type,
+                    &run.waiting_on_id,
+                    &run.session_kind,
+                    &run.resumes_run_id,
                 ],
             )?;
             Ok(())
@@ -527,6 +560,8 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 SET activity_phase = $2,
                     activity_summary = $3,
                     last_activity_at = $4,
+                    heartbeat_at = $4,
+                    state_reason = $3,
                     codex_thread_id = COALESCE($5, codex_thread_id),
                     activity_log = $6
                 WHERE id = $1
@@ -547,6 +582,68 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
             return Err(AppError::NotFound("Codex trigger run not found".into()));
         }
         Ok(())
+    }
+
+    fn heartbeat_agent_codex_trigger_run(
+        &self,
+        run_id: Uuid,
+        heartbeat_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let updated = self.with_client(|client| {
+            client.execute(
+                "UPDATE agent_codex_trigger_runs SET heartbeat_at = $2 WHERE id = $1 AND status = 'running'",
+                &[&run_id, &heartbeat_at],
+            )
+        })?;
+        if updated == 0 {
+            return Err(AppError::Conflict(
+                "Codex trigger run is no longer running".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn watchdog_stale_agent_codex_trigger_runs(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        stale_before: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<usize> {
+        self.with_client(|client| {
+            client.query_one(
+                r#"
+                WITH stale_runs AS (
+                    UPDATE agent_codex_trigger_runs
+                    SET status = 'lease_lost', finished_at = $1,
+                        activity_phase = 'lease_lost',
+                        activity_summary = '运行心跳已停止，Watchdog 已回收本轮',
+                        last_activity_at = $1,
+                        state_reason = 'run_heartbeat_lost: Trigger 进程没有继续报告心跳',
+                        error_message = 'run_heartbeat_lost: Trigger process heartbeat stopped'
+                    WHERE status = 'running'
+                      AND COALESCE(heartbeat_at, last_activity_at, started_at) < $2
+                    RETURNING id, trigger_config_id, agent_profile_id
+                ),
+                released_configs AS (
+                    UPDATE agent_codex_trigger_configs config
+                    SET lease_owner = NULL, lease_expires_at = NULL,
+                        next_run_at = LEAST(config.next_run_at, $1), updated_at = $1
+                    WHERE config.id IN (SELECT trigger_config_id FROM stale_runs)
+                    RETURNING config.id
+                ),
+                recovered_intents AS (
+                    UPDATE agent_execution_intents intent
+                    SET status = 'pending', claimed_at = NULL, completed_at = NULL,
+                        error_message = '上一个运行心跳丢失，Relay 已安排从原项目会话恢复'
+                    WHERE intent.status = 'running'
+                      AND intent.agent_profile_id IN (SELECT agent_profile_id FROM stale_runs)
+                    RETURNING intent.id
+                )
+                SELECT COUNT(*)::BIGINT AS stale_count FROM stale_runs
+                "#,
+                &[&now, &stale_before],
+            )
+        })
+        .map(|row| row.get::<_, i64>("stale_count") as usize)
     }
 
     fn list_agent_codex_trigger_runs(
@@ -570,7 +667,9 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                        trigger_type, status, codex_thread_id, codex_version,
                        exit_code, started_at, finished_at, final_message_summary,
                        error_message, activity_phase, activity_summary,
-                       last_activity_at, activity_log
+                       last_activity_at, activity_log, process_instance_id,
+                       heartbeat_at, state_reason, current_intent_id, current_task_id,
+                       waiting_on_type, waiting_on_id, session_kind, resumes_run_id
                 FROM agent_codex_trigger_runs
                 WHERE agent_profile_id = $1
                 ORDER BY started_at DESC, id DESC

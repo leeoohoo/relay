@@ -29,17 +29,18 @@ use ai_chat_domain::{
         AGENT_CODEX_APPROVAL_POLICY_NEVER, AGENT_CODEX_APPROVAL_SCOPE_KEY,
         AGENT_CODEX_APPROVAL_TARGET_KEY, AGENT_CODEX_APPROVAL_TOOL_PERMISSIONS,
         AGENT_CODEX_APPROVAL_TOOL_WEBSITE_ACCESS, AGENT_CODEX_RUN_STATUS_CANCELLED,
-        AGENT_CODEX_RUN_STATUS_FAILED, AGENT_CODEX_RUN_STATUS_RUNNING,
-        AGENT_CODEX_RUN_STATUS_SUCCEEDED, AGENT_CODEX_RUN_STATUS_TIMED_OUT,
-        AGENT_CODEX_SANDBOX_READ_ONLY, AGENT_CODEX_SESSION_KIND_CONTROL,
-        AGENT_CODEX_SESSION_KIND_PROJECT, AGENT_CODEX_SESSION_STATUS_ACTIVE,
-        AGENT_CODEX_SESSION_STATUS_ARCHIVED, AGENT_CODEX_SETTING_INHERIT,
-        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_COMPLETED,
-        AGENT_EXECUTION_INTENT_STATUS_FAILED, AGENT_EXECUTION_INTENT_STATUS_PENDING,
-        AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
-        AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXPIRED,
-        AGENT_TOOL_APPROVAL_STATUS_FAILED, AGENT_TOOL_APPROVAL_STATUS_REJECTED,
-        CODEX_PLUGIN_OPERATION_REFRESH, COMPANY_SKILL_LANGUAGE_EN,
+        AGENT_CODEX_RUN_STATUS_FAILED, AGENT_CODEX_RUN_STATUS_RESTARTED,
+        AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_RUN_STATUS_SUCCEEDED,
+        AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
+        AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
+        AGENT_CODEX_SESSION_STATUS_ACTIVE, AGENT_CODEX_SESSION_STATUS_ARCHIVED,
+        AGENT_CODEX_SETTING_INHERIT, AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION,
+        AGENT_EXECUTION_INTENT_STATUS_COMPLETED, AGENT_EXECUTION_INTENT_STATUS_FAILED,
+        AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
+        AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
+        AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
+        AGENT_TOOL_APPROVAL_STATUS_REJECTED, CODEX_PLUGIN_OPERATION_REFRESH,
+        COMPANY_SKILL_LANGUAGE_EN,
     },
 };
 use ai_chat_infrastructure::{
@@ -57,7 +58,10 @@ use ai_chat_infrastructure::{
     },
     config::ApiConfig,
     git_credentials::is_managed_token_profile,
-    git_workspace::{is_git_authentication_error, GitWorkspaceManager, PreparedGitWorkspace},
+    git_workspace::{
+        is_git_authentication_error, is_missing_default_branch_error, GitWorkspaceManager,
+        PreparedGitWorkspace,
+    },
     harness::HarnessProvisioner,
     RepositoryAdapter,
 };
@@ -216,6 +220,25 @@ impl CodexProgressHandler for PlatformCodexProgressHandler {
                 error = %sanitize_error(&error.to_string()),
                 "failed to persist Codex activity"
             );
+        }
+    }
+}
+
+async fn run_with_heartbeat<F, T>(platform: &TriggerPlatform, run_id: Uuid, future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::pin!(future);
+    let mut heartbeat = tokio::time::interval(StdDuration::from_secs(5));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            output = &mut future => return output,
+            _ = heartbeat.tick() => {
+                if let Err(error) = platform.heartbeat_agent_codex_trigger_run(run_id) {
+                    tracing::debug!(run_id = %run_id, error = %sanitize_error(&error.to_string()), "Codex run heartbeat stopped");
+                }
+            }
         }
     }
 }
@@ -503,6 +526,7 @@ async fn run_trigger_loop(
     let mut next_mcp_discovery = tokio::time::Instant::now();
     let mut next_plugin_discovery = tokio::time::Instant::now();
     let mut next_update_check = tokio::time::Instant::now();
+    let mut next_watchdog = tokio::time::Instant::now();
     publish_codex_runtime_probe(codex_control, codex_runner)?;
     if codex_runner.detect_version().is_none() && config.codex_auto_install {
         let runtime = codex_control.runtime()?;
@@ -516,6 +540,18 @@ async fn run_trigger_loop(
         }
     }
     loop {
+        if tokio::time::Instant::now() >= next_watchdog {
+            match platform.watchdog_stale_agent_codex_trigger_runs(30) {
+                Ok(count) if count > 0 => {
+                    tracing::warn!(stale_runs = count, "Watchdog recovered stale Codex runs")
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(error = %sanitize_error(&error.to_string()), "Codex run Watchdog failed")
+                }
+            }
+            next_watchdog = tokio::time::Instant::now() + StdDuration::from_secs(10);
+        }
         if running.is_empty() && plugin_operations.is_empty() {
             if let Some(request) = codex_control.claim_next_request()? {
                 process_codex_control_request(codex_control, codex_runner, config, request).await;
@@ -814,5 +850,7 @@ use execution::*;
 use execution_result::*;
 use relay_skills::*;
 
+#[cfg(test)]
+mod prompt_tests;
 #[cfg(test)]
 mod tests;

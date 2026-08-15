@@ -279,6 +279,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .complete_company_project_creation(project_creation)?;
         }
         for agent_id in member_agent_ids {
+            let _ = self.ensure_project_member_default_subscriptions(project.id, agent_id);
             if agent_id != project.owner_agent_id {
                 let name = project.name.as_str();
                 let _ = self.enqueue_agent_event(

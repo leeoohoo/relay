@@ -154,6 +154,33 @@ export type CompanyProjectTask = {
   updated_at: string;
 };
 
+export type ProjectTaskExecution = {
+  readiness: {
+    task_id: string;
+    readiness: "ready" | "waiting";
+    can_start: boolean;
+    waiting_reasons: Array<{ kind: "dependency" | "gate" | "environment" | "blocker"; code: string; summary: string; related_id: string | null }>;
+    suggested_actions: string[];
+    dependencies: Array<{ dependency: CompanyProject["task_dependencies"][number]; dependency_task: CompanyProjectTask | null; satisfied: boolean }>;
+    gate_requirements: Array<{
+      requirement: { task_id: string; gate_id: string; required_status: string; created_at: string };
+      gate: { id: string; title: string; gate_type: string; status: string } | null;
+      satisfied: boolean;
+    }>;
+    environment_requirements: Array<{
+      requirement: { task_id: string; environment_id: string; required_revision: string | null; required_services: string[]; require_healthy: boolean; created_at: string };
+      environment: { id: string; display_name: string; environment_key: string; status: string; observed_revision: string | null } | null;
+      services: Array<{ id: string; service_key: string; health_status: string; observed_revision: string | null }>;
+      satisfied: boolean;
+    }>;
+    open_blockers: Array<{ id: string; attempt_id: string | null; blocker_type: string; status: "open" | "resolved" | "waived"; summary: string; resolution_condition: string; resolution_summary: string | null; owner_agent_id: string | null; created_at: string; resolved_at: string | null }>;
+  };
+  attempts: Array<{ id: string; attempt_number: number; attempt_type: string; status: string; objective: string; result_summary: string | null; failure_category: string | null; agent_id: string; started_at: string | null; finished_at: string | null; created_at: string }>;
+  blockers: Array<{ id: string; attempt_id: string | null; blocker_type: string; status: "open" | "resolved" | "waived"; summary: string; resolution_condition: string; resolution_summary: string | null; owner_agent_id: string | null; created_at: string; resolved_at: string | null }>;
+  relations: Array<{ id: string; source_task_id: string; target_task_id: string; relation_type: string; created_at: string }>;
+  evidence: Array<{ id: string; attempt_id: string | null; evidence_type: string; title: string; summary: string; result: string; artifact_refs: unknown[]; metrics: Record<string, unknown>; producer_agent_id: string | null; created_at: string }>;
+};
+
 export type CompanyProject = {
   project: {
     id: string;
@@ -230,6 +257,13 @@ export type CompanyProject = {
     metadata: Record<string, unknown>;
     created_at: string;
   }>;
+  load_warnings?: Array<{
+    code: string;
+    severity: "warning" | "critical";
+    agent_profile_id: string | null;
+    title: string;
+    detail: string;
+  }>;
 };
 
 export type CompanyProjectType = {
@@ -265,6 +299,15 @@ export type CodexTriggerRun = {
     phase: string;
     summary: string;
   }>;
+  process_instance_id?: string | null;
+  heartbeat_at?: string | null;
+  state_reason?: string | null;
+  current_intent_id?: string | null;
+  current_task_id?: string | null;
+  waiting_on_type?: string | null;
+  waiting_on_id?: string | null;
+  session_kind?: "control" | "project";
+  resumes_run_id?: string | null;
 };
 
 export type CodexSession = {
@@ -322,6 +365,32 @@ export type CodexTriggerView = {
     consecutive_failure_count: number;
   };
   recent_runs: CodexTriggerRun[];
+  active_intents: Array<{
+    id: string;
+    project_id: string;
+    worker_session_id: string | null;
+    task_ids: string[];
+    action_type: string;
+    objective: string;
+    status: "pending" | "running";
+    result_summary: string;
+    error_message: string | null;
+    created_at: string;
+    claimed_at: string | null;
+  }>;
+  recent_sessions: CodexSession[];
+  runtime?: {
+    state: "idle" | "triaging" | "executing" | "waiting_dependency" | "waiting_environment" | "waiting_approval" | "waiting_human" | "reporting" | "recovering" | "failed" | "paused";
+    reason: string;
+    session_kind: "control" | "project" | null;
+    run_id: string | null;
+    intent_id: string | null;
+    task_id: string | null;
+    waiting_on_type: string | null;
+    waiting_on_id: string | null;
+    heartbeat_at: string | null;
+    stale: boolean;
+  };
 };
 
 export type CodexRunnerProfileView = {
@@ -545,6 +614,9 @@ export type AgentMemory = {
   session_id: string | null;
   memory_tier: "short_term" | "long_term";
   injection_mode: "always" | "on_demand";
+  classification_reason: string;
+  estimated_ttl_days: number | null;
+  injection_cost_chars: number;
   visibility: "control" | "worker" | "both";
   memory_type: "fact" | "decision" | "lesson" | "preference" | "procedure" | "relationship" | "handoff";
   topic_key: string;
@@ -559,6 +631,7 @@ export type AgentMemory = {
   source_refs: Array<{ source_type: string; source_id: string; label: string | null }>;
   supersedes_memory_id: string | null;
   expires_at: string | null;
+  archived_at: string | null;
   verified_by_agent_id: string | null;
   verified_by_human_user_id: string | null;
   verified_at: string | null;

@@ -39,7 +39,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     .filter(|coworker| coworker.agent_profile.id != agent_id)
                     .cloned()
                     .collect::<Vec<_>>();
-                let pending_inbox = self.platform.list_agent_inbox_events(agent_id, true, 50)?;
+                let pending_inbox = filter_inbox_events(
+                    self.platform.list_agent_inbox_events(agent_id, true, 50)?,
+                    None,
+                );
                 let profession = infer_company_profession(Some(&membership.job_title));
                 let memory_overview =
                     self.platform
@@ -49,11 +52,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         actor_agent_id: agent_id,
                         company_id: membership.company_id,
                         conversation_id: None,
+                        after_message_id: None,
                         message_limit: 20,
                     },
                 )?;
                 let work_sessions = self.platform.list_agent_codex_sessions(agent_id, 20);
                 let mut next_tools = vec![
+                    "agent.control_snapshot",
                     "agent.profile.update",
                     "agent.memory",
                     "agent.work_session",
@@ -62,6 +67,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     "company.chat",
                     "company.project",
                     "company.task",
+                    "company.gate",
+                    "company.environment",
                     "company.events",
                 ];
                 if context
@@ -96,6 +103,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     "unread_group_messages": unread_group_messages,
                     "next_tools": next_tools
                 }))
+            }
+            "agent.control_snapshot" => {
+                let membership = self
+                    .platform
+                    .get_active_company_agent_membership(agent_id)?;
+                let snapshot = self
+                    .platform
+                    .agent_control_snapshot(agent_id, membership.company_id)?;
+                Ok(json!({ "snapshot": snapshot }))
             }
             "agent.get_profile" => {
                 let profile = self.platform.get_agent_profile_by_id(agent_id)?;
@@ -448,7 +464,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                     input.pending_only.unwrap_or(true),
                     input.limit.unwrap_or(20),
                 )?;
-                Ok(json!({ "events": items }))
+                Ok(json!({ "events": filter_inbox_events(items, None) }))
             }
             "agent.inbox.wait" => {
                 let input: AgentInboxWaitInput = parse_input(input)?;

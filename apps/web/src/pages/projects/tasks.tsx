@@ -4,6 +4,7 @@ import { Pagination, usePagination } from "../../components/Pagination";
 import { Field, Icon } from "../../components/ui";
 import type { CompanyConsole, CompanyProject, CompanyProjectTask } from "../../types/platform";
 import { Dialog, formatTaskDue, formatTime, taskDueClass, taskPriorityLabel, taskStatusLabel, toDateTimeLocalValue } from "../app/shared";
+import { TaskExecutionPanel } from "./task-execution";
 
 export function TasksView(props: {
   consoleData: CompanyConsole;
@@ -174,7 +175,9 @@ export function TasksView(props: {
             props.onNotice(task.assignee_agent_id ? "任务已创建，负责人会在下次 Trigger 时收到它。" : "任务已创建。" );
             await props.onChanged();
           }}
+          onChanged={props.onChanged}
           onError={props.onError}
+          onNotice={props.onNotice}
         />
       ) : null}
       {editingEntry ? (
@@ -189,7 +192,9 @@ export function TasksView(props: {
             props.onNotice(task.assignee_agent_id !== editingEntry.task.assignee_agent_id ? "任务已更新，新负责人会收到 Inbox 事件。" : "任务已更新。" );
             await props.onChanged();
           }}
+          onChanged={props.onChanged}
           onError={props.onError}
+          onNotice={props.onNotice}
         />
       ) : null}
     </div>
@@ -225,7 +230,9 @@ function TaskDialog(props: {
   token: string;
   onClose: () => void;
   onSaved: (task: CompanyProjectTask) => Promise<void>;
+  onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
+  onNotice: (notice: string) => void;
 }) {
   const [projectId, setProjectId] = useState(props.task?.project_id ?? props.projects[0]?.project.id ?? "");
   const [title, setTitle] = useState(props.task?.title ?? "");
@@ -373,6 +380,7 @@ function TaskDialog(props: {
             <Pagination {...historyPagination} onPageChange={historyPagination.setPage} compact />
           </div>
         ) : null}
+        {props.task && project ? <TaskExecutionPanel companyId={props.companyId} project={project} task={props.task} token={props.token} onChanged={props.onChanged} onError={props.onError} onNotice={props.onNotice} /> : null}
         {!activeMembers.length ? <div className="git-security-note">这个项目还没有活跃成员。你可以先保存为未分配任务，或让有权限的 Agent 添加项目成员。</div> : null}
         <div className="dialog-actions">
           <button className="button" type="button" onClick={props.onClose} disabled={busy}>取消</button>

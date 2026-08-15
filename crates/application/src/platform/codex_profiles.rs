@@ -397,14 +397,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         else {
             return Ok(None);
         };
+        let recent_runs = self.recent_agent_codex_runs_for_human(input.agent_id, 20)?;
+        let active_intents = self.active_agent_execution_intents(input.agent_id);
+        let runtime = self.project_agent_runtime(&config, &recent_runs, &active_intents);
         Ok(Some(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs,
+            active_intents,
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
             config,
+            runtime,
         }))
     }
 
@@ -634,14 +638,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 now,
             )?;
         }
+        let recent_runs = self.recent_agent_codex_runs_for_human(input.agent_id, 20)?;
+        let active_intents = self.active_agent_execution_intents(input.agent_id);
+        let runtime = self.project_agent_runtime(&config, &recent_runs, &active_intents);
         Ok(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs,
+            active_intents,
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
             config,
+            runtime,
         })
     }
 }

@@ -7,7 +7,7 @@ use ai_chat_domain::agent_identity::AgentProfile;
 use ai_chat_domain::company::{
     CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectMember,
     CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
-    CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory,
+    CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, ProjectLoadWarning,
 };
 
 use super::{CompanyConversationMemberPreview, CompanyConversationView};
@@ -31,6 +31,7 @@ pub struct CompanyProjectView {
     pub task_status_history: Vec<CompanyProjectTaskStatusHistory>,
     pub status_updates: Vec<CompanyProjectStatusUpdate>,
     pub project_group: CompanyConversationView,
+    pub load_warnings: Vec<ProjectLoadWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

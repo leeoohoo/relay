@@ -42,20 +42,26 @@ use rmcp::transport::streamable_http_server::{
 };
 
 use ai_chat_application::{
-    ChangeHumanPasswordInput, CreateCompanyAgentInput, CreateCompanyInput,
-    CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
-    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput, DeleteAgentMemoryForHumanInput,
+    ChangeHumanPasswordInput, CompanyAgentCodexRuntimeOverview, CreateCompanyAgentInput,
+    CreateCompanyInput, CreateCompanyProjectForHumanInput, CreateCompanyProjectTaskForHumanInput,
+    CreateManagedCompanyProjectForHumanInput, CreateOrgUnitInput,
+    CreateProjectEnvironmentForHumanInput, CreateProjectGateForHumanInput,
+    DecideProjectGateForHumanInput, DeleteAgentMemoryForHumanInput,
     DeleteCompanyCodexRunnerProfileForHumanInput, DevLoginInput,
     GetCompanyAgentCodexTriggerForHumanInput, GetCompanyProjectGitForHumanInput,
     HumanCompanyStaffingStatusInput, ListCompanyAgentCodexRunsForHumanInput,
     ListCompanyAgentCodexSessionsForHumanInput, ListCompanyCodexPluginsForHumanInput,
-    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput, LoginHumanInput,
-    OpenHumanCompanyDirectConversationInput, PlatformApp, ProjectProvisioningCleanupJob,
+    ListCompanyCodexRunnerProfilesForHumanInput, ListCompanyMemoriesForHumanInput,
+    ListProjectEnvironmentsForHumanInput, ListProjectGatesForHumanInput, LoginHumanInput,
+    ObserveProjectEnvironmentForHumanInput, OpenHumanCompanyDirectConversationInput,
+    OpenProjectDiscussionThreadForHumanInput, PlatformApp,
+    ProjectEnvironmentServiceObservationInput, ProjectProvisioningCleanupJob,
     PublishCompanyGovernancePolicyInput, RegisterHumanInput,
     RequestCodexPluginOperationForHumanInput, RequestCompanyProjectRuleGenerationForHumanInput,
     ResetHumanPasswordInput, ReviewAgentToolApprovalInput,
     SendHumanCompanyMessageWithAttachmentsInput, SetCompanyAgentCodexTriggerStatusForHumanInput,
-    SetCompanyProjectPauseForHumanInput, TransferCompanyProjectOwnerForHumanInput,
+    SetCompanyProjectPauseForHumanInput, SetProjectTaskEnvironmentRequirementForHumanInput,
+    SetProjectTaskGateRequirementForHumanInput, TransferCompanyProjectOwnerForHumanInput,
     UpdateAgentMemoryForHumanInput, UpdateCompanyAgentPermissionsInput,
     UpdateCompanyAgentProfessionInput, UpdateCompanyAgentRoleInput,
     UpdateCompanyProjectRuleForHumanInput, UpdateCompanyProjectTaskForHumanInput,
@@ -76,7 +82,9 @@ use ai_chat_infrastructure::codex_control::{
 };
 use ai_chat_infrastructure::codex_trigger::CodexModelCatalogFile;
 use ai_chat_infrastructure::config::{ApiConfig, HarnessMode, McpConfig};
-use ai_chat_infrastructure::git_credentials::{managed_token_profile_name, GitCredentialStore};
+use ai_chat_infrastructure::git_credentials::{
+    is_managed_token_profile, managed_token_profile_name, GitCredentialStore,
+};
 use ai_chat_infrastructure::harness::{
     HarnessProjectGitProvisioner, HarnessProvisioner, HarnessRepositoryContent,
 };
@@ -105,6 +113,7 @@ struct AppState {
     git_credential_store: GitCredentialStore,
     message_attachments_root: PathBuf,
     folder_reference_allowed_roots: Arc<Vec<PathBuf>>,
+    git_import_timeout: StdDuration,
     codex_model_catalog_path: PathBuf,
     codex_control_store: CodexControlStore,
     harness_provisioner: HarnessProvisioner<RepositoryAdapter>,
@@ -180,9 +189,12 @@ mod chat;
 mod codex;
 mod company;
 mod dto;
+mod environments;
+mod project_discussions;
 mod project_files;
 mod project_repository;
 mod projects;
+mod task_execution;
 
 use account::*;
 use agents::*;
@@ -191,9 +203,12 @@ use chat::*;
 use codex::*;
 use company::*;
 use dto::*;
+use environments::*;
+use project_discussions::*;
 use project_files::*;
 use project_repository::*;
 use projects::*;
+use task_execution::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -336,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         git_credential_store,
         message_attachments_root,
         folder_reference_allowed_roots,
+        git_import_timeout: StdDuration::from_secs(config.git_import_timeout_seconds),
         codex_model_catalog_path,
         codex_control_store,
         harness_provisioner,
@@ -415,12 +431,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/companies/{company_id}/projects",
-            get(list_company_console_projects).post(create_company_project_for_human),
+            get(list_company_console_projects),
         )
         .route(
-            "/api/v1/companies/{company_id}/projects/import-folder",
-            post(import_company_project_folder_for_human)
-                .layer(DefaultBodyLimit::max(5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024)),
+            "/api/v1/companies/{company_id}/projects/{project_id}/discussion-threads",
+            post(open_project_discussion_thread),
         )
         .route(
             "/api/v1/companies/{company_id}/memories",
@@ -466,6 +481,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/codex-trigger",
             get(get_company_agent_codex_trigger).put(upsert_company_agent_codex_trigger),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/codex-runtime-overview",
+            get(get_company_codex_runtime_overview),
         )
         .route(
             "/api/v1/companies/{company_id}/codex-runner-profiles",
@@ -610,6 +629,54 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::put(update_company_project_task_for_human),
         )
         .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/execution",
+            get(get_project_task_execution_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/blockers",
+            post(open_project_task_blocker_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/blockers/{blocker_id}",
+            axum::routing::put(resolve_project_task_blocker_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/relations",
+            post(add_project_task_relation_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/relations/{relation_id}",
+            axum::routing::delete(remove_project_task_relation_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/evidence",
+            post(create_project_evidence_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/gates",
+            get(list_project_gates_for_human).post(create_project_gate_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/gates/{gate_id}",
+            axum::routing::put(decide_project_gate_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/gates/{gate_id}",
+            axum::routing::put(set_project_task_gate_requirement_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/environments",
+            get(list_project_environments_for_human).post(create_project_environment_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/environments/{environment_id}",
+            axum::routing::put(observe_project_environment_for_human),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/projects/{project_id}/tasks/{task_id}/environments/{environment_id}",
+            axum::routing::put(set_project_task_environment_requirement_for_human),
+        )
+        .route(
             "/api/v1/companies/{company_id}/agents/{agent_id}/activate",
             post(activate_company_agent),
         )
@@ -673,6 +740,23 @@ async fn main() -> anyhow::Result<()> {
             StatusCode::REQUEST_TIMEOUT,
             StdDuration::from_secs(config.request_timeout_seconds),
         ))
+        .merge(
+            Router::new()
+                .route(
+                    "/api/v1/companies/{company_id}/projects",
+                    post(create_company_project_for_human),
+                )
+                .route(
+                    "/api/v1/companies/{company_id}/projects/import-folder",
+                    post(import_company_project_folder_for_human).layer(DefaultBodyLimit::max(
+                        5 * 1024 * 1024 * 1024 + 8 * 1024 * 1024,
+                    )),
+                )
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::REQUEST_TIMEOUT,
+                    StdDuration::from_secs(config.project_import_timeout_seconds),
+                )),
+        )
         .route(
             "/api/v1/companies/{company_id}/events",
             get(stream_company_events_for_human),
@@ -682,7 +766,7 @@ async fn main() -> anyhow::Result<()> {
             get(stream_company_events_for_agent),
         )
         .layer(cors_layer)
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().on_response(log_http_response))
         .with_state(app_state);
 
     let addr = SocketAddr::from((config.host.parse::<std::net::IpAddr>()?, config.port));
@@ -692,6 +776,16 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn log_http_response<B>(response: &Response<B>, latency: StdDuration, _span: &tracing::Span) {
+    if response.status().is_client_error() || response.status().is_server_error() {
+        tracing::warn!(
+            status = %response.status(),
+            latency_ms = latency.as_millis(),
+            "HTTP request failed"
+        );
+    }
 }
 
 async fn api_not_found() -> ApiError {

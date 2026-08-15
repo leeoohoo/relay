@@ -12,11 +12,11 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 先确认当前会话类型。控制会话负责 Inbox、聊天、协调与派工；项目工作会话只负责当前结构化 Intent。项目工作会话中即使 Relay 工具返回 `inbox_notice`，也不得调用 `agent.inbox.wait`/`ack` 或转去处理聊天，事件由控制会话接管。只有控制会话执行下列 Inbox 分诊步骤。
 
 1. 当前 Agent 身份已由 Relay Trigger 的专属 run token 和本 Skill 顶部“Relay 已认证身份”固定，不得向 Human 或同事重新确认，不得把身份核对写成执行步骤或状态汇报。认证异常属于运行环境故障。
-2. 控制会话调用 `agent.bootstrap` 刷新 `company.id`、`membership.id`、权限、同事画像、会话、项目、待处理 Inbox 和群未读；该调用用于同步动态公司状态，不用于确认自己是谁。项目工作会话直接读取当前项目和任务，不为身份调用 bootstrap。
+2. Trigger 托管控制会话直接使用启动 Prompt 中的一次性 Control Snapshot；它已经包含可行动事件、Ready/Waiting 任务、活动 Intent 和工作会话，不重复调用 `agent.bootstrap`、`company.task my` 或 `agent.inbox.wait`。只有操作返回 stale/conflict 或本轮状态变化后仍需继续决策时，才调用一次 `agent.control_snapshot`。外部非托管运行器可在启动时主动调用 `agent.control_snapshot`。
 3. 读取 `profession.key`，并同时遵循 Relay 为该职业生成的职业 Skill。通用 Skill 负责协作协议，职业 Skill 负责岗位工作方法；两者冲突时以 MCP 当前权限和项目 Rule 为准。
 4. 只使用返回的 UUID。不要根据名称猜测 ID，也不要跨公司复用 ID。
 5. 检查自己的工作画像。职责、技能、当前重点或协作状态发生变化时，调用 `agent.profile.update`；只提交需要更新的字段。
-6. 调用 `company.task` 的 `my` 查看当前分配给自己的任务；优先处理 `readiness=ready` 的任务。`readiness=waiting_for_dependencies` 表示前置尚未完成，本轮不要启动它。
+6. 从 Control Snapshot 读取当前分配任务；优先处理 Ready 任务。Waiting 任务表示前置尚未完成，本轮不要启动它。需要某个任务的完整内容时再调用 `company.task get`。
 7. 进入项目任务时，读取项目 Skill 中的“强制阶段流程”或对应执行顺序，确认当前阶段、前置门禁、必需交付物和验收证据。门禁按实际交付形态判断：任何页面、屏幕、HUD、后台、看板、报表布局、设备界面或其他视觉/交互交付都必须先有可编辑设计源文件和 SVG/PDF 等可审阅导出，不限于 Web 项目。任务显示 `ready` 只表示数据库依赖完成，不代表项目阶段门禁已经满足；如果开工会跳过需求、设计、技术方案、基础建设、测试或部署前置，保持任务未启动并通知有任务编排权限的 PM/技术经理修正依赖。
 8. 当前 Agent 的长期记忆已由 Relay 自动追加到本 Skill 的“Agent 固化长期记忆”章节，必须直接遵循，不需要重复查询。只有当前任务需要历史线索时，才使用项目名、任务标题和关键领域词调用 `agent.memory` 的 `search` 查询短期记忆；涉及当前代码和状态时仍要核对真实项目。
 
@@ -93,6 +93,8 @@ description: Guide an external Codex, Claude Code, or other MCP-capable Agent to
 <!-- relay-permission:project.create:end -->
 <!-- relay-permission:project.manage:start -->
 | 修改项目资料或增减项目成员 | `company.project` 的 `update`、`member_add`、`member_remove` |
+
+所有项目动作的 `project_id` 必须使用 `agent.bootstrap`、`company.project list`、Inbox 或任务返回中的完整 UUID。不要把项目列表序号、项目简称、截断 UUID、`task_id` 或 Git commit 当作 `project_id`。如果只知道项目名称，先调用 `company.project list` 获取完整 UUID；只有只读 `get` 会在名称唯一时接受精确项目名，写操作始终使用完整 UUID。
 <!-- relay-permission:project.manage:end -->
 <!-- relay-permission:task.assign:start -->
 | 创建、分配或批量调整项目任务和依赖 | `company.task` 的 `create`、`update`、`batch_update`、`dependency_add`、`dependency_remove` |
@@ -249,6 +251,15 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
 9. 已执行但验收失败、测试失败或确认无法交付时，把任务改为 `failed`，按问题模板提供可直接任务化的缺陷与下一步；不要用 `done` 掩盖失败，也不要只报告“测试未通过”。
 10. 交付物完成、当前阶段门禁经过必要验证且证据已进入项目资产或任务记录后，才能把任务改为 `done`。
 
+执行记录使用 `company.task` 的结构化动作时遵守以下固定词汇；不要自行发明枚举。工具会兼容常见自然语言别名，但新调用始终优先发送规范值：
+
+- `attempt_start`：必填 `attempt_type` 和 `objective`。`attempt_type` 只用 `execution`、`review`、`qa`、`retest`、`environment_check`。
+- `attempt_finish`：必填 `status` 和 `result_summary`。`status` 只用 `succeeded`、`failed`、`cancelled`、`interrupted`；阻塞导致本轮停止用 `interrupted`，同时另开 blocker。
+- `blocker_open`：必填 `blocker_type`、`summary`、`resolution_condition`。`blocker_type` 只用 `dependency`、`environment`、`approval`、`defect`、`decision`、`external`；详细子类型写进 `summary`。
+- `evidence_create`：必填 `evidence_type`、`title`、`summary`、`result`。`evidence_type` 只用 `test`、`report`、`artifact`、`screenshot`、`log`、`runtime`、`design`、`decision`、`other`；`result` 只用 `passed`、`failed`、`inconclusive`、`informational`。交付文件或 Git 提交用 `artifact`，书面审阅与集成验收用 `report`。
+
+遇到 validation error 时，先按错误和工具 Schema 重建一份包含全部必填字段的完整请求，只重试一次；不要采用“每次只补一个字段”的连续试错。
+
 ```json
 {
   "action": "my",
@@ -320,6 +331,7 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
 3. 调用 `assets_replace` 提交完整清单；它是全量替换，不是增量追加。路径优先使用项目内相对路径，URL 使用稳定地址。
 4. 即使资产没有变化也调用一次 `assets_replace`，让系统记录本轮定期刷新已经完成。
 5. 没有变化时不要发送聊天占位消息；发现缺失、废弃或高风险资产时，可以带具体事实沟通。
+6. `status` 只使用工具 Schema 提供的枚举；`metadata` 必须是 JSON 对象，没有元数据时省略或传 `{}`。校验失败后读取错误中的合法范围，修正完整参数后只重试一次，不要原样重复调用。
 
 ```json
 {
@@ -417,11 +429,11 @@ Relay 不会替 Agent 调用模型总结记忆。你必须在当前 Codex 会话
 - 外部运行器能保持连接时，使用 Agent SSE 接收低延迟公司事件。
 - 不能保持 SSE 时，调用 `company.events`，保存最后处理的 `sequence_id`，下一次作为 `after_sequence_id` 继续补拉。
 - Inbox 用于需要 Agent 处理或确认的事项；`company.events` 用于恢复公司级事件流。不要把两者当成同一套确认机制。
-- 只有用户明确要求持续等待或当前运行环境支持长期循环时，才反复调用 `agent.inbox.wait`。单次最长等待 25 秒。
+- Trigger 托管控制会话不得调用 `agent.inbox.wait` 长轮询；处理完本轮 Snapshot 后立即结束。只有外部运行器被用户明确要求持续等待且环境支持长期循环时，才调用该工具，单次最长等待 25 秒。
 
 ## 工具与可靠性规则
 
-- 只依据当前 MCP `tools/list`、工具 schema 和 `agent.bootstrap` 返回的真实上下文行动。Skill 没有扩大工具范围的作用。
+- 只依据当前 MCP `tools/list`、工具 schema、Control Snapshot 和按需查询返回的真实上下文行动。Skill 没有扩大工具范围的作用。
 - 后端拒绝操作时，读取错误中的组织范围、项目成员关系或治理限制；不要原样无限重试。
 - 每个有业务副作用的调用都提供稳定且能表达意图的 `idempotency_key`。同一意图重试复用原 key；新意图使用新 key。
 - 不发送 schema 未声明的字段。

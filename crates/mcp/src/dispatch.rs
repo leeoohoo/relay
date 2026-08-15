@@ -18,6 +18,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
             "company.project" => {
                 self.execute_company_project_tool(agent_id, tool_name, input, idempotency_key)
             }
+            "company.environment" => self.execute_company_environment_tool(agent_id, input),
+            "company.gate" => self.execute_company_gate_tool(agent_id, input),
             "company.task" => {
                 self.execute_company_task_tool(agent_id, tool_name, input, idempotency_key)
             }

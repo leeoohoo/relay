@@ -441,13 +441,24 @@ pub(super) fn validate_safe_value(
 }
 
 pub(super) fn validate_prompt(value: &str) -> AppResult<()> {
-    if value.trim().is_empty()
-        || value.chars().count() > 20_000
-        || value
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+    if value.trim().is_empty() {
+        return Err(AppError::Validation("Codex prompt is empty".into()));
+    }
+    let character_count = value.chars().count();
+    if character_count > 100_000 {
+        return Err(AppError::Validation(format!(
+            "Codex prompt exceeds the 100,000-character limit ({character_count} characters)"
+        )));
+    }
+    if let Some((offset, character)) = value
+        .chars()
+        .enumerate()
+        .find(|(_, character)| character.is_control() && !matches!(character, '\n' | '\t'))
     {
-        return Err(AppError::Validation("Codex prompt is invalid".into()));
+        return Err(AppError::Validation(format!(
+            "Codex prompt contains unsupported control character U+{:04X} at character {offset}",
+            u32::from(character)
+        )));
     }
     Ok(())
 }

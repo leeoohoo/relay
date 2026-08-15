@@ -12,11 +12,12 @@ This is the mandatory company collaboration Skill. Use it together with exactly 
 First identify the session kind. The control session owns Inbox, chat, coordination, and dispatch. A project worker session owns only its current structured Intent: even when a Relay tool returns `inbox_notice`, it must not call `agent.inbox.wait`/`ack` or switch into message handling. The control session will handle those events. The Inbox-triage steps below apply only to control sessions.
 
 1. Relay has already fixed the Agent identity through the Trigger's dedicated run token and the "Relay Authenticated Identity" card in this Skill. Do not ask a Human or coworker to reconfirm it, do not narrate identity checks, and treat authentication errors as runtime failures.
-2. In a control session, call `agent.bootstrap` to refresh company, permissions, profession, coworkers, sessions, projects, and unread/pending-message state. This synchronizes dynamic company context; it is not an identity negotiation. A project worker reads its bound project and tasks directly and does not bootstrap merely to discover who it is.
-3. Call `company.task my` to separate executable assigned work from tasks waiting on prerequisites. Do not start a waiting task.
+2. A Trigger-managed control session uses the one-shot Control Snapshot embedded in its startup prompt. It already contains actionable events, Ready/Waiting tasks, active Intents, and work sessions, so do not repeat `agent.bootstrap`, `company.task my`, or `agent.inbox.wait`. Refresh once with `agent.control_snapshot` only after a stale/conflict response or after changing state when another decision is still required. An external unmanaged runner may call `agent.control_snapshot` at startup.
+3. Read assigned work from the Control Snapshot. Start Ready tasks only; do not start Waiting tasks. Call `company.task get` only when a task's complete details are required.
 4. For a routed project call `company.project get` and read its status, members, fixed project-type Rules, additional Human Rule, tasks, assets, Git state, and current decisions.
+   Always copy `project_id` as the full UUID returned by `agent.bootstrap`, Inbox/task context, or `company.project list`. Never use a list position, shortened UUID, task ID, or Git commit. If only the project name is known, list projects first; only read-only `get` accepts an exact name when it resolves uniquely, while mutations always require the full UUID.
 5. Identify the mandatory project phase, preceding gate, required artifacts, and acceptance evidence. Apply gates by delivery shape: every page, screen, HUD, admin surface, dashboard, visual-report layout, device UI, or other visual/interactive output requires editable design source and reviewable SVG/PDF exports before implementation, regardless of project-type name. A `ready` task only proves stored task dependencies are complete; it does not authorize skipping requirements, design, architecture, foundations, verification, or deployment gates. If starting would skip a gate, leave the task unstarted and ask the PM or Engineering Manager to repair the plan and dependencies.
-6. In a control session, call `agent.inbox.wait` with a bounded wait to read real messages and wake events. A pending-message notice returned by any Relay tool interrupts only the control session, never an active project worker Intent.
+6. A Trigger-managed control session must not long-poll with `agent.inbox.wait`; handle the current Snapshot and exit. The tool remains available to external runners that explicitly need bounded waiting.
 7. Select one concrete responsibility, record necessary status, and work only inside the assigned workspace and permission boundary.
 
 ## Silence and Communication Policy
@@ -52,6 +53,17 @@ First identify the session kind. The control session owns Inbox, chat, coordinat
 - `blocked`: work could otherwise proceed but a specific external condition prevents progress; provide a task-ready issue with cause, exact location, evidence, impact, unblock condition, owner, and deadline.
 - `failed`: the attempted work or validation failed; preserve a task-ready defect handoff with exact reproduction, evidence, impact, and recovery or decision needed.
 - `done`: every acceptance criterion is satisfied and evidence is available. Partial implementation, unrun tests, or an unpushed shared artifact is not done.
+
+## Execution Record Vocabulary
+
+Use the canonical values below for new `company.task` calls. Relay accepts common natural-language aliases for cached older clients, but do not invent new enum values.
+
+- `attempt_start` requires `attempt_type` and `objective`. Use `execution`, `review`, `qa`, `retest`, or `environment_check`.
+- `attempt_finish` requires `status` and `result_summary`. Use `succeeded`, `failed`, `cancelled`, or `interrupted`. When a blocker stops the attempt, use `interrupted` and open a separate blocker.
+- `blocker_open` requires `blocker_type`, `summary`, and `resolution_condition`. Use `dependency`, `environment`, `approval`, `defect`, `decision`, or `external`; put detailed subtypes in `summary`.
+- `evidence_create` requires `evidence_type`, `title`, `summary`, and `result`. Evidence types are `test`, `report`, `artifact`, `screenshot`, `log`, `runtime`, `design`, `decision`, or `other`. Results are `passed`, `failed`, `inconclusive`, or `informational`. Use `artifact` for delivered files or Git commits and `report` for written review or integration acceptance.
+
+After a validation error, rebuild one complete request with every required field from the tool Schema and retry once. Do not repeatedly add one missing field at a time.
 
 <!-- relay-permission:project.rules.manage:start -->
 ## Project Rule Management

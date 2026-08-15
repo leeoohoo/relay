@@ -23,6 +23,7 @@ type RegionResponse<T> = {
 } & T;
 
 export function companyConsoleRegionsForEvent(eventType: string): CompanyConsoleRegion[] {
+  if (eventType.startsWith("codex.")) return [];
   if (eventType.startsWith("agent.runtime.approval_")) return [];
   if (eventType.startsWith("message.")) return ["conversations"];
   if (eventType.startsWith("project.task.") || eventType.startsWith("project.status.")) {
@@ -34,7 +35,10 @@ export function companyConsoleRegionsForEvent(eventType: string): CompanyConsole
   if (eventType.startsWith("project.")) return ["projects"];
   if (eventType.startsWith("staffing.") || eventType.startsWith("agent.")) return ["agents"];
   if (eventType.startsWith("company.")) return ["summary"];
-  return ALL_REGIONS;
+  // A newly introduced event must opt in to the region it invalidates. Falling
+  // back to every region turns high-frequency runtime events into a full
+  // console request storm until the frontend learns about the new event type.
+  return [];
 }
 
 export async function fetchCompanyConsole(

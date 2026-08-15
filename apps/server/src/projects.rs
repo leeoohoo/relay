@@ -52,7 +52,11 @@ pub(super) async fn create_company_project_for_human(
             })?;
             let source =
                 validate_project_source_folder(requested, &state.folder_reference_allowed_roots)?;
-            if destination.starts_with(&source) || source == workspace_root {
+            let requested_host_path = PathBuf::from(requested.trim());
+            if destination.starts_with(&requested_host_path)
+                || destination.starts_with(&source)
+                || source == workspace_root
+            {
                 return Err(AppError::Validation(
                     "managed destination cannot be inside the imported source folder".into(),
                 )
@@ -80,13 +84,13 @@ pub(super) async fn create_company_project_for_human(
                     AppError::Validation("git_remote_url is required for git source".into())
                 })?;
             let branch = input.default_branch.clone();
-            let destination_for_clone = destination.clone();
-            let remote_url = remote_url.to_string();
-            tokio::task::spawn_blocking(move || {
-                import_project_git(&remote_url, branch.as_deref(), &destination_for_clone)
-            })
-            .await
-            .map_err(|error| AppError::Internal(format!("Git import task failed: {error}")))??;
+            import_project_git(
+                remote_url,
+                branch.as_deref(),
+                &destination,
+                state.git_import_timeout,
+            )
+            .await?;
             collect_directory_structure(&destination)?
         }
         _ => {
@@ -498,6 +502,7 @@ async fn provision_imported_project_git(
             project_id,
             project_name,
             description,
+            false,
             &state.git_credential_store,
         )
         .await?;
@@ -908,4 +913,87 @@ pub(super) async fn update_company_project_task_for_human(
         },
     )?;
     Ok(Json(serde_json::json!({ "task": task })))
+}
+
+pub(super) async fn list_project_gates_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let gates = state
+        .platform
+        .list_project_gates_for_human(ListProjectGatesForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+        })?;
+    let requirements = state
+        .platform
+        .list_project_gate_requirements_for_human(human.id, company_id, project_id)?;
+    Ok(Json(serde_json::json!({
+        "gates": gates,
+        "requirements": requirements,
+    })))
+}
+
+pub(super) async fn create_project_gate_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<CreateProjectGateRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let gate = state
+        .platform
+        .create_project_gate_for_human(CreateProjectGateForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+            gate_key: input.gate_key,
+            gate_type: input.gate_type,
+            title: input.title,
+            related_task_id: input.related_task_id,
+            required_evidence: input.required_evidence,
+        })?;
+    Ok(Json(serde_json::json!({ "gate": gate })))
+}
+
+pub(super) async fn decide_project_gate_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id, gate_id)): Path<(Uuid, Uuid, Uuid)>,
+    Json(input): Json<DecideProjectGateRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let gate = state
+        .platform
+        .decide_project_gate_for_human(DecideProjectGateForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+            gate_id,
+            status: input.status,
+            decision_summary: input.decision_summary,
+        })?;
+    Ok(Json(serde_json::json!({ "gate": gate })))
+}
+pub(super) async fn set_project_task_gate_requirement_for_human(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((company_id, project_id, task_id, gate_id)): Path<(Uuid, Uuid, Uuid, Uuid)>,
+    Json(input): Json<SetProjectTaskGateRequirementRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let human = authenticate_human_request(&state, &headers)?;
+    let requirement = state.platform.set_project_task_gate_requirement_for_human(
+        SetProjectTaskGateRequirementForHumanInput {
+            human_user_id: human.id,
+            company_id,
+            project_id,
+            task_id,
+            gate_id,
+            required_status: input.required_status,
+        },
+    )?;
+    Ok(Json(serde_json::json!({ "requirement": requirement })))
 }

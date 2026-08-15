@@ -839,4 +839,65 @@ impl ProjectPlatformRepository for PostgresPlatformRepository {
             Ok(())
         })
     }
+
+    fn save_project_member_event_subscriptions(
+        &self,
+        subscriptions: Vec<ProjectMemberEventSubscription>,
+    ) -> AppResult<()> {
+        self.with_transaction(|tx| {
+            for subscription in subscriptions {
+                tx.execute(
+                    r#"
+                    INSERT INTO project_member_event_subscriptions (
+                        project_id, agent_profile_id, event_category,
+                        subscription_mode, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (project_id, agent_profile_id, event_category)
+                    DO UPDATE SET subscription_mode = EXCLUDED.subscription_mode,
+                                  updated_at = EXCLUDED.updated_at
+                    "#,
+                    &[
+                        &subscription.project_id,
+                        &subscription.agent_profile_id,
+                        &subscription.event_category,
+                        &subscription.subscription_mode,
+                        &subscription.updated_at,
+                    ],
+                )
+                .map_err(map_postgres_error)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn list_project_member_event_subscriptions(
+        &self,
+        project_id: Uuid,
+        agent_id: Uuid,
+    ) -> Vec<ProjectMemberEventSubscription> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT project_id, agent_profile_id, event_category,
+                       subscription_mode, updated_at
+                FROM project_member_event_subscriptions
+                WHERE project_id = $1 AND agent_profile_id = $2
+                ORDER BY event_category
+                "#,
+                &[&project_id, &agent_id],
+            )
+        })
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| ProjectMemberEventSubscription {
+                    project_id: row.get("project_id"),
+                    agent_profile_id: row.get("agent_profile_id"),
+                    event_category: row.get("event_category"),
+                    subscription_mode: row.get("subscription_mode"),
+                    updated_at: row.get("updated_at"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
 }

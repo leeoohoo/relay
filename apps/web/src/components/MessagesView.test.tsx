@@ -61,6 +61,8 @@ const trigger: CodexTriggerView = {
       { at: "2026-08-07T03:02:00Z", phase: "files", summary: "修改库存页面" },
     ],
   }],
+  active_intents: [],
+  recent_sessions: [],
 };
 
 const consoleData: CompanyConsole = {
@@ -150,7 +152,7 @@ beforeEach(() => {
   mockedApi.mockImplementation(async (path) => {
     if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
     if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-    if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
+    if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger, sessions: [] }] };
     throw new Error(`unexpected request: ${path}`);
   });
 });
@@ -158,6 +160,38 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("MessagesView group member runtime drawer", () => {
+  it("shows a new-message dot for another conversation and clears it when opened", async () => {
+    const messageEvent = {
+      sequence_id: 12,
+      id: "event-12",
+      company_id: "company-1",
+      event_type: "message.created",
+      aggregate_type: "conversation",
+      aggregate_id: "conversation-2",
+      actor_agent_id: "agent-1",
+      actor_human_user_id: null,
+      payload: { conversation_id: "conversation-2", message_id: "message-2" },
+      created_at: "2026-08-07T03:10:00Z",
+    };
+    const baseProps = {
+      consoleData,
+      humanUser: { id: "human-1", email: "owner@example.com", display_name: "Lee" },
+      token: "token",
+      realtimeEvent: null,
+      onChanged: async () => undefined,
+      onError: () => undefined,
+      onNotice: () => undefined,
+    };
+    const { rerender } = render(<MessagesView {...baseProps} messageRealtimeEvents={[]} />);
+
+    rerender(<MessagesView {...baseProps} messageRealtimeEvents={[messageEvent]} />);
+    const unreadDot = await screen.findByLabelText("有新消息");
+    expect(unreadDot.closest("button")).toHaveTextContent("Owner ↔ 前端 Agent");
+
+    fireEvent.click(unreadDot.closest("button")!);
+    expect(screen.queryByLabelText("有新消息")).not.toBeInTheDocument();
+  });
+
   it("shows entity names instead of raw UUIDs in chat messages", async () => {
     const intentId = "d7225caf-9e91-457e-a3fa-bd95a177d42b";
     mockedApi.mockImplementation(async (path) => {
@@ -177,7 +211,7 @@ describe("MessagesView group member runtime drawer", () => {
         };
       }
       if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger, sessions: [] }] };
       throw new Error(`unexpected request: ${path}`);
     });
 
@@ -319,7 +353,13 @@ describe("MessagesView group member runtime drawer", () => {
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
       if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
-      if (path.endsWith("/agents/agent-1/codex-trigger")) return { trigger: betweenRunsTrigger };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: betweenRunsTrigger, sessions: [] }] };
+      if (path.endsWith("/agents/agent-1/codex-trigger/run-now")) return {
+        trigger: {
+          ...betweenRunsTrigger,
+          config: { ...betweenRunsTrigger.config, manual_run_requested_at: "2026-08-07T03:06:00Z" },
+        },
+      };
       throw new Error(`unexpected request: ${path}`);
     });
 
@@ -337,8 +377,109 @@ describe("MessagesView group member runtime drawer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
     expect(await screen.findByText("待继续")).toBeInTheDocument();
-    expect(screen.getByText("等待下一轮继续 · 实现库存工作台")).toBeInTheDocument();
+    expect(screen.getByText("任务尚未完成，等待接续或外部条件 · 实现库存工作台")).toBeInTheDocument();
     expect(screen.queryByText("空闲")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("前端 Agent").closest("summary")!);
+    fireEvent.click(screen.getByRole("button", { name: /立即接续/ }));
+    await waitFor(() => expect(mockedApi).toHaveBeenCalledWith(
+      "/api/v1/companies/company-1/agents/agent-1/codex-trigger/run-now",
+      { method: "POST" },
+      "token",
+    ));
+    expect(await screen.findByText("接续已排队")).toBeInTheDocument();
+  });
+
+  it("offers immediate continuation when a stale running projection is recovering", async () => {
+    const recoveringTrigger: CodexTriggerView = {
+      ...trigger,
+      runtime: {
+        state: "recovering",
+        reason: "运行心跳已停止，Relay 正在恢复或等待 Watchdog 接管",
+        session_kind: "project",
+        run_id: "run-1",
+        intent_id: null,
+        task_id: taskId,
+        waiting_on_type: null,
+        waiting_on_id: null,
+        heartbeat_at: "2026-08-07T03:02:00Z",
+        stale: true,
+      },
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: recoveringTrigger, sessions: [] }] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /群成员/ }));
+    fireEvent.click((await screen.findByText("前端 Agent")).closest("summary")!);
+    expect(screen.getAllByText("运行心跳已停止，Relay 正在恢复或等待 Watchdog 接管")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /立即接续/ })).toBeInTheDocument();
+  });
+
+  it("shows active intent details and restart handoffs without treating them as failures", async () => {
+    const resumedTrigger: CodexTriggerView = {
+      ...trigger,
+      recent_runs: [{
+        ...trigger.recent_runs[0],
+        status: "restarted",
+        finished_at: "2026-08-07T03:05:00Z",
+        activity_phase: "continuing",
+        activity_summary: "Trigger 服务重启，本轮工作已交由后续运行接续",
+      }],
+      active_intents: [{
+        id: "intent-1",
+        project_id: "project-1",
+        worker_session_id: "session-1",
+        task_ids: [taskId],
+        action_type: "execute",
+        objective: "继续完成库存页面并提交验证证据",
+        status: "pending",
+        result_summary: "",
+        error_message: null,
+        created_at: "2026-08-07T03:00:00Z",
+        claimed_at: null,
+      }],
+      recent_sessions: [],
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/api/v1/conversations/conversation-1/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.startsWith("/api/v1/conversations/conversation-2/messages")) return { messages: [], next_cursor: null, has_more: false };
+      if (path.includes("/codex-runtime-overview?")) return { agents: [{ agent_id: "agent-1", trigger: resumedTrigger, sessions: [] }] };
+      throw new Error(`unexpected request: ${path}`);
+    });
+
+    render(
+      <MessagesView
+        consoleData={consoleData}
+        humanUser={{ id: "human-1", email: "owner@example.com", display_name: "Lee" }}
+        token="token"
+        realtimeEvent={null}
+        onChanged={async () => undefined}
+        onError={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /群成员/ }));
+    fireEvent.click((await screen.findByText("前端 Agent")).closest("summary")!);
+
+    expect(await screen.findByText("继续完成库存页面并提交验证证据")).toBeInTheDocument();
+    expect(screen.getByText("已接续")).toBeInTheDocument();
+    expect(screen.queryByText("已中断")).not.toBeInTheDocument();
   });
 
   it("shows the same Agent runtime details in a direct conversation", async () => {

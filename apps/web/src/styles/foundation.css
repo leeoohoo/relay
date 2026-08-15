@@ -99,6 +99,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .status-badge.idle { color: #657269; background: #f1f4f2; }
 .status-badge.succeeded { color: #39721a; background: #eff9e8; }
 .status-badge.failed, .status-badge.timed_out, .status-badge.lease_lost { color: #8b3f3f; background: #faeaea; }
+.status-badge.restarted { color: #8a6626; background: #fff3d6; }
 .status-badge.cancelled { color: #657269; background: #f1f4f2; }
 .status-badge.paused { color: #8b5123; background: #fff0e5; }
 .status-badge.error { color: #8b3f3f; background: #faeaea; }

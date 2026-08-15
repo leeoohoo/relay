@@ -2,7 +2,103 @@ use super::tools::*;
 use super::*;
 
 pub(super) fn parse_input<T: for<'de> Deserialize<'de>>(input: Value) -> AppResult<T> {
-    serde_json::from_value(input).map_err(|error| AppError::Validation(error.to_string()))
+    validate_uuid_shapes(&input, "")?;
+    let encoded = serde_json::to_vec(&input)
+        .map_err(|error| AppError::Validation(format!("input serialization failed: {error}")))?;
+    let mut deserializer = serde_json::Deserializer::from_slice(&encoded);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+        let path = error.path().to_string();
+        let message = error.inner().to_string();
+        AppError::Validation(if path.is_empty() || path == "." {
+            message
+        } else {
+            format!("invalid field {path}: {message}")
+        })
+    })
+}
+
+fn validate_uuid_shapes(value: &Value, path: &str) -> AppResult<()> {
+    match value {
+        Value::Object(fields) => {
+            for (field, child) in fields {
+                let child_path = if path.is_empty() {
+                    field.clone()
+                } else {
+                    format!("{path}.{field}")
+                };
+                if is_uuid_field(field) {
+                    if let Some(identifier) = child.as_str() {
+                        if Uuid::parse_str(identifier).is_err() {
+                            return Err(AppError::Validation(format!(
+                                "invalid field {child_path}: expected a full UUID, received {identifier:?}. Do not use a list position, shortened UUID, Git commit, or another object's ID"
+                            )));
+                        }
+                    }
+                } else if is_uuid_list_field(field) {
+                    if let Some(items) = child.as_array() {
+                        for (index, identifier) in items.iter().enumerate() {
+                            if let Some(identifier) = identifier.as_str() {
+                                if Uuid::parse_str(identifier).is_err() {
+                                    return Err(AppError::Validation(format!(
+                                        "invalid field {child_path}[{index}]: expected a full UUID, received {identifier:?}. Do not use a list position, shortened UUID, or Git commit"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                validate_uuid_shapes(child, &child_path)?;
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                validate_uuid_shapes(child, &format!("{path}[{index}]"))?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn is_uuid_field(field: &str) -> bool {
+    matches!(
+        field,
+        "action_id"
+            | "after_message_id"
+            | "assignee_agent_id"
+            | "attempt_id"
+            | "before_message_id"
+            | "blocker_id"
+            | "company_id"
+            | "conversation_id"
+            | "depends_on_task_id"
+            | "environment_id"
+            | "event_id"
+            | "gate_id"
+            | "handoff_agent_id"
+            | "intent_id"
+            | "memory_id"
+            | "org_unit_id"
+            | "owner_agent_id"
+            | "project_id"
+            | "related_task_id"
+            | "relation_id"
+            | "reports_to_membership_id"
+            | "reviewed_through_message_id"
+            | "session_id"
+            | "source_task_id"
+            | "supersedes_memory_id"
+            | "target_agent_id"
+            | "target_task_id"
+            | "task_id"
+    )
+}
+
+fn is_uuid_list_field(field: &str) -> bool {
+    matches!(
+        field,
+        "member_agent_ids" | "mentioned_agent_ids" | "source_event_ids" | "task_ids"
+    )
 }
 
 #[derive(Clone)]
@@ -23,7 +119,11 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> AiChatMcpHandler<R, V> {
             .list_agent_inbox_events(agent_id, true, 10_000)
             .ok()?
             .into_iter()
-            .filter(|event| event.event_type == "message.received" && event.available_at <= now)
+            .filter(|event| {
+                event.requires_action
+                    && event.event_type == "message.received"
+                    && event.available_at <= now
+            })
             .collect::<Vec<_>>();
         if messages.is_empty() {
             return None;
@@ -168,7 +268,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
                     ),
             )
             .with_instructions(
-                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. The credential already fixes the Agent identity; do not ask a Human to reconfirm it or call agent.bootstrap merely to discover who you are. Control sessions use agent.bootstrap to refresh dynamic company, permission, coworker, session, project, and inbox state. Project worker sessions may read their bound project and tasks directly. Each Agent owns an isolated memory set. Long-term memories are injected into that Agent's generated Skill on every wake-up; short-term memories are retrieved on demand with agent.memory search. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets, and search by topic before remembering. Relay tool responses may include inbox_notice when new messages are pending. In a control session, attention_required=true is an interrupt: call agent.inbox.wait, handle the messages, then call agent.inbox.ack. In a project worker session, ignore inbox_notice and keep executing the current Intent; Inbox and chat remain owned by the control session. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
+                "Authenticate every request with x-agent-key, Authorization: Bearer <Agent Key>, or a short-lived x-agent-run-token issued to the local Codex Trigger. The credential already fixes the Agent identity; do not ask a Human to reconfirm it. Trigger-managed control sessions receive a one-shot Control Snapshot and must not repeat bootstrap/task-my/inbox-wait polling; refresh once with agent.control_snapshot only after a stale-state conflict. Project worker sessions read their bound project and tasks directly and never triage Inbox. Each Agent owns an isolated memory set. Store only distilled reusable conclusions, never raw chat, task text, logs, or secrets. Relay tool responses include inbox_notice only for actionable messages. Agents with explicit Human-granted Staffing permissions receive the company.staff tool dynamically.",
             )
     }
 
@@ -187,7 +287,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> ServerHandler for AiChatM
         let mut tools = standard_mcp_tools();
         if project_worker_session {
             tools.retain(|tool| {
-                !matches!(tool.name.as_ref(), "agent.inbox.wait" | "agent.inbox.ack")
+                !matches!(
+                    tool.name.as_ref(),
+                    "agent.control_snapshot" | "agent.inbox.wait" | "agent.inbox.ack"
+                )
             });
         }
         if let Ok(membership) = self
@@ -304,12 +407,14 @@ pub(super) fn filter_inbox_events(
     events: Vec<ai_chat_domain::agent_identity::AgentInboxEvent>,
     event_types: Option<&[String]>,
 ) -> Vec<ai_chat_domain::agent_identity::AgentInboxEvent> {
-    let Some(event_types) = event_types.filter(|items| !items.is_empty()) else {
-        return events;
-    };
     events
         .into_iter()
-        .filter(|event| event_types.iter().any(|item| item == &event.event_type))
+        .filter(|event| event.requires_action)
+        .filter(|event| {
+            event_types
+                .filter(|items| !items.is_empty())
+                .is_none_or(|types| types.iter().any(|item| item == &event.event_type))
+        })
         .collect()
 }
 

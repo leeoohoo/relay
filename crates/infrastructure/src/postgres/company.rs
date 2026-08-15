@@ -228,23 +228,43 @@ impl CompanyPlatformRepository for PostgresPlatformRepository {
     }
 
     fn get_company_agent_membership(&self, agent_id: Uuid) -> Option<CompanyAgentMembership> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, company_id, agent_profile_id, org_unit_id, job_title,
-                       role_key, reports_to_membership_id, permissions, responsibilities,
-                       skills, current_focus, employment_status, staffing_scope_org_unit_id,
-                       joined_at, terminated_at, created_by_human_user_id,
-                       created_by_agent_id, updated_at
-                FROM company_agent_memberships
-                WHERE agent_profile_id = $1
-                "#,
-                &[&agent_id],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_company_agent_membership)
+        self.get_company_agent_membership_result(agent_id)
+            .ok()
+            .flatten()
+    }
+
+    fn get_company_agent_membership_result(
+        &self,
+        agent_id: Uuid,
+    ) -> AppResult<Option<CompanyAgentMembership>> {
+        let query = || {
+            self.with_client(|client| {
+                client.query_opt(
+                    r#"
+                    SELECT id, company_id, agent_profile_id, org_unit_id, job_title,
+                           role_key, reports_to_membership_id, permissions, responsibilities,
+                           skills, current_focus, employment_status, staffing_scope_org_unit_id,
+                           joined_at, terminated_at, created_by_human_user_id,
+                           created_by_agent_id, updated_at
+                    FROM company_agent_memberships
+                    WHERE agent_profile_id = $1
+                    "#,
+                    &[&agent_id],
+                )
+            })
+        };
+        let row = match query() {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::warn!(
+                    agent_id = %agent_id,
+                    error = %error,
+                    "company membership lookup failed; retrying once"
+                );
+                query()?
+            }
+        };
+        Ok(row.map(map_company_agent_membership))
     }
 
     fn list_company_agent_memberships(&self, company_id: Uuid) -> Vec<CompanyAgentMembership> {

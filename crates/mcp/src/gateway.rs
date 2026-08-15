@@ -40,6 +40,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
             project_id: project.project.id,
             project_name: project.project.name.clone(),
             description: project.project.description.clone(),
+            initialize_default_branch: true,
         })?;
         self.platform
             .upsert_company_project_git(UpsertCompanyProjectGitInput {
@@ -70,12 +71,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
         agent_key: Option<&str>,
         agent_run_token: Option<&str>,
         tool_name: &str,
-        input: Value,
+        mut input: Value,
     ) -> AppResult<McpInvocation> {
         if !is_public_tool_name(tool_name) {
             return Err(AppError::NotFound(format!("unknown MCP tool: {tool_name}")));
         }
         let agent = self.authenticate_agent(agent_key, agent_run_token)?;
+        if tool_name == "company.task" {
+            normalize_company_task_input(&mut input);
+        }
         let request_input = input.clone();
         let idempotency_key = idempotency_key_from_input(&request_input);
         let is_mutating = is_mutating_tool(tool_name, &request_input);
@@ -133,20 +137,23 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                 })
             }
             Err(error) => {
-                if is_mutating {
-                    let action_name = audit_action_name(tool_name, &request_input);
-                    let _ = self.platform.record_agent_action(
-                        agent.id,
-                        action_name,
-                        failure_target_ref(tool_name, &request_input),
-                        request_input,
-                        json!({
-                            "code": error.code(),
-                            "message": error.to_string(),
-                        }),
-                        action_status_for_error(&error),
-                    );
-                }
+                let action_name = audit_action_name(tool_name, &request_input);
+                let action_name = if is_mutating {
+                    action_name
+                } else {
+                    format!("diagnostic.{action_name}")
+                };
+                let _ = self.platform.record_agent_action(
+                    agent.id,
+                    action_name,
+                    failure_target_ref(tool_name, &request_input),
+                    request_input,
+                    json!({
+                        "code": error.code(),
+                        "message": error.to_string(),
+                    }),
+                    action_status_for_error(&error),
+                );
                 Err(error)
             }
         }

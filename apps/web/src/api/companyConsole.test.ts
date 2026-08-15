@@ -23,6 +23,15 @@ describe("companyConsoleRegionsForEvent", () => {
     expect(companyConsoleRegionsForEvent("agent.runtime.approval_requested")).toEqual([]);
   });
 
+  it("leaves Codex runtime events to the runtime panels", () => {
+    expect(companyConsoleRegionsForEvent("codex.run.updated")).toEqual([]);
+    expect(companyConsoleRegionsForEvent("codex.trigger.updated")).toEqual([]);
+  });
+
+  it("does not turn unknown events into a full console reload", () => {
+    expect(companyConsoleRegionsForEvent("future.domain.event")).toEqual([]);
+  });
+
   it("requests bounded cursor pages and preserves continuation state", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       agents: [],

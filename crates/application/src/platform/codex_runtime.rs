@@ -45,14 +45,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         config.updated_by_human_user_id = Some(input.human_user_id);
         config.updated_at = now;
         self.repo.save_agent_codex_trigger_config(config.clone())?;
+        let recent_runs = self.recent_agent_codex_runs_for_human(input.agent_id, 20)?;
+        let active_intents = self.active_agent_execution_intents(input.agent_id);
+        let runtime = self.project_agent_runtime(&config, &recent_runs, &active_intents);
         Ok(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs,
+            active_intents,
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
             config,
+            runtime,
         })
     }
 
@@ -65,9 +69,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             input.company_id,
             input.agent_id,
         )?;
-        Ok(self
-            .repo
-            .list_agent_codex_trigger_runs(input.agent_id, input.limit.clamp(1, 100)))
+        self.recent_agent_codex_runs_for_human(input.agent_id, input.limit)
     }
 
     pub fn list_company_agent_codex_sessions_for_human(
@@ -81,7 +83,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 AppError::Unauthorized("human user is not an active company member".into())
             })?;
         self.repo
-            .get_company_agent_membership(input.agent_id)
+            .get_company_agent_membership_result(input.agent_id)?
             .filter(|membership| membership.company_id == input.company_id)
             .ok_or_else(|| AppError::NotFound("company Agent not found".into()))?;
         let sessions = self
@@ -96,6 +98,49 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .map(sanitize_codex_session_for_human)
             .collect();
         Ok(sessions)
+    }
+
+    pub(super) fn active_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+    ) -> Vec<AgentExecutionIntent> {
+        let mut intents = self.repo.list_agent_execution_intents(
+            agent_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_RUNNING),
+            20,
+        );
+        intents.extend(self.repo.list_agent_execution_intents(
+            agent_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+            20,
+        ));
+        intents.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        intents
+    }
+
+    pub(super) fn recent_agent_codex_sessions_for_human(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentCodexSession> {
+        self.repo
+            .list_agent_codex_sessions(agent_id, limit.clamp(1, 100))
+            .into_iter()
+            .map(sanitize_codex_session_for_human)
+            .collect()
+    }
+
+    pub(super) fn recent_agent_codex_runs_for_human(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> AppResult<Vec<AgentCodexTriggerRun>> {
+        Ok(self
+            .repo
+            .list_agent_codex_trigger_runs_result(agent_id, limit.clamp(1, 100))?
+            .into_iter()
+            .map(sanitize_codex_run_for_human)
+            .collect())
     }
 
     pub fn claim_due_agent_codex_triggers(
@@ -135,7 +180,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<AgentCodexWorkDecision> {
         let membership = self
             .repo
-            .get_company_agent_membership(config.agent_profile_id)
+            .get_company_agent_membership_result(config.agent_profile_id)?
             .filter(|membership| {
                 membership.company_id == config.company_id
                     && membership.employment_status == "active"
@@ -148,37 +193,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|company| company.status == "active")
             .ok_or_else(|| AppError::NotFound("active company not found".into()))?;
         let now = now_utc();
-        let mut pending_events = Vec::new();
-        for event in self.repo.list_agent_inbox_events(
-            config.agent_profile_id,
-            Some(AgentInboxEventStatus::Pending),
-            1_000,
-        ) {
-            if event.available_at > now {
-                continue;
-            }
-            let mut project_id = payload_uuid_field_optional(&event.payload_json, "project_id");
-            if project_id.is_none() {
-                if let Some(conversation_id) =
-                    payload_uuid_field_optional(&event.payload_json, "conversation_id")
-                {
-                    project_id = self
-                        .repo
-                        .get_conversation_context_result(conversation_id)?
-                        .and_then(|context| context.project_id);
-                }
-            }
-            let project_is_active = match project_id {
-                Some(project_id) => self
-                    .repo
-                    .get_company_project_result(project_id)?
-                    .is_none_or(|project| project.status != PROJECT_STATUS_PAUSED),
-                None => true,
-            };
-            if project_is_active {
-                pending_events.push(event);
-            }
-        }
+        let mut control_snapshot =
+            self.agent_control_snapshot(config.agent_profile_id, config.company_id)?;
         let projects = self
             .repo
             .list_company_projects_result(config.company_id)?
@@ -191,44 +207,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         .is_some_and(|member| member.left_at.is_none())
             })
             .collect::<Vec<_>>();
-        let mut active_tasks = Vec::new();
-        let mut waiting_task_count = 0;
-        for project in &projects {
-            let tasks = self.repo.list_company_project_tasks_result(project.id)?;
-            let dependencies = self.repo.list_company_project_task_dependencies(project.id);
-            for task in tasks.iter().filter(|task| {
-                task.assignee_agent_id == Some(config.agent_profile_id)
-                    && matches!(
-                        task.status.as_str(),
-                        PROJECT_TASK_STATUS_TODO | PROJECT_TASK_STATUS_IN_PROGRESS
-                    )
-            }) {
-                let has_unresolved_dependency = dependencies
-                    .iter()
-                    .filter(|dependency| dependency.task_id == task.id)
-                    .any(|dependency| {
-                        tasks
-                            .iter()
-                            .find(|candidate| candidate.id == dependency.depends_on_task_id)
-                            .is_some_and(|dependency_task| {
-                                !ai_chat_domain::company::project_task_dependency_satisfied(
-                                    &dependency.dependency_condition,
-                                    &dependency_task.status,
-                                )
-                            })
-                    });
-                if has_unresolved_dependency {
-                    waiting_task_count += 1;
-                } else {
-                    active_tasks.push(task.clone());
-                }
-            }
-        }
-        let in_progress_task_ids = active_tasks
+        let in_progress_task_ids = control_snapshot
+            .ready_tasks
             .iter()
             .filter(|task| task.status == PROJECT_TASK_STATUS_IN_PROGRESS)
             .map(|task| task.id)
             .collect::<HashSet<_>>();
+        let mut recovered_intent = false;
         if !in_progress_task_ids.is_empty() {
             for intent in self.repo.list_agent_execution_intents(
                 config.agent_profile_id,
@@ -241,11 +226,19 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .any(|task_id| in_progress_task_ids.contains(task_id))
                 {
                     let failure = intent.error_message.clone().unwrap_or_default();
-                    let _ = self
-                        .requeue_agent_execution_intent_after_retryable_failure(intent, &failure)?;
+                    recovered_intent |= self
+                        .requeue_agent_execution_intent_after_retryable_failure(intent, &failure)?
+                        .is_some();
                 }
             }
         }
+        if recovered_intent {
+            control_snapshot =
+                self.agent_control_snapshot(config.agent_profile_id, config.company_id)?;
+        }
+        let pending_events = control_snapshot.actionable_events.clone();
+        let active_tasks = control_snapshot.ready_tasks.clone();
+        let waiting_task_count = control_snapshot.waiting_tasks.len();
         let manual = config.manual_run_requested_at.is_some();
         let can_refresh_assets = membership
             .permissions
@@ -319,6 +312,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .into_iter()
             .filter(|intent| active_project_ids.contains(&intent.project_id))
             .count();
+        let covered_task_ids = control_snapshot
+            .active_intents
+            .iter()
+            .flat_map(|intent| intent.task_ids.iter().copied())
+            .collect::<HashSet<_>>();
+        let resume_existing_intents_directly = !manual
+            && pending_events.is_empty()
+            && asset_refresh.is_none()
+            && pending_execution_intent_count > 0
+            && active_tasks
+                .iter()
+                .all(|task| covered_task_ids.contains(&task.id));
         let should_run = manual
             || !pending_events.is_empty()
             || !active_tasks.is_empty()
@@ -345,11 +350,22 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             waiting_task_count,
             asset_refresh_due: asset_refresh.is_some(),
             pending_execution_intent_count,
+            resume_existing_intents_directly,
+            control_snapshot,
         })
     }
 
     pub fn insert_agent_codex_trigger_run(&self, run: AgentCodexTriggerRun) -> AppResult<()> {
         self.repo.insert_agent_codex_trigger_run(run)
+    }
+
+    pub fn list_agent_codex_trigger_runs(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentCodexTriggerRun> {
+        self.repo
+            .list_agent_codex_trigger_runs(agent_id, limit.clamp(1, 100))
     }
 
     pub fn has_running_agent_codex_trigger_run(&self, agent_id: Uuid) -> bool {
@@ -368,6 +384,22 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<()> {
         self.repo
             .append_agent_codex_trigger_run_activity(run_id, activity, codex_thread_id)
+    }
+
+    pub fn heartbeat_agent_codex_trigger_run(&self, run_id: Uuid) -> AppResult<()> {
+        self.repo
+            .heartbeat_agent_codex_trigger_run(run_id, now_utc())
+    }
+
+    pub fn watchdog_stale_agent_codex_trigger_runs(
+        &self,
+        stale_after_seconds: i64,
+    ) -> AppResult<usize> {
+        let now = now_utc();
+        self.repo.watchdog_stale_agent_codex_trigger_runs(
+            now,
+            now - Duration::seconds(stale_after_seconds.clamp(15, 300)),
+        )
     }
 
     pub fn complete_agent_codex_trigger_lease(
@@ -658,6 +690,22 @@ fn sanitize_codex_session_for_human(mut session: AgentCodexSession) -> AgentCode
     session
 }
 
+fn sanitize_codex_run_for_human(mut run: AgentCodexTriggerRun) -> AgentCodexTriggerRun {
+    if let Some(summary) = run.final_message_summary.as_mut() {
+        *summary = redact_host_home_path(summary);
+    }
+    if let Some(error) = run.error_message.as_mut() {
+        *error = redact_host_home_path(error);
+    }
+    if let Some(summary) = run.activity_summary.as_mut() {
+        *summary = redact_host_home_path(summary);
+    }
+    for activity in &mut run.activity_log {
+        activity.summary = redact_host_home_path(&activity.summary);
+    }
+    run
+}
+
 fn redact_json_host_paths(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(text) => *text = redact_host_home_path(text),
@@ -676,7 +724,31 @@ fn redact_json_host_paths(value: &mut serde_json::Value) {
 }
 
 fn redact_host_home_path(value: &str) -> String {
-    redact_unix_home_segment(&redact_unix_home_segment(value, "/Users/"), "/home/")
+    let redacted = redact_unix_home_segment(&redact_unix_home_segment(value, "/Users/"), "/home/");
+    redact_relay_workspace_path(&redacted)
+}
+
+fn redact_relay_workspace_path(value: &str) -> String {
+    let mut output = value.to_string();
+    let mut search_from = 0;
+    while let Some(relative_start) = output[search_from..].find(".relay-workspace/") {
+        let marker_start = search_from + relative_start;
+        let path_start = output[..marker_start]
+            .rfind(['(', ' ', '\n', '\t'])
+            .map_or(0, |index| index + 1);
+        let Some(relative_worktree_end) = output[marker_start..].find("/.relay/worktrees/") else {
+            search_from = marker_start + 1;
+            continue;
+        };
+        let worktree_marker = marker_start + relative_worktree_end + "/.relay/worktrees/".len();
+        let Some(relative_agent_end) = output[worktree_marker..].find('/') else {
+            break;
+        };
+        let repository_path_start = worktree_marker + relative_agent_end + 1;
+        output.replace_range(path_start..repository_path_start, "./");
+        search_from = path_start + 2;
+    }
+    output
 }
 
 fn redact_unix_home_segment(value: &str, prefix: &str) -> String {
@@ -693,4 +765,18 @@ fn redact_unix_home_segment(value: &str, prefix: &str) -> String {
         search_from = start + 1;
     }
     output
+}
+
+#[cfg(test)]
+mod runtime_projection_tests {
+    use super::redact_host_home_path;
+
+    #[test]
+    fn relay_worktree_links_are_exposed_as_project_relative_paths() {
+        let value = "[evidence](/Users/alice/work/relay/.relay-workspace/companies/company/project/.relay/worktrees/agent/docs/evidence/report.md)";
+        assert_eq!(
+            redact_host_home_path(value),
+            "[evidence](./docs/evidence/report.md)"
+        );
+    }
 }

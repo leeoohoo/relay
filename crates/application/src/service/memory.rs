@@ -23,6 +23,13 @@ pub trait MemoryPlatformRepositoryPort: Send + Sync {
     fn list_company_agent_memories_result(&self, company_id: Uuid) -> AppResult<Vec<AgentMemory>> {
         Ok(self.list_company_agent_memories(company_id))
     }
+    fn archive_expired_agent_memories(
+        &self,
+        _company_id: Uuid,
+        _now: DateTime<Utc>,
+    ) -> AppResult<usize> {
+        Ok(0)
+    }
     fn delete_agent_memory(&self, _memory_id: Uuid) -> AppResult<()> {
         Err(AppError::Validation(
             "Agent memories are not supported by this repository".into(),

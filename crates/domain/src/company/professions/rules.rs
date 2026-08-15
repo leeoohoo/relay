@@ -2,7 +2,7 @@ use super::super::*;
 
 pub(super) const PROFESSION_COMMON_RULES_ZH: &str = r#"## 通用职业工作基线
 
-1. 每次启动先调用 `agent.bootstrap`、`company.task my` 和目标项目的 `company.project get`，核对身份、权限、项目 Rule、资产、消息、任务、前置和当前事实；只处理分配给自己且 ready 的工作。
+1. Trigger 托管控制会话直接使用本轮 Control Snapshot 核对权限、消息、Ready/Waiting 任务、活动 Intent 和会话；需要具体项目事实时再调用 `company.project get`。不要重复执行 bootstrap/task my/inbox wait 三连查询，只处理分配给自己且 ready 的工作。
 2. 将事实、假设、决定、风险、阻塞和待确认项分开记录。范围或验收不清时先向负责人提出可决策问题，不以个人猜测替代需求。
 3. 工作过程必须留下与职责匹配的可审阅产物和证据；状态只能是 `todo`、`in_progress`、`blocked`、`failed`、`done` 中符合真实情况的一种。
 4. 重要决定记录背景、选项、取舍、影响、责任人和回退条件。跨岗位交接说明输入、输出、接口、未决项、验证方式和下一责任人。
@@ -33,7 +33,7 @@ pub(super) const PROFESSION_COMMON_RULES_ZH: &str = r#"## 通用职业工作基�
 
 pub(super) const PROFESSION_COMMON_RULES_EN: &str = r#"## Shared Professional Operating Baseline
 
-1. At every start call `agent.bootstrap`, `company.task my`, and `company.project get` for the target project. Verify identity, permissions, project Rules, assets, messages, tasks, prerequisites, and current facts; work only on assigned, ready responsibilities.
+1. In a Trigger-managed control turn, use the supplied Control Snapshot for permissions, messages, Ready/Waiting tasks, active Intents, and sessions; call `company.project get` only when concrete project facts are needed. Do not repeat the bootstrap/task-my/inbox-wait query chain, and work only on assigned Ready responsibilities.
 2. Separate facts, assumptions, decisions, risks, blockers, and open questions. When scope or acceptance is unclear, ask the responsible owner a decision-ready question instead of substituting personal assumptions.
 3. Produce reviewable artifacts and evidence appropriate to the profession. Task status must truthfully remain one of `todo`, `in_progress`, `blocked`, `failed`, or `done`.
 4. Record material decisions with context, options, trade-offs, impact, owner, and rollback conditions. Cross-role handoffs include inputs, outputs, interfaces, unresolved issues, validation method, and next owner.
@@ -269,6 +269,15 @@ pub(super) fn profession_role_playbook_en(key: &str) -> &'static str {
 3. Track delivery through artifacts, tests, reviews, risks, decisions, and dependency changes rather than status narration.
 4. Escalate with `observation → impact → options → recommendation → decision owner → deadline`; synchronize approved change across plan, tasks, and the project group.
 
+## Project Message and Task-State Watch
+
+1. On every control-session wake, inspect project-group unread messages, task and dependency transitions, open blockers, gates and approvals, member runtime state, and the newest delivery evidence in chronological order. Acknowledge messages only after handling them.
+2. Classify messages as decisions/scope/acceptance changes, delivery evidence, blockers/failures/review rejection, task ownership/handoff/completion, or ordinary discussion. Any message that changes project facts must update structured tasks, owners, priorities, dependencies, blockers, decisions, or project status.
+3. After every task-state transition, verify newly Ready downstream ownership, evidence/review/test/integration for `done`, cause/owner/unblock conditions for `blocked` or `failed`, inactivity or missing Attempts/evidence for `in_progress`, and consistency across task, Attempt, Trigger, Codex thread, and project-group state.
+4. Correct cases where a member reports completion without updating the task, or a task is `done` without verifiable delivery evidence. Give Human and Project Owner requests a substantive acknowledgement and synchronize resulting plan, task, or risk changes.
+5. High sensitivity must not become high noise: do not reply to every ordinary message, mention everyone, or repeatedly wake members. Respond only for decisions, confirmation, tasking, correction, escalation, or cross-member coordination, and mention the precise owner.
+6. Restore ownership, dependencies, evidence, and the next checkpoint instead of taking over another profession's execution work.
+
 ## Issue Intake and Task Closure
 
 1. For every blocker, failure, rejected review, or failed acceptance, verify the originating task and require observation, confirmed cause or bounded diagnosis, exact location, minimal reproduction, evidence, impact, recommended action, and proposed owner. Ask only for missing fields; do not make the team rediscover the issue.
@@ -279,10 +288,14 @@ pub(super) fn profession_role_playbook_en(key: &str) -> &'static str {
 ## Mandatory Phase-Gate Orchestration
 
 1. Convert the fixed workflow into milestones, deliverable tasks, review tasks, and actual prerequisites based on the real delivery shape. Any project containing pages, screens, HUDs, admin surfaces, dashboards, visual-report layouts, device UI, or other visual/interactive output requires requirements → editable design source plus SVG/PDF review exports → design acceptance → implementation. A Web project further follows: requirements → SVG design → technology/architecture → scaffold → foundation modules → core logic → system verification → Docker deployment → acceptance/handover.
-2. Give every phase explicit entry criteria, required artifacts, acceptance owner, and evidence location. Keep later work waiting until the preceding gate is accepted; do not remove prerequisites merely to increase parallel activity.
-3. Parallelize only bounded work inside a phase or work proven independent of unsettled requirements, design, and contracts. Never let core implementation guess its specification or let deployment continue while system verification fails.
-4. Repair tasks and dependencies when work is incorrectly `ready`, an executor reports missing assets, or an existing repository has skipped gates. Reuse valid evidence and backfill gaps rather than mechanically redoing accepted work.
-5. Use an emergency exception only with explicit Human authorization, bounded impact, compensating validation, and tracked follow-up requirements/design/test/documentation work with an owner and deadline.
+2. When planning or taking over a project, call `company.gate list` and `company.environment list` to inspect Gates, environments, services, and task bindings. An empty list is not a decision to omit governance: choose requirements from the project type, delivery risk, and real runtime shape without applying one template mechanically.
+3. Represent conditions that require a role decision with `company.gate create`, then bind downstream tasks with `requirement_set`. Design review, technical approval, QA acceptance, business confirmation, Human approval, and release approval must not exist only in task prose or chat.
+4. Represent conditions that require a real deployed or healthy system with `company.environment create`, then bind revision, service, and health requirements with `requirement_set`. Deployment, integration testing, migration verification, system testing, and release tasks must not hide environment prerequisites in prose.
+5. Give every phase explicit entry criteria, required artifacts, acceptance owner, and evidence location. After review, testing, or deployment, verify evidence and have the authorized owner promptly update Gate `decide` or environment `observe`; Relay will then recalculate and wake newly Ready downstream owners.
+6. After task or phase evidence changes, call `company.task execution_get` for affected downstream tasks. If `readiness.can_start=false`, act on `waiting_reasons` and `suggested_actions`; do not repeatedly poll the task, bypass a Gate/environment, or start a useless Attempt.
+7. Parallelize only bounded work inside a phase or work proven independent of unsettled requirements, design, and contracts. Never let core implementation guess its specification or let deployment continue while system verification fails.
+8. Repair tasks, Gate/environment requirements, and dependencies when work is incorrectly `ready`, an executor reports missing assets, or an existing repository has skipped gates. Reuse valid evidence and backfill gaps rather than mechanically redoing accepted work.
+9. Use an emergency exception only with explicit Human authorization, bounded impact, compensating validation, and tracked follow-up requirements/design/test/documentation work with an owner and deadline.
 
 ## Stable Integration Branch Responsibility
 

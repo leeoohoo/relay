@@ -50,7 +50,7 @@ fn browser_page_state_operations_do_not_require_website_approval() {
 }
 
 #[test]
-fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
+fn docker_fallback_profiles_are_isolated_by_project_and_resource_limited() {
     let root = std::env::temp_dir().join(format!(
         "relay-browser-profile-test-{}",
         Uuid::new_v4().simple()
@@ -118,6 +118,15 @@ fn managed_browser_profiles_are_isolated_by_company_agent_and_project() {
         .args
         .iter()
         .any(|argument| argument == "--chrome-arg=--force-prefers-reduced-motion=reduce"));
+    assert!(first.args.iter().any(|argument| argument == "--cpus=1.0"));
+    assert!(first
+        .args
+        .iter()
+        .any(|argument| argument == "--memory=768m"));
+    assert!(first
+        .args
+        .iter()
+        .any(|argument| argument == "--memory-swap=768m"));
     assert_eq!(first.default_tools_approval_mode, "approve");
     assert!(first.args.iter().any(|argument| {
         argument.starts_with("--volume=")
@@ -187,6 +196,79 @@ fn managed_browser_profile_removes_stale_chromium_runtime_files() {
         "persistent"
     );
     std::fs::remove_dir_all(root).expect("cleanup browser profiles");
+}
+
+#[test]
+fn host_browser_mcp_connects_to_the_runner_pool_with_page_routing() {
+    let args = host_mcp_args("http://127.0.0.1:19222");
+    assert!(args
+        .iter()
+        .any(|argument| argument == "--browserUrl=http://127.0.0.1:19222"));
+    assert!(args
+        .iter()
+        .any(|argument| argument == "--experimentalPageIdRouting"));
+    assert!(args
+        .iter()
+        .any(|argument| argument == "--allowUnrestrictedPaths"));
+    assert!(!args.iter().any(|argument| argument == "--headless"));
+}
+
+#[test]
+fn host_browser_is_reused_across_projects_for_the_same_agent() {
+    let root = std::env::temp_dir().join(format!(
+        "relay-host-browser-pool-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    let Some(config) = BrowserMcpConfig::for_test_host(root.clone()) else {
+        return;
+    };
+    let mut runner = CodexTriggerRunner::new(
+        PathBuf::from("codex"),
+        Vec::new(),
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    runner.browser_mcp = config;
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let company = Uuid::new_v4();
+    let agent = Uuid::new_v4();
+
+    let first = runner
+        .managed_browser_mcp_server(company, agent, Uuid::new_v4(), &workspace)
+        .expect("first host browser")
+        .expect("enabled host browser");
+    let second = runner
+        .managed_browser_mcp_server(company, agent, Uuid::new_v4(), &workspace)
+        .expect("second host browser")
+        .expect("enabled host browser");
+    let other_agent = runner
+        .managed_browser_mcp_server(company, Uuid::new_v4(), Uuid::new_v4(), &workspace)
+        .expect("other Agent host browser")
+        .expect("enabled host browser");
+    let first_url = first
+        .args
+        .iter()
+        .find(|argument| argument.starts_with("--browserUrl="))
+        .expect("first browser URL");
+    let second_url = second
+        .args
+        .iter()
+        .find(|argument| argument.starts_with("--browserUrl="))
+        .expect("second browser URL");
+    let other_agent_url = other_agent
+        .args
+        .iter()
+        .find(|argument| argument.starts_with("--browserUrl="))
+        .expect("other Agent browser URL");
+
+    assert_eq!(first_url, second_url);
+    assert_ne!(first_url, other_agent_url);
+    assert_eq!(first.command, second.command);
+    drop(runner);
+    std::fs::remove_dir_all(root).expect("cleanup host browser profiles");
 }
 
 #[cfg(unix)]

@@ -71,6 +71,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     },
                 },
             })?;
+        let _ = self.ensure_project_member_default_subscriptions(project.id, input.target_agent_id);
         let _ = self.enqueue_agent_event(
             input.target_agent_id,
             "company.project.member_added",
@@ -284,6 +285,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_company_project_task(input.task_id)
             .filter(|task| task.project_id == project.id)
             .ok_or_else(|| AppError::NotFound("project task not found".into()))?;
+        let previous_status = task.status.clone();
         let can_manage = membership
             .permissions
             .iter()
@@ -313,14 +315,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 let status = normalize_project_task_status(status)?;
                 if !matches!(
                     status.as_str(),
-                    PROJECT_TASK_STATUS_IN_PROGRESS
-                        | PROJECT_TASK_STATUS_BLOCKED
-                        | PROJECT_TASK_STATUS_DONE
-                        | PROJECT_TASK_STATUS_FAILED
+                    PROJECT_TASK_STATUS_IN_PROGRESS | PROJECT_TASK_STATUS_DONE
                 ) {
                     return Err(AppError::Unauthorized(
-                        "assigned Agents may only mark tasks in progress, blocked, done, or failed"
-                            .into(),
+                        "assigned Agents may only mark tasks in progress or done; use attempt_finish and blocker_open for failures and blockers".into(),
                     ));
                 }
             }
@@ -345,6 +343,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 PROJECT_TASK_STATUS_IN_PROGRESS | PROJECT_TASK_STATUS_DONE
             ) {
                 self.ensure_project_task_dependencies_resolved(project.id, task.id)?;
+                self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+                self.ensure_project_task_environment_ready(project.id, task.id)?;
+                self.ensure_project_task_has_no_open_blockers(task.id)?;
             }
             status_changed = task.status != status;
             task.status = status;
@@ -381,6 +382,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         {
             self.notify_project_tasks_ready_after_changes(&project, &[task.id], now)?;
         }
+        if status_changed {
+            let _ = self.notify_project_managers_of_task_status_change(
+                &project,
+                &task,
+                &previous_status,
+                Some(input.actor_agent_id),
+                None,
+                now,
+            )?;
+        }
         Ok(task)
     }
 
@@ -399,6 +410,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_company_project_task(input.task_id)
             .filter(|task| task.project_id == project.id)
             .ok_or_else(|| AppError::NotFound("project task not found".into()))?;
+        let previous_status = task.status.clone();
         let current_dependency_ids = self
             .repo
             .list_company_project_task_dependencies(project.id)
@@ -435,6 +447,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 PROJECT_TASK_STATUS_IN_PROGRESS | PROJECT_TASK_STATUS_DONE
             ) {
                 self.ensure_project_task_dependency_ids_resolved(&dependency_ids)?;
+                self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+                self.ensure_project_task_environment_ready(project.id, task.id)?;
+                self.ensure_project_task_has_no_open_blockers(task.id)?;
             }
             status_changed = task.status != status;
             task.status = status;
@@ -470,6 +485,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             PROJECT_TASK_STATUS_IN_PROGRESS | PROJECT_TASK_STATUS_DONE
         ) {
             self.ensure_project_task_dependency_ids_resolved(&dependency_ids)?;
+            self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+            self.ensure_project_task_environment_ready(project.id, task.id)?;
+            self.ensure_project_task_has_no_open_blockers(task.id)?;
         }
         self.repo.update_company_project_task(task.clone())?;
         self.sync_project_task_dependencies_for_human(
@@ -504,6 +522,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     45,
                 );
             }
+        }
+        if status_changed {
+            let _ = self.notify_project_managers_of_task_status_change(
+                &project,
+                &task,
+                &previous_status,
+                None,
+                Some(input.human_user_id),
+                now,
+            )?;
         }
         Ok(task)
     }
@@ -704,6 +732,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let now = now_utc();
         let mut assignments = Vec::new();
         let mut dependency_unlock_task_ids = Vec::new();
+        let mut status_changes = Vec::new();
         let mut tasks = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
             let mut task = self
@@ -711,15 +740,20 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .get_company_project_task(task_id)
                 .filter(|task| task.project_id == project.id)
                 .ok_or_else(|| AppError::NotFound("project task not found".into()))?;
+            let previous_status = task.status.clone();
             if let Some(status) = status.as_deref() {
                 if matches!(
                     status,
                     PROJECT_TASK_STATUS_IN_PROGRESS | PROJECT_TASK_STATUS_DONE
                 ) {
                     self.ensure_project_task_dependencies_resolved(project.id, task.id)?;
+                    self.ensure_project_task_gates_satisfied(project.id, task.id)?;
+                    self.ensure_project_task_environment_ready(project.id, task.id)?;
+                    self.ensure_project_task_has_no_open_blockers(task.id)?;
                 }
                 if task.status != status {
                     task.status = status.to_string();
+                    status_changes.push((task.id, previous_status));
                     if matches!(
                         status,
                         PROJECT_TASK_STATUS_DONE
@@ -776,6 +810,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 }),
                 45,
             );
+        }
+        for (task_id, previous_status) in status_changes {
+            if let Some(task) = tasks.iter().find(|task| task.id == task_id) {
+                let _ = self.notify_project_managers_of_task_status_change(
+                    &project,
+                    task,
+                    &previous_status,
+                    Some(input.actor_agent_id),
+                    None,
+                    now,
+                )?;
+            }
         }
         tasks.sort_by(|left, right| {
             right

@@ -110,7 +110,7 @@ fn workspace_runs_receive_an_isolated_writable_temp_root() {
         .expect("isolated runtime temp");
     let mut command = Command::new("codex");
     runner
-        .apply_runtime_temp_arguments(&mut command, "workspace-write", &runtime_temp.path)
+        .apply_runtime_temp_arguments(&mut command, "workspace-write", &runtime_temp.path, &root)
         .expect("runtime temp arguments");
     runner
         .apply_runtime_temp_environment(&mut command, &runtime_temp.path)
@@ -139,4 +139,41 @@ fn workspace_runs_receive_an_isolated_writable_temp_root() {
     drop(runtime_temp);
     assert!(!runtime_path.exists());
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn workspace_runs_explicitly_allow_the_relay_git_directory() {
+    let root = std::env::temp_dir().join(format!(
+        "relay-codex-git-root-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    let workspace = root.join("workspace");
+    let relay_git = workspace.join(".relay-git");
+    fs::create_dir_all(&relay_git).expect("relay Git directory");
+    let runtime_temp = root.join("runtime-temp");
+    fs::create_dir_all(&runtime_temp).expect("runtime temp directory");
+    let runner = CodexTriggerRunner::new(
+        PathBuf::from("codex"),
+        Vec::new(),
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    let mut command = Command::new("codex");
+
+    runner
+        .apply_runtime_temp_arguments(&mut command, "workspace-write", &runtime_temp, &workspace)
+        .expect("sandbox writable roots");
+
+    let writable_roots = command
+        .as_std()
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .find(|value| value.starts_with("sandbox_workspace_write.writable_roots=["))
+        .expect("writable roots override");
+    assert!(writable_roots.contains(&runtime_temp.to_string_lossy().to_string()));
+    assert!(writable_roots.contains(&relay_git.to_string_lossy().to_string()));
+
+    fs::remove_dir_all(root).expect("cleanup Git root test");
 }

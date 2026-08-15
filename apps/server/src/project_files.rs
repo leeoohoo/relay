@@ -82,7 +82,20 @@ pub(super) fn validate_project_source_folder(
             "selected project folder must resolve to a host absolute path".into(),
         ));
     }
-    let source = fs::canonicalize(&requested).map_err(|error| {
+    let mounted = map_host_folder_path(
+        &requested,
+        std::env::var("HUMAN_FOLDER_REFERENCE_HOST_ROOT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .as_deref()
+            .map(FsPath::new),
+        std::env::var("HUMAN_FOLDER_REFERENCE_MOUNT_ROOT")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .as_deref()
+            .map(FsPath::new),
+    )?;
+    let source = fs::canonicalize(&mounted).map_err(|error| {
         AppError::Validation(format!(
             "selected project folder is not accessible on this Relay host: {error}"
         ))
@@ -111,6 +124,25 @@ pub(super) fn validate_project_source_folder(
         ));
     }
     Ok(source)
+}
+
+pub(super) fn map_host_folder_path(
+    requested: &FsPath,
+    host_root: Option<&FsPath>,
+    mount_root: Option<&FsPath>,
+) -> AppResult<PathBuf> {
+    let (Some(host_root), Some(mount_root)) = (host_root, mount_root) else {
+        return Ok(requested.to_path_buf());
+    };
+    if !host_root.is_absolute() || !mount_root.is_absolute() {
+        return Err(AppError::Internal(
+            "folder import host and mount roots must be absolute paths".into(),
+        ));
+    }
+    let Ok(relative) = requested.strip_prefix(host_root) else {
+        return Ok(requested.to_path_buf());
+    };
+    Ok(mount_root.join(relative))
 }
 
 pub(super) fn import_project_folder(source: &FsPath, destination: &FsPath) -> AppResult<()> {
@@ -226,10 +258,11 @@ pub(super) fn import_project_folder(source: &FsPath, destination: &FsPath) -> Ap
     result
 }
 
-pub(super) fn import_project_git(
+pub(super) async fn import_project_git(
     remote_url: &str,
     branch: Option<&str>,
     destination: &FsPath,
+    timeout: StdDuration,
 ) -> AppResult<()> {
     let remote = reqwest::Url::parse(remote_url)
         .map_err(|error| AppError::Validation(format!("invalid Git import URL: {error}")))?;
@@ -257,12 +290,12 @@ pub(super) fn import_project_git(
             "managed project destination already exists".into(),
         ));
     }
-    let mut command = Command::new("git");
+    let mut command = tokio::process::Command::new("git");
     command.args(["clone", "--depth", "1", "--single-branch"]);
     if let Some(branch) = branch {
         command.args(["--branch", branch]);
     }
-    let output = command
+    command
         .arg("--")
         .arg(remote.as_str())
         .arg(destination)
@@ -272,7 +305,16 @@ pub(super) fn import_project_git(
         .env("GIT_CONFIG_VALUE_0", "")
         .env("GIT_HTTP_LOW_SPEED_LIMIT", "1")
         .env("GIT_HTTP_LOW_SPEED_TIME", "30")
-        .output()
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| {
+            let _ = fs::remove_dir_all(destination);
+            AppError::Validation(format!(
+                "Git import timed out after {} seconds",
+                timeout.as_secs()
+            ))
+        })?
         .map_err(|error| AppError::Internal(format!("failed to start Git import: {error}")))?;
     if output.status.success() {
         return Ok(());

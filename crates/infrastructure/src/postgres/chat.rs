@@ -2,6 +2,98 @@ use super::mapping::*;
 use super::*;
 
 impl ChatPlatformRepository for PostgresPlatformRepository {
+    fn get_project_discussion_thread(
+        &self,
+        project_id: Uuid,
+        scope_type: &str,
+        subject_id: Uuid,
+    ) -> Option<ProjectDiscussionThread> {
+        self.with_client(|client| {
+            client.query_opt(
+                r#"
+                SELECT id, project_id, scope_type, subject_id, conversation_id,
+                       created_by_agent_id, created_by_human_user_id, created_at
+                FROM project_discussion_threads
+                WHERE project_id = $1 AND scope_type = $2 AND subject_id = $3
+                "#,
+                &[&project_id, &scope_type, &subject_id],
+            )
+        })
+        .ok()
+        .flatten()
+        .map(|row| ProjectDiscussionThread {
+            id: row.get("id"),
+            project_id: row.get("project_id"),
+            scope_type: row.get("scope_type"),
+            subject_id: row.get("subject_id"),
+            conversation_id: row.get("conversation_id"),
+            created_by_agent_id: row.get("created_by_agent_id"),
+            created_by_human_user_id: row.get("created_by_human_user_id"),
+            created_at: row.get("created_at"),
+        })
+    }
+
+    fn complete_project_discussion_thread_creation(
+        &self,
+        bundle: ProjectDiscussionThreadCreationBundle,
+    ) -> AppResult<()> {
+        self.with_client(|client| {
+            let mut tx = client.transaction()?;
+            tx.execute(
+                r#"
+                INSERT INTO conversations (
+                    id, conversation_type, title, created_by_agent_id,
+                    created_by_human_user_id, status, company_id, project_id,
+                    context_type, visibility, last_message_at, created_at, updated_at
+                ) VALUES ($1, 'group', $2, $3, $4, 'active', $5, $6, $7,
+                          'members', $8, $8, $8)
+                "#,
+                &[
+                    &bundle.thread.conversation_id,
+                    &bundle.title,
+                    &bundle.thread.created_by_agent_id,
+                    &bundle.thread.created_by_human_user_id,
+                    &bundle.company_id,
+                    &bundle.thread.project_id,
+                    &format!("{}_thread", bundle.thread.scope_type),
+                    &bundle.thread.created_at,
+                ],
+            )?;
+            for agent_id in &bundle.member_agent_ids {
+                tx.execute(
+                    r#"INSERT INTO conversation_members
+                       (id, conversation_id, agent_profile_id, member_role, joined_at)
+                       VALUES ($1, $2, $3, 'member', $4)"#,
+                    &[
+                        &Uuid::new_v4(),
+                        &bundle.thread.conversation_id,
+                        agent_id,
+                        &bundle.thread.created_at,
+                    ],
+                )?;
+            }
+            tx.execute(
+                r#"
+                INSERT INTO project_discussion_threads (
+                    id, project_id, scope_type, subject_id, conversation_id,
+                    created_by_agent_id, created_by_human_user_id, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                "#,
+                &[
+                    &bundle.thread.id,
+                    &bundle.thread.project_id,
+                    &bundle.thread.scope_type,
+                    &bundle.thread.subject_id,
+                    &bundle.thread.conversation_id,
+                    &bundle.thread.created_by_agent_id,
+                    &bundle.thread.created_by_human_user_id,
+                    &bundle.thread.created_at,
+                ],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
     fn ensure_agent_conversation_bucket(&self, _agent_id: Uuid) -> AppResult<()> {
         Ok(())
     }
@@ -445,7 +537,8 @@ impl ChatPlatformRepository for PostgresPlatformRepository {
                 ) latest ON TRUE
                 WHERE conversation.company_id = $1
                   AND conversation.context_type IN (
-                      'company_all', 'company_direct', 'company_group', 'project_group'
+                      'company_all', 'company_direct', 'company_group', 'project_group',
+                      'task_thread', 'blocker_thread', 'gate_thread'
                   )
                 ORDER BY updated_at DESC
                 "#,
@@ -511,7 +604,10 @@ impl ChatPlatformRepository for PostgresPlatformRepository {
                     LIMIT 1
                 ) latest ON TRUE
                 WHERE conversation.company_id = $1
-                  AND conversation.context_type IN ('company_all', 'company_direct', 'company_group', 'project_group')
+                  AND conversation.context_type IN (
+                      'company_all', 'company_direct', 'company_group', 'project_group',
+                      'task_thread', 'blocker_thread', 'gate_thread'
+                  )
                   AND (COALESCE(latest.created_at, conversation.updated_at, conversation.created_at), conversation.id) < ($2, $3)
                 ORDER BY updated_at DESC, conversation.id DESC
                 LIMIT $4

@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use postgres::types::Json;
 use postgres::{Client, GenericClient, NoTls, Row};
 use r2d2::Pool;
@@ -15,10 +15,11 @@ use ai_chat_application::{
     CompanyAgentMembershipUpdateBundle, CompanyConversationCreationBundle, CompanyCreationBundle,
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
     CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput, CursorPage,
+    EnvironmentPlatformRepository, ExecutionPlatformRepository, GatePlatformRepository,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
     ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, MessagePageView,
-    ProjectPlatformRepository, ProjectProvisioningCleanupJob, RegistrationCompletionBundle,
-    TaskPlatformRepository,
+    ProjectDiscussionThreadCreationBundle, ProjectPlatformRepository,
+    ProjectProvisioningCleanupJob, RegistrationCompletionBundle, TaskPlatformRepository,
 };
 use ai_chat_domain::agent_identity::{
     AgentActionLog, AgentActionStatus, AgentIdempotencyRecord, AgentInboxEvent,
@@ -36,6 +37,9 @@ use ai_chat_domain::company::{
     CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig, CompanyProjectGitConfig,
     CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate, CompanyProjectTask,
     CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, CompanyRealtimeEvent, OrgUnit,
+    ProjectDiscussionThread, ProjectEnvironment, ProjectEnvironmentService, ProjectEvidence,
+    ProjectGate, ProjectMemberEventSubscription, ProjectTaskAttempt, ProjectTaskBlocker,
+    ProjectTaskEnvironmentRequirement, ProjectTaskGateRequirement, ProjectTaskRelation,
     COMPANY_AGENT_ROLE_MANAGER,
 };
 use ai_chat_domain::social::{
@@ -49,6 +53,9 @@ mod chat;
 mod codex_control;
 mod codex_runtime;
 mod company;
+mod environment;
+mod execution;
+mod gate;
 mod governance;
 mod mapping;
 mod memory;

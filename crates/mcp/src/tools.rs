@@ -6,6 +6,10 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
             "agent.bootstrap",
             "Refresh the authenticated Agent's dynamic company context: organization, coworkers, permissions, conversations, projects, pending inbox, work sessions, and suggested next tools. The credential already fixes identity; control sessions use this for current state, while project workers may read their bound project and tasks directly.",
         ),
+        read_only_tool::<EmptyInput>(
+            "agent.control_snapshot",
+            "Return the authenticated Agent's bounded actionable control snapshot: actionable events, ready and waiting tasks, active execution intents, and project-bound work sessions. Trigger-managed control turns receive this snapshot automatically and should refresh it only after a stale-state conflict.",
+        ),
         action_tool::<AgentProfileUpdateToolInput>(
             "agent.profile.update",
             "Update the authenticated Agent's structured responsibilities, skills, current focus, or collaboration preference so coworkers can discover what this Agent does.",
@@ -20,7 +24,7 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
         ),
         read_only_tool::<AgentInboxWaitInput>(
             "agent.inbox.wait",
-            "List or wait up to 25 seconds for inbox events. Set timeout_seconds to 0 for an immediate query and pending_only to false for history.",
+            "List or wait up to 25 seconds for actionable inbox events. Trigger-managed control sessions should use agent.control_snapshot and must not long-poll; this tool remains available to external runners.",
         ),
         mutating_tool::<AgentInboxProcessInput>(
             "agent.inbox.ack",
@@ -73,7 +77,7 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
     let can_update_tasks = permissions
         .iter()
         .any(|permission| permission == COMPANY_PERMISSION_TASK_UPDATE);
-    let mut task_actions = vec!["get", "list", "my"];
+    let mut task_actions = vec!["get", "list", "my", "execution_get"];
     if can_assign_tasks {
         task_actions.extend([
             "create",
@@ -81,9 +85,23 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
             "batch_update",
             "dependency_add",
             "dependency_remove",
+            "attempt_start",
+            "attempt_finish",
+            "blocker_open",
+            "blocker_resolve",
+            "relation_add",
+            "relation_remove",
+            "evidence_create",
         ]);
     } else if can_update_tasks {
-        task_actions.push("update");
+        task_actions.extend([
+            "update",
+            "attempt_start",
+            "attempt_finish",
+            "blocker_open",
+            "blocker_resolve",
+            "evidence_create",
+        ]);
     }
     let task_schema = tailored_action_schema::<CompanyTaskToolInput>(
         &task_actions,
@@ -109,20 +127,35 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
             task_schema,
             "update",
             "status",
-            &["in_progress", "blocked", "done", "failed"],
-            "Assigned Agents may only update their own task to in_progress, blocked, done, or failed.",
+            &["in_progress", "done"],
+            "Assigned Agents may only update their own task to in_progress or done. Record execution failure with attempt_finish and waiting conditions with blocker_open.",
         )
     };
+
+    let gate_actions = if can_assign_tasks {
+        vec!["list", "create", "decide", "requirement_set"]
+    } else {
+        vec!["list"]
+    };
+    let gate_schema = tailored_action_schema::<CompanyGateToolInput>(&gate_actions, &[]);
+    let environment_actions = if can_assign_tasks {
+        vec!["list", "create", "observe", "requirement_set"]
+    } else {
+        vec!["list"]
+    };
+    let environment_schema = tailored_action_schema::<
+        dispatch_environment::CompanyEnvironmentToolInput,
+    >(&environment_actions, &[]);
 
     let mut tools = vec![
         action_tool::<CompanyChatToolInput>(
             "company.chat",
-            "Company messaging actions: direct_open, group_create, send, reply, history, unread, and mark_read. During an active Codex run, mark_read never acknowledges messages that arrived after the run started; inspect them with agent.inbox.wait and acknowledge each handled event with agent.inbox.ack.",
+            "Company messaging actions: direct_open, group_create, send, reply, history, unread, and mark_read. unread is per-Agent and cursor-paginated; every page reports whether later unread messages still mention this Agent. When later unread has no mentions, mark_read with only_if_no_mentions=true and reviewed_through_message_id for a guarded quick clear. During an active Codex run, mark_read never acknowledges messages that arrived after the run started.",
         ),
         action_tool_with_schema(
             "company.project",
             format!(
-                "Project actions visible to this Agent: {}. rule_update and assets_replace remain visible so a Human can grant their permissions during an active turn; every call is authorized against the Agent's current live permissions.",
+                "Project actions visible to this Agent: {}. For project_id, copy the full UUID from agent.bootstrap or company.project list; never use a list position, shortened ID, task ID, or Git commit. The get action also accepts an exact unique project name and safely resolves the only visible project. Mutating actions still require the full UUID. rule_update and assets_replace remain visible so a Human can grant their permissions during an active turn; every call is authorized against the Agent's current live permissions.",
                 project_actions.join(", ")
             ),
             project_schema,
@@ -137,10 +170,26 @@ pub(super) fn company_mcp_tools(permissions: &[String]) -> Vec<Tool> {
         action_tool_with_schema(
             "company.task",
             format!(
-                "Project task actions available to this Agent: {}.",
+                "Project task actions available to this Agent: {}. The top-level action field is required on every call. Before attempt_start, call execution_get and require execution.readiness.can_start=true; its waiting_reasons identify unresolved dependencies, Gates, environments, and blockers, with suggested_actions for the responsible role. Execution contracts: attempt_start requires company_id, project_id, task_id, attempt_type, objective; attempt_finish requires those ids plus attempt_id, status, result_summary; blocker_open requires the task ids, blocker_type, summary, resolution_condition; evidence_create requires company_id, project_id, evidence_type, title, summary, result. Canonical evidence result values are passed, failed, inconclusive, informational. Relay also normalizes common natural aliases and supplies safe defaults for older cached clients. After a validation error, correct one complete call before attempting another or running calls in parallel.",
                 task_actions.join(", ")
             ),
             task_schema,
+        ),
+    );
+    tools.insert(
+        3,
+        action_tool_with_schema(
+            "company.environment",
+            "Observe project environments and bind task environment requirements. Tasks stay waiting until the required revision, services, and health state are observed.".into(),
+            environment_schema,
+        ),
+    );
+    tools.insert(
+        4,
+        action_tool_with_schema(
+            "company.gate",
+            "Manage structured project Gates and task Gate requirements. Gates are the machine-readable source of truth for design, technical, QA, PM, environment, approval, and release holds; do not encode Hold rules only in task text or chat.".into(),
+            gate_schema,
         ),
     );
     tools
@@ -243,9 +292,42 @@ pub(super) fn tailored_action_schema<T: JsonSchema + 'static>(
 ) -> Arc<JsonObject> {
     let mut schema = Value::Object((*schema_for::<T>()).clone());
     tailor_action_schema_value(&mut schema, allowed_actions, hidden_fields);
+    expose_required_action_discriminator(&mut schema, allowed_actions);
     match schema {
         Value::Object(object) => Arc::new(object),
         _ => unreachable!("MCP input schema root must be an object"),
+    }
+}
+
+fn expose_required_action_discriminator(value: &mut Value, allowed_actions: &[&str]) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let properties = object
+        .entry("properties")
+        .or_insert_with(|| Value::Object(JsonObject::new()));
+    let Some(properties) = properties.as_object_mut() else {
+        return;
+    };
+    properties.insert(
+        "action".into(),
+        json!({
+            "type": "string",
+            "enum": allowed_actions,
+            "description": "Required operation selector. Always send this top-level field together with every field required by the selected action; never call this tool with an empty object."
+        }),
+    );
+
+    let required = object
+        .entry("required")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(required) = required.as_array_mut() {
+        if !required
+            .iter()
+            .any(|field| field.as_str() == Some("action"))
+        {
+            required.push(Value::String("action".into()));
+        }
     }
 }
 
@@ -408,6 +490,7 @@ pub(super) fn is_public_tool_name(tool: &str) -> bool {
     matches!(
         tool,
         "agent.bootstrap"
+            | "agent.control_snapshot"
             | "agent.profile.update"
             | "agent.memory"
             | "agent.work_session"
@@ -416,6 +499,8 @@ pub(super) fn is_public_tool_name(tool: &str) -> bool {
             | "company.chat"
             | "company.project"
             | "company.task"
+            | "company.environment"
+            | "company.gate"
             | "company.events"
             | "company.staff"
     )
@@ -432,7 +517,11 @@ pub(super) fn is_mutating_tool(tool: &str, input: &Value) -> bool {
         "agent.work_session" => matches!(input_action(input), Some("dispatch")),
         "company.chat" => !matches!(input_action(input), Some("history" | "unread")),
         "company.project" => !matches!(input_action(input), Some("get" | "list")),
-        "company.task" => !matches!(input_action(input), Some("get" | "list" | "my")),
+        "company.task" => !matches!(
+            input_action(input),
+            Some("get" | "list" | "my" | "execution_get")
+        ),
+        "company.environment" | "company.gate" => !matches!(input_action(input), Some("list")),
         "company.staff" => !matches!(input_action(input), Some("action_get" | "action_list")),
         _ => false,
     }
@@ -497,6 +586,12 @@ pub(super) fn success_target_ref(tool: &str, input: &Value, output: &Value) -> O
             }
             _ => None,
         },
+        "company.gate" => nested_id(output, &["gate", "project_id"])
+            .or_else(|| nested_id(input, &["project_id"]))
+            .map(|value| format!("project:{value}")),
+        "company.environment" => nested_id(output, &["environment", "project_id"])
+            .or_else(|| nested_id(input, &["project_id"]))
+            .map(|value| format!("project:{value}")),
         "company.staff" => nested_id(output, &["result", "agent_profile", "id"])
             .map(|value| format!("agent:{value}")),
         _ => None,
@@ -539,6 +634,9 @@ pub(super) fn failure_target_ref(tool: &str, input: &Value) -> Option<String> {
             _ => nested_id(input, &["project_id"]).map(|value| format!("project:{value}")),
         },
         "company.task" => nested_id(input, &["project_id"]).map(|value| format!("project:{value}")),
+        "company.gate" | "company.environment" => {
+            nested_id(input, &["project_id"]).map(|value| format!("project:{value}"))
+        }
         "company.staff" => match input_action(input) {
             Some("hire") => {
                 nested_id(input, &["company_id"]).map(|value| format!("company:{value}"))

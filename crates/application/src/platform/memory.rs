@@ -69,7 +69,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
             _ => unreachable!("memory scope is normalized"),
         };
-        let memory_tier = normalize_agent_memory_tier(&input.memory_tier)?;
+        let requested_memory_tier = normalize_agent_memory_tier(&input.memory_tier)?;
         let topic_key = normalize_agent_memory_topic_key(input.topic_key)?;
         let memory_type = normalize_agent_memory_type(&input.memory_type)?;
         let title = normalize_agent_memory_text(input.title, 200, "memory title", 1)?;
@@ -79,6 +79,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             1_000,
             "memory usage context",
         )?;
+        let classification = classify_agent_memory(
+            &requested_memory_tier,
+            &memory_type,
+            &title,
+            &summary,
+            &when_to_use,
+        );
         let tags = normalize_agent_memory_tags(input.tags)?;
         let importance = input.importance.unwrap_or(3);
         if !(1..=5).contains(&importance) {
@@ -158,12 +165,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             scope: scope.clone(),
             project_id: input.project_id,
             session_id: input.session_id,
-            memory_tier,
-            injection_mode: if input.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
+            memory_tier: classification.memory_tier.clone(),
+            injection_mode: if classification.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
                 AGENT_MEMORY_INJECTION_ALWAYS.into()
             } else {
                 AGENT_MEMORY_INJECTION_ON_DEMAND.into()
             },
+            classification_reason: classification.reason,
+            estimated_ttl_days: classification.estimated_ttl_days,
+            injection_cost_chars: classification.injection_cost_chars,
             visibility: match scope.as_str() {
                 AGENT_MEMORY_SCOPE_CONTROL => AGENT_MEMORY_VISIBILITY_CONTROL,
                 AGENT_MEMORY_SCOPE_PROJECT => AGENT_MEMORY_VISIBILITY_WORKER,
@@ -184,7 +194,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             status: AGENT_MEMORY_STATUS_ACTIVE.into(),
             source_refs: input.source_refs,
             supersedes_memory_id: input.supersedes_memory_id,
-            expires_at: input.expires_at,
+            expires_at: input.expires_at.or_else(|| {
+                classification
+                    .estimated_ttl_days
+                    .map(|days| now + chrono::Duration::days(i64::from(days)))
+            }),
+            archived_at: None,
             verified_by_agent_id: Some(input.actor_agent_id),
             verified_by_human_user_id: None,
             verified_at: Some(now),
@@ -267,6 +282,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|token| !token.is_empty())
             .collect::<Vec<_>>();
         let now = now_utc();
+        self.repo
+            .archive_expired_agent_memories(input.company_id, now)?;
         let mut memories = self
             .repo
             .list_company_agent_memories(input.company_id)
@@ -364,14 +381,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 "Agent cannot edit the requested memory".into(),
             ));
         }
-        if let Some(memory_tier) = input.memory_tier {
-            memory.memory_tier = normalize_agent_memory_tier(&memory_tier)?;
-            memory.injection_mode = if memory.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
-                AGENT_MEMORY_INJECTION_ALWAYS.into()
-            } else {
-                AGENT_MEMORY_INJECTION_ON_DEMAND.into()
-            };
-        }
+        let requested_memory_tier = input
+            .memory_tier
+            .as_deref()
+            .map(normalize_agent_memory_tier)
+            .transpose()?
+            .unwrap_or_else(|| memory.memory_tier.clone());
         if let Some(title) = input.title {
             memory.title = normalize_agent_memory_text(title, 200, "memory title", 1)?;
         }
@@ -381,6 +396,27 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if let Some(when_to_use) = input.when_to_use {
             memory.when_to_use =
                 normalize_agent_memory_optional_text(when_to_use, 1_000, "memory usage context")?;
+        }
+        let classification = classify_agent_memory(
+            &requested_memory_tier,
+            &memory.memory_type,
+            &memory.title,
+            &memory.summary,
+            &memory.when_to_use,
+        );
+        memory.memory_tier = classification.memory_tier;
+        memory.injection_mode = if memory.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
+            AGENT_MEMORY_INJECTION_ALWAYS.into()
+        } else {
+            AGENT_MEMORY_INJECTION_ON_DEMAND.into()
+        };
+        memory.classification_reason = classification.reason;
+        memory.estimated_ttl_days = classification.estimated_ttl_days;
+        memory.injection_cost_chars = classification.injection_cost_chars;
+        if memory.memory_tier == AGENT_MEMORY_TIER_SHORT_TERM && memory.expires_at.is_none() {
+            memory.expires_at = memory
+                .estimated_ttl_days
+                .map(|days| now_utc() + chrono::Duration::days(i64::from(days)));
         }
         if let Some(tags) = input.tags {
             memory.tags = normalize_agent_memory_tags(tags)?;
@@ -443,8 +479,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 ));
             }
             memory.status = status.clone();
+            memory.archived_at = matches!(
+                status.as_str(),
+                AGENT_MEMORY_STATUS_ARCHIVED | AGENT_MEMORY_STATUS_SUPERSEDED
+            )
+            .then_some(now_utc());
             if status == AGENT_MEMORY_STATUS_ACTIVE {
                 let now = now_utc();
+                memory.archived_at = None;
                 memory.verified_by_agent_id = Some(input.actor_agent_id);
                 memory.verified_by_human_user_id = None;
                 memory.verified_at = Some(now);
@@ -517,6 +559,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             ));
         }
         let now = now_utc();
+        self.repo.archive_expired_agent_memories(company_id, now)?;
         let mut visible = self
             .repo
             .list_company_agent_memories(company_id)
@@ -565,7 +608,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .then_with(|| right.importance.cmp(&left.importance))
                 .then_with(|| right.updated_at.cmp(&left.updated_at))
         });
-        long_term.truncate(50);
         let mut pinned = visible
             .iter()
             .filter(|memory| memory.status == AGENT_MEMORY_STATUS_ACTIVE && memory.pinned)
@@ -724,9 +766,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .get_agent_memory(input.memory_id)
             .filter(|memory| memory.company_id == input.company_id)
             .ok_or_else(|| AppError::NotFound("Agent memory not found".into()))?;
-        if let Some(memory_tier) = input.memory_tier {
-            memory.memory_tier = normalize_agent_memory_tier(&memory_tier)?;
-        }
+        let requested_memory_tier = input
+            .memory_tier
+            .as_deref()
+            .map(normalize_agent_memory_tier)
+            .transpose()?
+            .unwrap_or_else(|| memory.memory_tier.clone());
         if let Some(title) = input.title {
             memory.title = normalize_agent_memory_text(title, 200, "memory title", 1)?;
         }
@@ -736,6 +781,27 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         if let Some(when_to_use) = input.when_to_use {
             memory.when_to_use =
                 normalize_agent_memory_optional_text(when_to_use, 1_000, "memory usage context")?;
+        }
+        let classification = classify_agent_memory(
+            &requested_memory_tier,
+            &memory.memory_type,
+            &memory.title,
+            &memory.summary,
+            &memory.when_to_use,
+        );
+        memory.memory_tier = classification.memory_tier;
+        memory.injection_mode = if memory.memory_tier == AGENT_MEMORY_TIER_LONG_TERM {
+            AGENT_MEMORY_INJECTION_ALWAYS.into()
+        } else {
+            AGENT_MEMORY_INJECTION_ON_DEMAND.into()
+        };
+        memory.classification_reason = classification.reason;
+        memory.estimated_ttl_days = classification.estimated_ttl_days;
+        memory.injection_cost_chars = classification.injection_cost_chars;
+        if memory.memory_tier == AGENT_MEMORY_TIER_SHORT_TERM && memory.expires_at.is_none() {
+            memory.expires_at = memory
+                .estimated_ttl_days
+                .map(|days| now_utc() + chrono::Duration::days(i64::from(days)));
         }
         if let Some(tags) = input.tags {
             memory.tags = normalize_agent_memory_tags(tags)?;
@@ -765,9 +831,15 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
             if memory.status == AGENT_MEMORY_STATUS_ACTIVE {
                 let now = now_utc();
+                memory.archived_at = None;
                 memory.verified_by_agent_id = None;
                 memory.verified_by_human_user_id = Some(input.human_user_id);
                 memory.verified_at = Some(now);
+            } else if matches!(
+                memory.status.as_str(),
+                AGENT_MEMORY_STATUS_ARCHIVED | AGENT_MEMORY_STATUS_SUPERSEDED
+            ) {
+                memory.archived_at = Some(now_utc());
             }
         }
         if let Some(pinned) = input.pinned {

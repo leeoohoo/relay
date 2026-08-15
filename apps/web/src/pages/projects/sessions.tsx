@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { api } from "../../api/client";
+import { useEffect, useRef, useState } from "react";
+import { fetchCodexRuntimeOverview } from "../../api/codexRuntime";
+import type { CompanyRealtimeEvent } from "../../api/types";
 import type {
   CodexSession,
   CodexTriggerRun,
@@ -42,33 +43,34 @@ export function ProjectSessionsCard(props: {
   companyId: string;
   project: CompanyProject;
   token: string;
+  realtimeEvent?: CompanyRealtimeEvent | null;
   onError: (error: unknown) => void;
 }) {
   const [rows, setRows] = useState<ProjectSessionRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const rowsRef = useRef(rows);
+  const refreshTimerRef = useRef<number | null>(null);
+  const refreshInFlightRef = useRef(false);
+  rowsRef.current = rows;
 
   async function loadSessions(reportError = true) {
-    setLoading(true);
+    if (reportError) setLoading(true);
     try {
-      const results = await Promise.all(props.project.members.map(async (member) => {
+      const response = await fetchCodexRuntimeOverview(
+        props.companyId,
+        props.project.members.map((member) => member.agent_profile.id),
+        props.token,
+        props.project.project.id,
+      );
+      const runtimeByAgent = new Map(response.agents.map((item) => [item.agent_id, item]));
+      const results = props.project.members.map((member) => {
         const agentId = member.agent_profile.id;
-        const [sessionResponse, triggerResponse] = await Promise.all([
-          api<{ sessions: CodexSession[] }>(
-            `/api/v1/companies/${props.companyId}/agents/${agentId}/codex-sessions?project_id=${props.project.project.id}`,
-            {},
-            props.token,
-          ),
-          api<{ trigger: CodexTriggerView | null }>(
-            `/api/v1/companies/${props.companyId}/agents/${agentId}/codex-trigger`,
-            {},
-            props.token,
-          ),
-        ]);
-        const runningRun = runningProjectRun(triggerResponse.trigger, props.project.project.id);
+        const runtime = runtimeByAgent.get(agentId);
+        const runningRun = runningProjectRun(runtime?.trigger ?? null, props.project.project.id);
         const currentTaskTitles = props.project.tasks
           .filter((task) => task.assignee_agent_id === agentId && task.status === "in_progress")
           .map((task) => task.title);
-        const sessions: ProjectSessionRow[] = sessionResponse.sessions
+        const sessions: ProjectSessionRow[] = (runtime?.sessions ?? [])
           .filter((session) => session.status === "active" && !session.archived_at)
           .map((session) => ({
             agentId,
@@ -87,7 +89,7 @@ export function ProjectSessionsCard(props: {
           });
         }
         return sessions;
-      }));
+      });
       setRows(results.flat().sort((left, right) => {
         if (left.runningRun && !right.runningRun) return -1;
         if (!left.runningRun && right.runningRun) return 1;
@@ -98,15 +100,63 @@ export function ProjectSessionsCard(props: {
     } catch (error) {
       if (reportError) props.onError(error);
     } finally {
-      setLoading(false);
+      if (reportError) setLoading(false);
     }
+  }
+
+  function scheduleSessionsRefresh() {
+    if (refreshTimerRef.current !== null || refreshInFlightRef.current) return;
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshInFlightRef.current = true;
+      void loadSessions(false).finally(() => { refreshInFlightRef.current = false; });
+    }, 1_000);
   }
 
   useEffect(() => {
     void loadSessions();
-    const refreshTimer = window.setInterval(() => void loadSessions(false), 10_000);
-    return () => window.clearInterval(refreshTimer);
   }, [props.companyId, props.project.project.id, props.token]);
+
+  useEffect(() => {
+    const event = props.realtimeEvent;
+    if (event?.event_type !== "codex.run.updated") return;
+    const agentId = typeof event.payload.agent_profile_id === "string"
+      ? event.payload.agent_profile_id
+      : null;
+    if (!agentId || !props.project.members.some((member) => member.agent_profile.id === agentId)) return;
+    const runId = typeof event.payload.run_id === "string" ? event.payload.run_id : null;
+    const projectId = typeof event.payload.project_id === "string" ? event.payload.project_id : null;
+    if (projectId && projectId !== props.project.project.id) return;
+    const rowIndex = runId
+      ? rowsRef.current.findIndex((row) => row.agentId === agentId && row.runningRun?.id === runId)
+      : -1;
+    const status = typeof event.payload.status === "string" ? event.payload.status : null;
+    if (rowIndex < 0 || status !== "running") {
+      // A new run needs its session association, and a terminal run needs its
+      // final checkpoint. Coalesce those boundary reads into one request.
+      scheduleSessionsRefresh();
+      return;
+    }
+    setRows((current) => current.map((row, index) => index === rowIndex && row.runningRun
+      ? {
+          ...row,
+          runningRun: {
+            ...row.runningRun,
+            activity_phase: stringPayload(event.payload.activity_phase, row.runningRun.activity_phase),
+            activity_summary: nullableStringPayload(event.payload.activity_summary, row.runningRun.activity_summary),
+            last_activity_at: nullableStringPayload(event.payload.last_activity_at, row.runningRun.last_activity_at),
+            heartbeat_at: nullableStringPayload(event.payload.heartbeat_at, row.runningRun.heartbeat_at ?? null),
+            state_reason: nullableStringPayload(event.payload.state_reason, row.runningRun.state_reason ?? null),
+            current_intent_id: nullableStringPayload(event.payload.current_intent_id, row.runningRun.current_intent_id ?? null),
+            current_task_id: nullableStringPayload(event.payload.current_task_id, row.runningRun.current_task_id ?? null),
+          },
+        }
+      : row));
+  }, [props.realtimeEvent?.sequence_id]);
+
+  useEffect(() => () => {
+    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+  }, []);
 
   return (
     <div className="project-session-card">
@@ -143,4 +193,12 @@ export function ProjectSessionsCard(props: {
       ) : loading ? null : <div className="empty-inline"><h3>还没有工作会话</h3><p>Agent 第一次接收本项目的 Execution Intent 后会自动创建。</p></div>}
     </div>
   );
+}
+
+function stringPayload(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function nullableStringPayload(value: unknown, fallback: string | null): string | null {
+  return value === null || typeof value === "string" ? value : fallback;
 }

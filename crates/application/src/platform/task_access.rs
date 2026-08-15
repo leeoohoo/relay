@@ -38,20 +38,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         &self,
         context: &ConversationContext,
     ) -> AppResult<()> {
-        let project_is_paused = if context.context_type == CONVERSATION_CONTEXT_PROJECT_GROUP {
-            match context.project_id {
-                Some(project_id) => self
-                    .repo
-                    .get_company_project_result(project_id)?
-                    .is_some_and(|project| project.status == PROJECT_STATUS_PAUSED),
-                None => false,
-            }
-        } else {
-            false
+        let project_is_paused = match context.project_id {
+            Some(project_id) => self
+                .repo
+                .get_company_project_result(project_id)?
+                .is_some_and(|project| project.status == PROJECT_STATUS_PAUSED),
+            None => false,
         };
         if project_is_paused {
             return Err(AppError::Conflict(
-                "project is paused; its group cannot send messages".into(),
+                "project is paused; its conversations cannot send messages".into(),
             ));
         }
         Ok(())
@@ -291,6 +287,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             {
                 continue;
             }
+            if !self.project_task_gate_requirements_satisfied(project.id, task.id) {
+                continue;
+            }
+            if !self.project_task_environment_requirements_satisfied(project.id, task.id) {
+                continue;
+            }
             let Some(assignee_agent_id) = task.assignee_agent_id else {
                 continue;
             };
@@ -354,6 +356,8 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .repo
             .get_conversation_context_result(project.project_group_conversation_id)?
             .ok_or_else(|| AppError::NotFound("project group context not found".into()))?;
+        let tasks = self.repo.list_company_project_tasks_result(project.id)?;
+        let load_warnings = self.project_load_warnings(&project, &members, &tasks);
         Ok(CompanyProjectView {
             project: project.clone(),
             git: self
@@ -366,7 +370,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .repo
                 .get_company_project_asset_refresh_config(project.id),
             members,
-            tasks: self.repo.list_company_project_tasks_result(project.id)?,
+            tasks,
             task_dependencies: self.repo.list_company_project_task_dependencies(project.id),
             task_status_history: self
                 .repo
@@ -379,6 +383,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                     .repo
                     .list_conversation_member_ids(project.project_group_conversation_id),
             },
+            load_warnings,
         })
     }
 
@@ -403,7 +408,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         self.ensure_company_human_manager(company_id, human_user_id)?;
         self.repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| {
                 membership.company_id == company_id && membership.employment_status == "active"
             })
@@ -436,14 +441,18 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             config.manual_run_requested_at = None;
         }
         self.repo.save_agent_codex_trigger_config(config.clone())?;
+        let recent_runs = self.recent_agent_codex_runs_for_human(input.agent_id, 20)?;
+        let active_intents = self.active_agent_execution_intents(input.agent_id);
+        let runtime = self.project_agent_runtime(&config, &recent_runs, &active_intents);
         Ok(CompanyAgentCodexTriggerView {
-            recent_runs: self
-                .repo
-                .list_agent_codex_trigger_runs_result(input.agent_id, 20)?,
+            recent_runs,
+            active_intents,
+            recent_sessions: self.recent_agent_codex_sessions_for_human(input.agent_id, 10),
             runner_profile_id: self
                 .repo
                 .get_agent_codex_runner_profile_assignment(input.agent_id),
             config,
+            runtime,
         })
     }
 
@@ -454,7 +463,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
     ) -> AppResult<CompanyAgentMembership> {
         let membership = self
             .repo
-            .get_company_agent_membership(agent_id)
+            .get_company_agent_membership_result(agent_id)?
             .filter(|membership| membership.company_id == company_id)
             .ok_or_else(|| AppError::Unauthorized("agent does not belong to the company".into()))?;
         if membership.employment_status == "provisioning" {

@@ -11,15 +11,16 @@ use ai_chat_domain::company::{
 };
 
 #[test]
-fn standard_surface_has_six_identity_memory_session_and_inbox_tools() {
+fn standard_surface_has_seven_identity_memory_session_snapshot_and_inbox_tools() {
     let tools = standard_mcp_tools();
     let names = tools
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 6);
+    assert_eq!(names.len(), 7);
     assert!(names.contains(&"agent.bootstrap"));
+    assert!(names.contains(&"agent.control_snapshot"));
     assert!(names.contains(&"agent.profile.update"));
     assert!(names.contains(&"agent.memory"));
     assert!(names.contains(&"agent.work_session"));
@@ -71,7 +72,7 @@ fn memory_source_refs_accept_git_commit_ids_and_describe_identifier_rules() {
 }
 
 #[test]
-fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
+fn compact_surface_exposes_thirteen_tools_and_hides_legacy_names() {
     let mut tools = standard_mcp_tools();
     tools.extend(company_mcp_tools(&[
         COMPANY_PERMISSION_PROJECT_CREATE.into(),
@@ -83,11 +84,23 @@ fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 10);
+    assert_eq!(names.len(), 13);
     assert!(names.contains(&"company.chat"));
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));
+    assert!(names.contains(&"company.gate"));
+    assert!(names.contains(&"company.environment"));
     assert!(names.contains(&"company.events"));
+    for name in [
+        "agent.control_snapshot",
+        "company.gate",
+        "company.environment",
+    ] {
+        assert!(
+            is_public_tool_name(name),
+            "{name} must be invokable when advertised"
+        );
+    }
     assert!(!is_public_tool_name("agent.get_profile"));
     assert!(!is_public_tool_name("company.chat.message.send"));
     assert!(!is_public_tool_name("company.project.task.update"));
@@ -105,6 +118,81 @@ fn compact_surface_exposes_ten_tools_and_hides_legacy_names() {
         assert!(serde_json::to_string(&tool.input_schema)
             .expect("tool schema should serialize")
             .contains("idempotency_key"));
+    }
+}
+
+#[test]
+fn gate_and_environment_tools_classify_read_and_write_actions() {
+    for tool in ["company.gate", "company.environment"] {
+        assert!(!is_mutating_tool(tool, &json!({ "action": "list" })));
+        assert!(is_mutating_tool(tool, &json!({ "action": "create" })));
+    }
+    assert!(!is_mutating_tool(
+        "company.task",
+        &json!({ "action": "execution_get" })
+    ));
+}
+
+#[test]
+fn advertised_gate_and_environment_tools_reach_their_dispatchers() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "mcp-gate-environment@example.com".into(),
+            display_name: "MCP Gate Environment".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "MCP Gate Environment Company".into(),
+            slug: Some("mcp-gate-environment-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let manager = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Gate Manager".into(),
+            handle: "gate-manager".into(),
+            persona: "负责项目门禁与环境".into(),
+            org_unit_id: None,
+            job_title: Some("项目经理".into()),
+            role_key: Some(COMPANY_AGENT_ROLE_MANAGER.into()),
+            reports_to_membership_id: None,
+        })
+        .expect("manager should be created");
+    let project = app
+        .create_company_project_for_human(CreateCompanyProjectForHumanInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            owner_agent_id: manager.agent_profile.id,
+            name: "MCP Gate Environment Project".into(),
+            description: None,
+            member_agent_ids: Vec::new(),
+            project_type: Some("web_application".into()),
+            project_type_source: Some(PROJECT_TYPE_SOURCE_HUMAN.into()),
+            project_type_confidence: Some(100),
+            project_type_evidence: Vec::new(),
+            project_id: None,
+        })
+        .expect("project should be created");
+    let gateway = McpGateway::new(app, None);
+
+    for tool in ["company.gate", "company.environment"] {
+        let invocation = gateway
+            .invoke(
+                Some(&manager.agent_key_plaintext),
+                tool,
+                json!({
+                    "action": "list",
+                    "company_id": company.company.id,
+                    "project_id": project.project.id,
+                }),
+            )
+            .unwrap_or_else(|error| panic!("{tool} must be invokable: {error}"));
+        assert_eq!(invocation.tool, tool);
     }
 }
 
@@ -163,16 +251,186 @@ fn staffing_profession_keys_accept_common_aliases_and_expose_full_catalog() {
 }
 
 #[test]
-fn active_company_agents_receive_four_company_domain_tools() {
+fn task_execution_schema_exposes_all_fixed_value_enums() {
+    let tool = company_mcp_tools(&[
+        COMPANY_PERMISSION_TASK_ASSIGN.into(),
+        COMPANY_PERMISSION_TASK_UPDATE.into(),
+    ])
+    .into_iter()
+    .find(|tool| tool.name.as_ref() == "company.task")
+    .expect("company.task tool");
+    let serialized =
+        serde_json::to_string(&tool.input_schema).expect("task schema should serialize");
+    for value in [
+        "execution",
+        "environment_check",
+        "succeeded",
+        "interrupted",
+        "dependency",
+        "environment",
+        "resolved",
+        "waived",
+        "retry_of",
+        "report",
+        "artifact",
+        "informational",
+    ] {
+        assert!(serialized.contains(value), "schema should expose {value}");
+    }
+    let schema = serde_json::to_value(&tool.input_schema).expect("task schema should serialize");
+    assert!(schema
+        .pointer("/required")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|field| field == "action")));
+    let action_values = schema
+        .pointer("/properties/action/enum")
+        .and_then(Value::as_array)
+        .expect("task schema should expose a top-level action discriminator");
+    assert!(action_values
+        .iter()
+        .any(|action| action == "evidence_create"));
+}
+
+#[test]
+fn project_asset_schema_matches_application_validation_contract() {
+    let tool = company_mcp_tools(&[COMPANY_PERMISSION_PROJECT_ASSETS_MANAGE.into()])
+        .into_iter()
+        .find(|tool| tool.name.as_ref() == "company.project")
+        .expect("company.project tool");
+    let schema = Value::Object((*tool.input_schema).clone());
+
+    let metadata = schema
+        .pointer("/$defs/CompanyProjectAssetToolInput/properties/metadata")
+        .expect("asset metadata schema");
+    assert!(schema_contains_type(metadata, "object"));
+    assert!(!schema_contains_type(metadata, "string"));
+
+    let status = schema
+        .pointer("/$defs/CompanyProjectAssetStatusInput/enum")
+        .and_then(Value::as_array)
+        .expect("asset status enum");
+    assert_eq!(
+        status,
+        &vec![
+            json!("active"),
+            json!("missing"),
+            json!("deprecated"),
+            json!("unknown"),
+        ]
+    );
+
+    let input: CompanyProjectToolInput = handler::parse_input(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "status": "active",
+            "metadata": { "language": "Rust" }
+        }]
+    }))
+    .expect("valid structured asset input should parse");
+    let CompanyProjectOperation::AssetsReplace { assets, .. } = input.operation else {
+        panic!("expected assets_replace operation");
+    };
+    assert_eq!(
+        assets[0].status.as_ref().map(|value| value.as_str()),
+        Some("active")
+    );
+    assert_eq!(
+        assets[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("language")),
+        Some(&json!("Rust"))
+    );
+
+    let invalid_status = handler::parse_input::<CompanyProjectToolInput>(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "status": "ready"
+        }]
+    }));
+    assert!(invalid_status.is_err());
+
+    for status in ["active", "missing", "deprecated", "unknown"] {
+        handler::parse_input::<CompanyProjectToolInput>(json!({
+            "action": "assets_replace",
+            "company_id": Uuid::nil(),
+            "project_id": Uuid::nil(),
+            "assets": [{
+                "name": "HTTP API",
+                "asset_type": "service",
+                "locator": "apps/server",
+                "status": status
+            }]
+        }))
+        .unwrap_or_else(|error| panic!("documented asset status {status} should parse: {error}"));
+    }
+
+    let legacy_string_metadata: CompanyProjectToolInput = handler::parse_input(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "status": "planned",
+            "metadata": "{\"language\":\"Rust\"}"
+        }]
+    }))
+    .expect("legacy cached schemas should remain compatible during rollout");
+    let CompanyProjectOperation::AssetsReplace { assets, .. } = legacy_string_metadata.operation
+    else {
+        panic!("expected assets_replace operation");
+    };
+    assert_eq!(
+        assets[0].status.as_ref().map(|status| status.as_str()),
+        Some("missing")
+    );
+    assert_eq!(
+        assets[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("language")),
+        Some(&json!("Rust"))
+    );
+
+    let invalid_string_metadata = handler::parse_input::<CompanyProjectToolInput>(json!({
+        "action": "assets_replace",
+        "company_id": Uuid::nil(),
+        "project_id": Uuid::nil(),
+        "assets": [{
+            "name": "HTTP API",
+            "asset_type": "service",
+            "locator": "apps/server",
+            "metadata": "not-json"
+        }]
+    }));
+    assert!(invalid_string_metadata.is_err());
+}
+
+#[test]
+fn active_company_agents_receive_six_company_domain_tools() {
     let tools = company_mcp_tools(&[]);
     let names = tools
         .iter()
         .map(|tool| tool.name.as_ref())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 4);
+    assert_eq!(names.len(), 6);
     assert!(names.contains(&"company.chat"));
     assert!(names.contains(&"company.project"));
     assert!(names.contains(&"company.task"));
+    assert!(names.contains(&"company.gate"));
+    assert!(names.contains(&"company.environment"));
     assert!(names.contains(&"company.events"));
 }
 
@@ -436,10 +694,21 @@ fn company_action_schemas_keep_hot_grant_project_actions_visible() {
         .expect("member task tool");
     assert_eq!(
         tool_schema_actions(member_task),
-        ["get", "list", "my", "update"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>()
+        [
+            "attempt_finish",
+            "attempt_start",
+            "blocker_open",
+            "blocker_resolve",
+            "evidence_create",
+            "execution_get",
+            "get",
+            "list",
+            "my",
+            "update",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
     );
     let member_task_schema = serde_json::to_string(&member_task.input_schema)
         .expect("member task schema should serialize");
@@ -452,13 +721,7 @@ fn company_action_schemas_keep_hot_grant_project_actions_visible() {
             .get("enum")
             .and_then(Value::as_array)
             .expect("member status should be an enum"),
-        &vec![
-            json!("in_progress"),
-            json!("blocked"),
-            json!("done"),
-            json!("failed"),
-            Value::Null,
-        ]
+        &vec![json!("in_progress"), json!("done"), Value::Null,]
     );
     for hidden_field in [
         "title",
@@ -631,14 +894,15 @@ fn assigned_agent_can_read_tasks_through_get_list_and_my_actions() {
         task.id.to_string()
     );
     assert_eq!(mine.output["waiting_count"], 1);
-    assert_eq!(
-        mine.output["assignments"][0]["readiness"],
-        "waiting_for_dependencies"
-    );
+    assert_eq!(mine.output["assignments"][0]["readiness"], "waiting");
     assert_eq!(mine.output["assignments"][0]["can_start"], false);
     assert_eq!(
-        mine.output["assignments"][0]["unresolved_dependencies"][0]["task_id"],
+        mine.output["assignments"][0]["waiting_reasons"][0]["related_id"],
         prerequisite.id.to_string()
+    );
+    assert_eq!(
+        mine.output["assignments"][0]["waiting_reasons"][0]["kind"],
+        "dependency"
     );
 
     app.update_company_project_task(UpdateCompanyProjectTaskInput {
@@ -761,6 +1025,24 @@ fn schema_action_property<'a>(value: &'a Value, action: &str, property: &str) ->
             .iter()
             .find_map(|item| schema_action_property(item, action, property)),
         _ => None,
+    }
+}
+
+fn schema_contains_type(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.get("type").is_some_and(|value| match value {
+                Value::String(value) => value == expected,
+                Value::Array(values) => values.iter().any(|value| value == expected),
+                _ => false,
+            }) || object
+                .values()
+                .any(|child| schema_contains_type(child, expected))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|item| schema_contains_type(item, expected)),
+        _ => false,
     }
 }
 

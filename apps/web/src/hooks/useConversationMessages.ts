@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { CompanyRealtimeEvent, MessagePage } from "../api/types";
 
@@ -17,13 +17,14 @@ export function mergeMessages<TMessage extends IdentifiedMessage>(
 export function useConversationMessages<TMessage extends IdentifiedMessage>(options: {
   conversationId: string;
   token: string;
-  realtimeEvent: CompanyRealtimeEvent | null;
+  realtimeEvents: CompanyRealtimeEvent[];
   onError: (error: unknown) => void;
 }) {
   const [messages, setMessages] = useState<TMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const lastRealtimeSequenceRef = useRef(0);
 
   const fetchPage = useCallback(async (beforeMessageId?: string) => {
     const query = new URLSearchParams({ limit: "100" });
@@ -75,11 +76,37 @@ export function useConversationMessages<TMessage extends IdentifiedMessage>(opti
   }, [fetchPage, options.conversationId]);
 
   useEffect(() => {
-    const event = options.realtimeEvent;
-    if (event?.event_type !== "message.created") return;
-    if (event.payload.conversation_id !== options.conversationId) return;
+    if (!options.realtimeEvents.length) {
+      lastRealtimeSequenceRef.current = 0;
+      return;
+    }
+    if (!options.conversationId) return;
+    const freshEvents = options.realtimeEvents.filter((event) =>
+      event.sequence_id > lastRealtimeSequenceRef.current);
+    if (!freshEvents.length) return;
+    lastRealtimeSequenceRef.current = Math.max(...freshEvents.map((event) => event.sequence_id));
+    const hasNewMessage = freshEvents.some((event) =>
+      event.event_type === "message.created"
+      && event.payload.conversation_id === options.conversationId);
+    if (!hasNewMessage) return;
     refreshLatest().catch(options.onError);
-  }, [options.realtimeEvent, options.conversationId, options.onError, refreshLatest]);
+  }, [options.realtimeEvents, options.conversationId, options.onError, refreshLatest]);
+
+  useEffect(() => {
+    if (!options.conversationId) return;
+    const refreshAfterReconnect = () => { void refreshLatest().catch(options.onError); };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshAfterReconnect();
+    };
+    window.addEventListener("online", refreshAfterReconnect);
+    window.addEventListener("focus", refreshAfterReconnect);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("online", refreshAfterReconnect);
+      window.removeEventListener("focus", refreshAfterReconnect);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [options.conversationId, options.onError, refreshLatest]);
 
   return {
     messages,

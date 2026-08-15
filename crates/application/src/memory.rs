@@ -5,7 +5,7 @@ use std::sync::{
     Arc, LockResult, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -24,15 +24,20 @@ use ai_chat_domain::company::{
     CompanyHumanMember, CompanyProject, CompanyProjectAsset, CompanyProjectAssetRefreshConfig,
     CompanyProjectGitConfig, CompanyProjectMember, CompanyProjectRule, CompanyProjectStatusUpdate,
     CompanyProjectTask, CompanyProjectTaskDependency, CompanyProjectTaskStatusHistory, OrgUnit,
-    AGENT_CODEX_RUN_STATUS_LEASE_LOST, AGENT_CODEX_RUN_STATUS_RUNNING,
-    AGENT_CODEX_TRIGGER_STATUS_ACTIVE, AGENT_CODEX_TRIGGER_STATUS_ERROR,
-    AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
-    AGENT_TOOL_APPROVAL_MODE_ALWAYS, AGENT_TOOL_APPROVAL_SOURCE_CODEX,
-    AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
-    AGENT_TOOL_APPROVAL_STATUS_PENDING, CODEX_PLUGIN_OPERATION_STATUS_FAILED,
-    CODEX_PLUGIN_OPERATION_STATUS_QUEUED, CODEX_PLUGIN_OPERATION_STATUS_RUNNING,
-    CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED, COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE,
-    COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED, PROJECT_STATUS_PAUSED,
+    ProjectDiscussionThread, ProjectEnvironment, ProjectEnvironmentService, ProjectEvidence,
+    ProjectGate, ProjectMemberEventSubscription, ProjectTaskAttempt, ProjectTaskBlocker,
+    ProjectTaskEnvironmentRequirement, ProjectTaskGateRequirement, ProjectTaskRelation,
+    AGENT_CODEX_RUN_STATUS_LEASE_LOST, AGENT_CODEX_RUN_STATUS_RESTARTED,
+    AGENT_CODEX_RUN_STATUS_RUNNING, AGENT_CODEX_TRIGGER_STATUS_ACTIVE,
+    AGENT_CODEX_TRIGGER_STATUS_ERROR, AGENT_EXECUTION_INTENT_STATUS_PENDING,
+    AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_MEMORY_STATUS_ACTIVE,
+    AGENT_MEMORY_STATUS_ARCHIVED, AGENT_TOOL_APPROVAL_MODE_ALWAYS,
+    AGENT_TOOL_APPROVAL_SOURCE_CODEX, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
+    AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_PENDING,
+    CODEX_PLUGIN_OPERATION_STATUS_FAILED, CODEX_PLUGIN_OPERATION_STATUS_QUEUED,
+    CODEX_PLUGIN_OPERATION_STATUS_RUNNING, CODEX_PLUGIN_OPERATION_STATUS_SUCCEEDED,
+    COMPANY_GOVERNANCE_POLICY_STATUS_ACTIVE, COMPANY_GOVERNANCE_POLICY_STATUS_ARCHIVED,
+    PROJECT_STATUS_PAUSED,
 };
 use ai_chat_domain::social::{
     ConversationContext, ConversationPreview, MessageView, CONVERSATION_CONTEXT_PROJECT_GROUP,
@@ -48,6 +53,7 @@ use crate::service::{
     CompanyAgentMembershipUpdateBundle, CompanyConversationCreationBundle, CompanyCreationBundle,
     CompanyPlatformRepository, CompanyProjectCreationBundle, CompanyProjectMemberAddBundle,
     CompanyProjectOwnerTransferBundle, CompleteAgentCodexTriggerLeaseInput,
+    EnvironmentPlatformRepository, ExecutionPlatformRepository, GatePlatformRepository,
     GovernancePlatformRepository, HumanCompanyDirectConversationCreationBundle,
     ManagedCompanyProjectCreationBundle, MemoryPlatformRepositoryPort, ProjectPlatformRepository,
     RegistrationCompletionBundle, TaskPlatformRepository,
@@ -84,6 +90,7 @@ struct MemoryState {
     company_human_direct_conversations: HashMap<(Uuid, Uuid, Uuid), Uuid>,
     company_default_groups: HashMap<Uuid, ConversationPreview>,
     conversation_contexts: HashMap<Uuid, ConversationContext>,
+    project_discussion_threads: HashMap<(Uuid, String, Uuid), ProjectDiscussionThread>,
     company_projects: HashMap<Uuid, CompanyProject>,
     project_provisioning_cleanup_jobs: HashMap<Uuid, ProjectProvisioningCleanupJob>,
     company_project_git_configs: HashMap<Uuid, CompanyProjectGitConfig>,
@@ -105,6 +112,17 @@ struct MemoryState {
     company_project_task_dependencies: HashMap<Uuid, CompanyProjectTaskDependency>,
     company_project_task_status_history: Vec<CompanyProjectTaskStatusHistory>,
     company_project_status_updates: HashMap<Uuid, Vec<CompanyProjectStatusUpdate>>,
+    project_gates: HashMap<Uuid, ProjectGate>,
+    project_task_gate_requirements: HashMap<(Uuid, Uuid), ProjectTaskGateRequirement>,
+    project_environments: HashMap<Uuid, ProjectEnvironment>,
+    project_environment_services: HashMap<Uuid, ProjectEnvironmentService>,
+    project_task_environment_requirements: HashMap<(Uuid, Uuid), ProjectTaskEnvironmentRequirement>,
+    project_task_attempts: HashMap<Uuid, ProjectTaskAttempt>,
+    project_task_blockers: HashMap<Uuid, ProjectTaskBlocker>,
+    project_task_relations: HashMap<Uuid, ProjectTaskRelation>,
+    project_evidence: HashMap<Uuid, ProjectEvidence>,
+    project_member_event_subscriptions:
+        HashMap<(Uuid, Uuid, String), ProjectMemberEventSubscription>,
     company_governance_policy_versions: HashMap<Uuid, CompanyGovernancePolicyVersion>,
     agent_tool_approval_requests: HashMap<Uuid, AgentToolApprovalRequest>,
 }
@@ -338,6 +356,9 @@ mod auth;
 mod chat;
 mod codex;
 mod company;
+mod environment;
+mod execution;
+mod gate;
 mod governance;
 mod memories;
 mod project;

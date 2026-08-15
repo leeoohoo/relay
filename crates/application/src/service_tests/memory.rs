@@ -310,6 +310,81 @@ fn distilled_memories_are_private_per_agent_across_both_tiers() {
 }
 
 #[test]
+fn memory_governor_downgrades_temporary_status_and_archives_expired_context() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let owner = app
+        .dev_login(DevLoginInput {
+            email: "memory-governor-owner@example.com".into(),
+            display_name: "Memory Governor Owner".into(),
+        })
+        .expect("owner login should succeed");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: owner.id,
+            name: "Memory Governor Company".into(),
+            slug: Some("memory-governor-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let agent = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: owner.id,
+            company_id: company.company.id,
+            display_name: "Governor Agent".into(),
+            handle: "governor-agent".into(),
+            persona: "维护可复用知识".into(),
+            org_unit_id: Some(company.org_units[0].id),
+            job_title: Some("软件工程师".into()),
+            role_key: None,
+            reports_to_membership_id: None,
+        })
+        .expect("agent should be created");
+    let memory = app
+        .remember_agent_memory(RememberAgentMemoryInput {
+            actor_agent_id: agent.agent_profile.id,
+            company_id: company.company.id,
+            scope: None,
+            project_id: None,
+            session_id: None,
+            memory_tier: AGENT_MEMORY_TIER_LONG_TERM.into(),
+            memory_type: "fact".into(),
+            topic_key: "current-release-state".into(),
+            title: "当前阶段等待审批".into(),
+            summary: "当前任务进行中，等待审批后再继续本次发布流程。".into(),
+            when_to_use: Some("本次发布期间".into()),
+            tags: Vec::new(),
+            importance: Some(3),
+            confidence: Some(80),
+            source_refs: Vec::new(),
+            expires_at: None,
+            supersedes_memory_id: None,
+        })
+        .expect("temporary status should be accepted as short-term memory");
+    assert_eq!(memory.memory_tier, AGENT_MEMORY_TIER_SHORT_TERM);
+    assert_eq!(memory.injection_mode, AGENT_MEMORY_INJECTION_ON_DEMAND);
+    assert!(memory.estimated_ttl_days.is_some());
+    assert!(memory.expires_at.is_some());
+    assert!(memory.classification_reason.contains("downgraded"));
+    assert!(memory.injection_cost_chars > 0);
+
+    let mut expired = memory.clone();
+    expired.expires_at = Some(now_utc() - Duration::minutes(1));
+    app.repo
+        .update_agent_memory(expired)
+        .expect("test should expire memory directly");
+    let overview = app
+        .agent_memory_overview(agent.agent_profile.id, company.company.id, None)
+        .expect("overview should archive expired context");
+    assert_eq!(overview.active_count, 0);
+    let archived = app
+        .repo
+        .get_agent_memory(memory.id)
+        .expect("archived memory should remain stored");
+    assert_eq!(archived.status, AGENT_MEMORY_STATUS_ARCHIVED);
+    assert!(archived.archived_at.is_some());
+}
+
+#[test]
 fn distilled_memory_rejects_duplicate_topics_and_secrets() {
     let app = PlatformApp::new(MemoryPlatformRepository::default());
     let owner = app

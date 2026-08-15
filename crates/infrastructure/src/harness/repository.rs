@@ -96,9 +96,9 @@ struct HarnessFileContent {
     data_size: usize,
 }
 
-struct HarnessRepositoryAccess {
-    api_base_url: String,
-    repository_path: String,
+pub(super) struct HarnessRepositoryAccess {
+    pub(super) api_base_url: String,
+    pub(super) repository_path: String,
     access_token: String,
 }
 
@@ -208,7 +208,7 @@ impl<R: PlatformRepository> HarnessProvisioner<R> {
         Ok(Some(parse_harness_content(content)?))
     }
 
-    fn repository_access(
+    pub(super) fn repository_access(
         &self,
         human_user_id: Uuid,
         remote_url: &str,

@@ -191,4 +191,19 @@ pub trait ProjectPlatformRepository: Send + Sync {
             "company project membership is not supported by this repository".into(),
         ))
     }
+    fn save_project_member_event_subscriptions(
+        &self,
+        _subscriptions: Vec<ProjectMemberEventSubscription>,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "project event subscriptions are not supported by this repository".into(),
+        ))
+    }
+    fn list_project_member_event_subscriptions(
+        &self,
+        _project_id: Uuid,
+        _agent_id: Uuid,
+    ) -> Vec<ProjectMemberEventSubscription> {
+        Vec::new()
+    }
 }

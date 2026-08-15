@@ -291,7 +291,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         self.ensure_company_human_manager(input.company_id, input.human_user_id)?;
         let mut membership = self
             .repo
-            .get_company_agent_membership(input.agent_id)
+            .get_company_agent_membership_result(input.agent_id)?
             .filter(|membership| membership.company_id == input.company_id)
             .ok_or_else(|| AppError::NotFound("company agent membership not found".into()))?;
         if membership.employment_status == "terminated" {
@@ -525,7 +525,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .ok_or_else(|| AppError::Validation("unsupported profession_key".into()))?;
         let mut membership = self
             .repo
-            .get_company_agent_membership(input.agent_id)
+            .get_company_agent_membership_result(input.agent_id)?
             .filter(|membership| membership.company_id == input.company_id)
             .ok_or_else(|| AppError::NotFound("company agent membership not found".into()))?;
         if membership.employment_status == "terminated" {

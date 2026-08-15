@@ -104,6 +104,22 @@ pub trait ChatPlatformRepository: Send + Sync {
     ) -> AppResult<()> {
         self.append_message(message)
     }
+    fn get_project_discussion_thread(
+        &self,
+        _project_id: Uuid,
+        _scope_type: &str,
+        _subject_id: Uuid,
+    ) -> Option<ProjectDiscussionThread> {
+        None
+    }
+    fn complete_project_discussion_thread_creation(
+        &self,
+        _bundle: ProjectDiscussionThreadCreationBundle,
+    ) -> AppResult<()> {
+        Err(AppError::Validation(
+            "project discussion threads are not supported by this repository".into(),
+        ))
+    }
     fn conversation_exists(&self, conversation_id: Uuid) -> bool;
     fn list_agent_action_logs(&self, agent_id: Uuid, limit: usize) -> Vec<AgentActionLog>;
 }

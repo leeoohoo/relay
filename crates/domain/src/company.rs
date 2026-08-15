@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub mod environments;
+pub mod execution;
+pub mod gates;
+pub mod orchestration;
+pub use environments::*;
+pub use execution::*;
+pub use gates::*;
+pub use orchestration::*;
+
 pub const COMPANY_ROLE_OWNER: &str = "owner";
 pub const COMPANY_ROLE_ADMIN: &str = "admin";
 pub const COMPANY_ROLE_VIEWER: &str = "viewer";
@@ -199,6 +208,7 @@ pub const AGENT_CODEX_TRIGGER_TYPE_TASK: &str = "task";
 pub const AGENT_CODEX_TRIGGER_TYPE_ASSET_REFRESH: &str = "asset_refresh";
 pub const AGENT_CODEX_WAKE_REASON_MESSAGE: &str = "message";
 pub const AGENT_CODEX_WAKE_REASON_TASK_READY: &str = "task_ready";
+pub const AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED: &str = "task_status_changed";
 pub const AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED: &str = "project_resumed";
 pub const AGENT_CODEX_WAKE_REASON_INTENT_RECOVERY: &str = "intent_recovery";
 pub const AGENT_CODEX_RUN_STATUS_RUNNING: &str = "running";
@@ -207,6 +217,7 @@ pub const AGENT_CODEX_RUN_STATUS_FAILED: &str = "failed";
 pub const AGENT_CODEX_RUN_STATUS_TIMED_OUT: &str = "timed_out";
 pub const AGENT_CODEX_RUN_STATUS_CANCELLED: &str = "cancelled";
 pub const AGENT_CODEX_RUN_STATUS_LEASE_LOST: &str = "lease_lost";
+pub const AGENT_CODEX_RUN_STATUS_RESTARTED: &str = "restarted";
 pub const AGENT_CODEX_SESSION_KIND_CONTROL: &str = "control";
 pub const AGENT_CODEX_SESSION_KIND_PROJECT: &str = "project";
 pub const AGENT_CODEX_SESSION_STATUS_ACTIVE: &str = "active";
@@ -224,6 +235,7 @@ pub fn is_agent_codex_wake_reason(value: &str) -> bool {
         value,
         AGENT_CODEX_WAKE_REASON_MESSAGE
             | AGENT_CODEX_WAKE_REASON_TASK_READY
+            | AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED
             | AGENT_CODEX_WAKE_REASON_PROJECT_RESUMED
             | AGENT_CODEX_WAKE_REASON_INTENT_RECOVERY
     )
@@ -455,6 +467,9 @@ pub struct AgentMemory {
     pub session_id: Option<Uuid>,
     pub memory_tier: String,
     pub injection_mode: String,
+    pub classification_reason: String,
+    pub estimated_ttl_days: Option<i32>,
+    pub injection_cost_chars: i32,
     pub visibility: String,
     pub memory_type: String,
     pub topic_key: String,
@@ -469,6 +484,7 @@ pub struct AgentMemory {
     pub source_refs: Vec<AgentMemorySourceRef>,
     pub supersedes_memory_id: Option<Uuid>,
     pub expires_at: Option<DateTime<Utc>>,
+    pub archived_at: Option<DateTime<Utc>>,
     pub verified_by_agent_id: Option<Uuid>,
     pub verified_by_human_user_id: Option<Uuid>,
     pub verified_at: Option<DateTime<Utc>>,
@@ -576,6 +592,15 @@ pub struct AgentCodexTriggerRun {
     pub activity_summary: Option<String>,
     pub last_activity_at: Option<DateTime<Utc>>,
     pub activity_log: Vec<AgentCodexRunActivity>,
+    pub process_instance_id: Option<String>,
+    pub heartbeat_at: Option<DateTime<Utc>>,
+    pub state_reason: Option<String>,
+    pub current_intent_id: Option<Uuid>,
+    pub current_task_id: Option<Uuid>,
+    pub waiting_on_type: Option<String>,
+    pub waiting_on_id: Option<Uuid>,
+    pub session_kind: String,
+    pub resumes_run_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

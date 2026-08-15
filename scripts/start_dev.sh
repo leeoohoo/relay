@@ -519,6 +519,7 @@ start_api_watcher() {
 start_trigger() {
   set_step "starting local Codex Agent Trigger"
   stop_pid trigger
+  relay_cleanup_legacy_chrome_devtools_containers "${RELAY_CHROME_PROFILE_ROOT:-$ROOT_DIR/.relay-agent-trigger/browser-profiles}"
   relay_ensure_chrome_devtools_image "$ROOT_DIR"
   (
     cd "$ROOT_DIR"
@@ -535,8 +536,14 @@ start_trigger() {
     AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT="${AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-200000}" \
     AGENT_TRIGGER_STATE_ROOT="${AGENT_TRIGGER_STATE_ROOT:-$ROOT_DIR/.relay-agent-trigger}" \
     RELAY_CHROME_DEVTOOLS_MCP_ENABLED="${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}" \
+    RELAY_CHROME_DEVTOOLS_MCP_MODE="${RELAY_CHROME_DEVTOOLS_MCP_MODE:-auto}" \
+    RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND="${RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND:-npx}" \
+    RELAY_CHROME_DEVTOOLS_MCP_DOCKER_COMMAND="${RELAY_CHROME_DEVTOOLS_MCP_DOCKER_COMMAND:-docker}" \
+    RELAY_CHROME_EXECUTABLE="${RELAY_CHROME_EXECUTABLE:-}" \
     RELAY_CHROME_DEVTOOLS_MCP_IMAGE="${RELAY_CHROME_DEVTOOLS_MCP_IMAGE:-relay/chrome-devtools-mcp:1.6.0}" \
     RELAY_CHROME_PROFILE_ROOT="${RELAY_CHROME_PROFILE_ROOT:-$ROOT_DIR/.relay-agent-trigger/browser-profiles}" \
+    RELAY_CHROME_DOCKER_CPUS="${RELAY_CHROME_DOCKER_CPUS:-1.0}" \
+    RELAY_CHROME_DOCKER_MEMORY="${RELAY_CHROME_DOCKER_MEMORY:-768m}" \
     RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}" \
     RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}" \
     AGENT_TRIGGER_RUN_ONCE=false \

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
+import type { CompanyRealtimeEvent } from "../../api/types";
 import { Pagination, usePagination } from "../../components/Pagination";
 import { Icon } from "../../components/ui";
 import type { CompanyConsole, CompanyProject } from "../../types/platform";
@@ -8,17 +9,20 @@ import { projectStatusLabel, projectTypeLabel } from "../app/shared";
 import { ProjectAssetsCard } from "./assets";
 import { CreateProjectDialog } from "./create-project-dialog";
 import { ProjectGitCard } from "./git";
+import { ProjectGatesCard } from "./gates";
+import { ProjectEnvironmentsCard } from "./environments";
 import { ProjectOwnerDialog } from "./owner-dialog";
 import { ProjectRepositoryBrowser } from "./repository";
 import { ProjectRuleCard } from "./rule";
 import { ProjectSessionsCard } from "./sessions";
 import { TasksView } from "./tasks";
 
-export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "memories" | "sessions";
+export type ProjectDetailTab = "git" | "repository" | "rule" | "assets" | "tasks" | "gates" | "environments" | "memories" | "sessions";
 
 export function ProjectsView(props: {
   consoleData: CompanyConsole;
   token: string;
+  realtimeEvent?: CompanyRealtimeEvent | null;
   onChanged: () => Promise<void>;
   onError: (error: unknown) => void;
   onClearError: () => void;
@@ -96,12 +100,15 @@ export function ProjectsView(props: {
             </div>
           </div>
           {projectPaused ? <div className="project-paused-banner"><Icon name="pause" /><span><strong>项目已暂停</strong><small>项目群不可发送消息，Agent 不会因本项目任务、消息或资产维护启动；正在运行的项目 Codex 会被取消。</small></span></div> : null}
+          {selectedProject.load_warnings?.length ? <div className="project-load-warnings">{selectedProject.load_warnings.map((warning) => <div key={`${warning.code}-${warning.agent_profile_id ?? "project"}`} className={warning.severity}><Icon name="alert" /><span><strong>{warning.title}</strong><small>{warning.detail}</small></span></div>)}</div> : null}
           <div className="project-detail-tabs" role="tablist" aria-label="项目详情">
             <button className={activeTab === "git" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "git"} onClick={() => setActiveTab("git")}>Git 仓库</button>
             <button className={activeTab === "repository" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "repository"} onClick={() => setActiveTab("repository")}>项目目录</button>
             <button className={activeTab === "rule" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "rule"} onClick={() => setActiveTab("rule")}>Rule</button>
             <button className={activeTab === "assets" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "assets"} onClick={() => setActiveTab("assets")}>项目资产 <span>{selectedProject.assets.length}</span></button>
             <button className={activeTab === "tasks" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "tasks"} onClick={() => setActiveTab("tasks")}>项目任务 <span>{selectedProject.tasks.length}</span></button>
+            <button className={activeTab === "gates" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "gates"} onClick={() => setActiveTab("gates")}>项目门禁</button>
+            <button className={activeTab === "environments" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "environments"} onClick={() => setActiveTab("environments")}>项目环境</button>
             <button className={activeTab === "memories" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "memories"} onClick={() => setActiveTab("memories")}>项目记忆</button>
             <button className={activeTab === "sessions" ? "active" : ""} type="button" role="tab" aria-selected={activeTab === "sessions"} onClick={() => setActiveTab("sessions")}>Agent 会话</button>
           </div>
@@ -156,6 +163,27 @@ export function ProjectsView(props: {
               onNotice={props.onNotice}
             />
           ) : null}
+          {activeTab === "gates" ? (
+            <ProjectGatesCard
+              companyId={props.consoleData.company.id}
+              project={selectedProject}
+              token={props.token}
+              canManage={canManage && !projectPaused}
+              onChanged={props.onChanged}
+              onError={props.onError}
+              onNotice={props.onNotice}
+            />
+          ) : null}
+          {activeTab === "environments" ? (
+            <ProjectEnvironmentsCard
+              companyId={props.consoleData.company.id}
+              project={selectedProject}
+              token={props.token}
+              canManage={canManage && !projectPaused}
+              onError={props.onError}
+              onNotice={props.onNotice}
+            />
+          ) : null}
           {activeTab === "memories" ? (
             <MemoriesView
               consoleData={props.consoleData}
@@ -171,6 +199,7 @@ export function ProjectsView(props: {
               companyId={props.consoleData.company.id}
               project={selectedProject}
               token={props.token}
+              realtimeEvent={props.realtimeEvent}
               onError={props.onError}
             />
           ) : null}

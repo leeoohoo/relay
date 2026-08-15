@@ -1,18 +1,19 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ai_chat_application::{
     AddCompanyProjectMemberInput, AgentStaffingHireInput, AgentStaffingStatusInput,
     BatchUpdateCompanyProjectTasksInput, ChangeCompanyProjectTaskDependencyInput,
     CompanyProjectAssetInput, CreateCompanyGroupConversationInput, CreateCompanyProjectInput,
-    CreateCompanyProjectStatusUpdateInput, CreateCompanyProjectTaskInput, GetAgentMemoryInput,
-    GetCompanyAgentContextInput, GetCompanyProjectInput, ListCompanyGroupUnreadInput,
+    CreateCompanyProjectStatusUpdateInput, CreateCompanyProjectTaskInput, CreateProjectGateInput,
+    DecideProjectGateInput, GetAgentMemoryInput, GetCompanyAgentContextInput,
+    GetCompanyProjectInput, ListCompanyGroupUnreadInput, ListProjectGatesInput,
     MarkCompanyGroupReadInput, MarkInboxEventProcessedInput, OpenCompanyDirectConversationInput,
     OwnershipProofVerifier, PlatformApp, PlatformRepository, RememberAgentMemoryInput,
     RemoveCompanyProjectMemberInput, ReplaceCompanyProjectAssetsInput,
     ReplyCompanyInboxMessageInput, SearchAgentMemoriesInput, SendCompanyMessageWithMentionsInput,
-    SetAgentMemoryStateInput, TransferCompanyProjectOwnerInput, UpdateAgentMemoryInput,
-    UpdateCompanyAgentWorkProfileInput, UpdateCompanyProjectInput, UpdateCompanyProjectRuleInput,
-    UpdateCompanyProjectTaskInput, UpsertCompanyProjectGitInput,
+    SetAgentMemoryStateInput, SetProjectTaskGateRequirementInput, TransferCompanyProjectOwnerInput,
+    UpdateAgentMemoryInput, UpdateCompanyAgentWorkProfileInput, UpdateCompanyProjectInput,
+    UpdateCompanyProjectRuleInput, UpdateCompanyProjectTaskInput, UpsertCompanyProjectGitInput,
 };
 use ai_chat_domain::agent_identity::AgentActionStatus;
 use ai_chat_domain::company::{
@@ -41,7 +42,7 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -64,13 +65,21 @@ pub struct McpGateway<R: PlatformRepository, V: OwnershipProofVerifier> {
 mod dispatch;
 mod dispatch_agent;
 mod dispatch_chat;
+mod dispatch_environment;
+mod dispatch_gate;
 mod dispatch_legacy;
 mod dispatch_project;
 mod dispatch_staff;
 mod dispatch_task;
 mod gateway;
 mod handler;
+mod task_input;
 mod tools;
+
+use task_input::{
+    normalize_company_task_input, validate_company_task_input, CompanyTaskOperation,
+    CompanyTaskToolInput,
+};
 
 pub use handler::{agent_key_from_headers, agent_run_token_from_headers, AiChatMcpHandler};
 pub use tools::standard_mcp_tools;
@@ -357,11 +366,24 @@ enum CompanyChatOperation {
     Unread {
         company_id: Uuid,
         conversation_id: Option<Uuid>,
+        #[schemars(
+            description = "Exclusive unread message cursor returned by the previous page. Requires conversation_id."
+        )]
+        after_message_id: Option<Uuid>,
         message_limit: Option<usize>,
     },
     MarkRead {
         company_id: Uuid,
         conversation_id: Uuid,
+        #[serde(default)]
+        #[schemars(
+            description = "When true, quickly mark the conversation read only if no unread mention remains after reviewed_through_message_id."
+        )]
+        only_if_no_mentions: bool,
+        #[schemars(
+            description = "Last reviewed unread message. Earlier mentions do not block quick mark-read; later mentions do."
+        )]
+        reviewed_through_message_id: Option<Uuid>,
     },
 }
 
@@ -446,85 +468,126 @@ struct CompanyProjectAssetToolInput {
     asset_type: String,
     locator: String,
     description: Option<String>,
-    status: Option<String>,
-    metadata: Option<Value>,
+    #[schemars(
+        description = "Asset lifecycle status. Omit it to use active; allowed values are active, missing, deprecated, and unknown."
+    )]
+    status: Option<CompanyProjectAssetStatusInput>,
+    #[schemars(
+        description = "Optional structured JSON object for asset-specific metadata. Omit it or send {} when there is no metadata."
+    )]
+    #[serde(default, deserialize_with = "deserialize_optional_json_object")]
+    metadata: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct CompanyTaskToolInput {
+#[serde(rename_all = "snake_case")]
+enum CompanyProjectAssetStatusInput {
+    Active,
+    #[serde(alias = "planned")]
+    Missing,
+    Deprecated,
+    Unknown,
+}
+
+fn deserialize_optional_json_object<'de, D>(
+    deserializer: D,
+) -> Result<Option<BTreeMap<String, Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    value.map(parse_json_object::<D::Error>).transpose()
+}
+
+fn deserialize_json_object<'de, D>(deserializer: D) -> Result<BTreeMap<String, Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    parse_json_object(Value::deserialize(deserializer)?)
+}
+
+fn parse_json_object<E>(value: Value) -> Result<BTreeMap<String, Value>, E>
+where
+    E: serde::de::Error,
+{
+    match value {
+        Value::Object(object) => Ok(object.into_iter().collect()),
+        Value::String(encoded) => {
+            let decoded = serde_json::from_str::<Value>(&encoded).map_err(|error| {
+                E::custom(format!(
+                    "expected a JSON object; legacy encoded value is invalid JSON: {error}"
+                ))
+            })?;
+            match decoded {
+                Value::Object(object) => Ok(object.into_iter().collect()),
+                _ => Err(E::custom(
+                    "expected a JSON object; legacy encoded JSON must decode to an object",
+                )),
+            }
+        }
+        _ => Err(E::custom("expected a JSON object")),
+    }
+}
+
+impl CompanyProjectAssetStatusInput {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Missing => "missing",
+            Self::Deprecated => "deprecated",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn into_string(self) -> String {
+        self.as_str().to_owned()
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CompanyGateToolInput {
     #[serde(flatten)]
-    operation: CompanyTaskOperation,
-    #[schemars(description = "Optional retry key for mutating task actions.")]
+    operation: CompanyGateOperation,
+    #[schemars(description = "Optional retry key for mutating Gate actions.")]
     idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
-enum CompanyTaskOperation {
-    Get {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-    },
+enum CompanyGateOperation {
     List {
         company_id: Uuid,
         project_id: Uuid,
-        assignee_agent_id: Option<Uuid>,
-        status: Option<String>,
-    },
-    My {
-        company_id: Uuid,
-        status: Option<String>,
     },
     Create {
         company_id: Uuid,
         project_id: Uuid,
+        gate_key: String,
+        gate_type: String,
         title: String,
-        description: Option<String>,
-        priority: Option<String>,
-        assignee_agent_id: Option<Uuid>,
-        due_at: Option<DateTime<Utc>>,
-    },
-    Update {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-        title: Option<String>,
-        description: Option<String>,
-        status: Option<String>,
-        priority: Option<String>,
-        assignee_agent_id: Option<Uuid>,
-        due_at: Option<DateTime<Utc>>,
-    },
-    BatchUpdate {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_ids: Vec<Uuid>,
-        status: Option<String>,
-        priority: Option<String>,
-        assignee_agent_id: Option<Uuid>,
+        related_task_id: Option<Uuid>,
         #[serde(default)]
-        clear_assignee: bool,
-        due_at: Option<DateTime<Utc>>,
-        #[serde(default)]
-        clear_due_at: bool,
+        required_evidence: Vec<String>,
     },
-    DependencyAdd {
+    Decide {
+        company_id: Uuid,
+        project_id: Uuid,
+        gate_id: Uuid,
+        status: String,
+        decision_summary: String,
+    },
+    RequirementSet {
         company_id: Uuid,
         project_id: Uuid,
         task_id: Uuid,
-        depends_on_task_id: Uuid,
-        #[schemars(
-            description = "Dependency condition: success (default), completion (including failed/rejected review), or failure."
-        )]
-        dependency_condition: Option<String>,
+        gate_id: Uuid,
+        #[serde(default = "default_gate_required_status")]
+        required_status: String,
     },
-    DependencyRemove {
-        company_id: Uuid,
-        project_id: Uuid,
-        task_id: Uuid,
-        depends_on_task_id: Uuid,
-    },
+}
+
+fn default_gate_required_status() -> String {
+    "passed".into()
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -644,6 +707,10 @@ struct CompanyGroupUnreadListToolInput {
     company_id: Uuid,
     #[schemars(description = "Optionally limit unread results to one company or project group.")]
     conversation_id: Option<Uuid>,
+    #[schemars(
+        description = "Exclusive unread message cursor returned by the previous page. Requires conversation_id."
+    )]
+    after_message_id: Option<Uuid>,
     #[schemars(description = "Maximum unread messages returned per group; defaults to 20.")]
     message_limit: Option<usize>,
 }
@@ -653,6 +720,9 @@ struct CompanyGroupUnreadListToolInput {
 struct CompanyGroupReadToolInput {
     company_id: Uuid,
     conversation_id: Uuid,
+    #[serde(default)]
+    only_if_no_mentions: bool,
+    reviewed_through_message_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -900,5 +970,9 @@ struct CompanyStaffActionGetToolInput {
     action_id: Uuid,
 }
 
+#[cfg(test)]
+mod project_contract_tests;
+#[cfg(test)]
+mod task_contract_tests;
 #[cfg(test)]
 mod tests;
