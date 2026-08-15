@@ -317,11 +317,22 @@ pub(super) async fn execute_trigger(
     let mut worker_continuation_summary = None;
     let mut worker_no_progress = false;
     let mut worker_completed_intent = false;
-    let intents = platform.list_agent_execution_intents(
-        trigger.agent_profile_id,
-        Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
-        1,
-    );
+    let intents = if decision.resume_existing_intents_directly {
+        decision
+            .control_snapshot
+            .active_intents
+            .iter()
+            .find(|intent| intent.status == AGENT_EXECUTION_INTENT_STATUS_PENDING)
+            .cloned()
+            .into_iter()
+            .collect()
+    } else {
+        platform.list_agent_execution_intents(
+            trigger.agent_profile_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+            1,
+        )
+    };
     for mut intent in intents {
         if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
             break;

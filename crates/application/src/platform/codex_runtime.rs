@@ -314,19 +314,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let git = project
             .as_ref()
             .and_then(|project| self.repo.get_company_project_git_config(project.id));
-        let active_project_ids = projects
+        let pending_execution_intent_count = control_snapshot
+            .active_intents
             .iter()
-            .map(|project| project.id)
-            .collect::<HashSet<_>>();
-        let pending_execution_intent_count = self
-            .repo
-            .list_agent_execution_intents(
-                config.agent_profile_id,
-                Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
-                100,
-            )
-            .into_iter()
-            .filter(|intent| active_project_ids.contains(&intent.project_id))
+            .filter(|intent| intent.status == AGENT_EXECUTION_INTENT_STATUS_PENDING)
             .count();
         let covered_task_ids = control_snapshot
             .active_intents

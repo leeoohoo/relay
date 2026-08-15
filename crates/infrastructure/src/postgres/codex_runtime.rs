@@ -936,6 +936,31 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         .unwrap_or_default()
     }
 
+    fn list_active_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentExecutionIntent> {
+        self.with_client(|client| {
+            client.query(
+                r#"
+                SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
+                       source_event_ids, task_ids, action_type, objective, acceptance_criteria,
+                       required_capabilities, priority, dedupe_key, status, result_summary, error_message,
+                       created_at, claimed_at, completed_at
+                FROM agent_execution_intents
+                WHERE agent_profile_id = $1
+                  AND status IN ('pending', 'running')
+                ORDER BY created_at ASC, id ASC
+                LIMIT $2
+                "#,
+                &[&agent_id, &(limit as i64)],
+            )
+        })
+        .map(|rows| rows.into_iter().map(map_agent_execution_intent).collect())
+        .unwrap_or_default()
+    }
+
     fn insert_agent_codex_run_token(&self, token: AgentCodexRunToken) -> AppResult<()> {
         super::codex_runtime_tokens::insert_agent_codex_run_token(self, token)
     }

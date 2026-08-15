@@ -252,6 +252,25 @@ pub trait CodexRuntimePlatformRepository: Send + Sync {
     ) -> Vec<AgentExecutionIntent> {
         Vec::new()
     }
+    fn list_active_agent_execution_intents(
+        &self,
+        agent_id: Uuid,
+        limit: usize,
+    ) -> Vec<AgentExecutionIntent> {
+        let mut intents = self.list_agent_execution_intents(
+            agent_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+            limit,
+        );
+        intents.extend(self.list_agent_execution_intents(
+            agent_id,
+            Some(AGENT_EXECUTION_INTENT_STATUS_RUNNING),
+            limit,
+        ));
+        intents.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        intents.truncate(limit);
+        intents
+    }
     fn insert_agent_codex_run_token(&self, _token: AgentCodexRunToken) -> AppResult<()> {
         Err(AppError::Validation(
             "Codex run tokens are not supported by this repository".into(),

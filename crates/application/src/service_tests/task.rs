@@ -315,6 +315,7 @@ fn human_managers_create_assign_and_update_project_tasks() {
     assert!(recovery_decision.should_run);
     assert_eq!(recovery_decision.active_task_count, 1);
     assert_eq!(recovery_decision.pending_execution_intent_count, 1);
+    assert!(recovery_decision.resume_existing_intents_directly);
 
     let updated = app
         .update_company_project_task_for_human(UpdateCompanyProjectTaskForHumanInput {

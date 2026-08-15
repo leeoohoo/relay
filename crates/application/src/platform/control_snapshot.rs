@@ -114,16 +114,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                 .then_with(|| left.id.cmp(&right.id))
         });
 
-        let mut active_intents = self.repo.list_agent_execution_intents(
-            agent_profile_id,
-            Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
-            100,
-        );
-        active_intents.extend(self.repo.list_agent_execution_intents(
-            agent_profile_id,
-            Some(AGENT_EXECUTION_INTENT_STATUS_RUNNING),
-            100,
-        ));
+        let mut active_intents = self
+            .repo
+            .list_active_agent_execution_intents(agent_profile_id, 200);
         active_intents.retain(|intent| active_project_ids.contains(&intent.project_id));
         active_intents.sort_by(|left, right| left.created_at.cmp(&right.created_at));
 
