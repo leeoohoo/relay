@@ -144,6 +144,7 @@ start_trigger() {
   local prepared_browser_mcp_command
   local -a trigger_command
   stop_trigger
+  relay_rotate_log_file "$TRIGGER_LOG"
   trigger_bin="$(resolve_trigger_binary)"
   postgres_port="$(container_host_port ai-chat-postgres 5432/tcp)"
   server_port="$(container_host_port ai-chat-server 8080/tcp)"

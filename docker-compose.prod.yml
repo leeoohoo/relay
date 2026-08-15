@@ -1,3 +1,9 @@
+x-relay-logging: &relay-logging
+  driver: local
+  options:
+    max-size: "${RELAY_DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${RELAY_DOCKER_LOG_MAX_FILES:-3}"
+
 services:
   postgres:
     image: postgres:16
@@ -15,6 +21,7 @@ services:
       retries: 20
     security_opt:
       - no-new-privileges:true
+    logging: *relay-logging
 
   migrate:
     build:
@@ -30,6 +37,7 @@ services:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    logging: *relay-logging
 
   harness:
     image: ${HARNESS_IMAGE:-harness/harness:latest}
@@ -75,6 +83,7 @@ services:
       retries: 60
     security_opt:
       - no-new-privileges:true
+    logging: *relay-logging
 
   server:
     build:
@@ -145,6 +154,7 @@ services:
       retries: 12
     security_opt:
       - no-new-privileges:true
+    logging: *relay-logging
 
   web:
     build:

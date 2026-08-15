@@ -45,6 +45,8 @@ fi
 
 # shellcheck source=scripts/lib/chrome_devtools_mcp.sh
 source "$ROOT_DIR/scripts/lib/chrome_devtools_mcp.sh"
+# shellcheck source=scripts/lib/relay_directories.sh
+source "$ROOT_DIR/scripts/lib/relay_directories.sh"
 
 compose() {
   docker compose -f "$ROOT_DIR/docker-compose.yml" --profile harness-self-hosted "$@"
@@ -734,6 +736,7 @@ case "$MODE" in
     set_step "stopping docker app services"
     stop_docker_app_services
     stop_local_dev_processes
+    relay_rotate_log_files "$API_LOG" "$WEB_LOG" "$WATCH_LOG" "$TRIGGER_LOG"
     set_step "preparing local environment"
     prepare_env
     start_dependencies
@@ -748,6 +751,7 @@ case "$MODE" in
     set_step "stopping docker app services"
     stop_docker_app_services
     stop_local_dev_processes
+    relay_rotate_log_files "$API_LOG" "$WEB_LOG" "$WATCH_LOG" "$TRIGGER_LOG"
     set_step "preparing local environment"
     prepare_env
     start_api

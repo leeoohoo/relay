@@ -1,3 +1,9 @@
+x-relay-logging: &relay-logging
+  driver: local
+  options:
+    max-size: "${RELAY_DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${RELAY_DOCKER_LOG_MAX_FILES:-3}"
+
 services:
   postgres:
     image: postgres:16
@@ -15,6 +21,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    logging: *relay-logging
 
   migrate:
     build:
@@ -28,6 +35,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *relay-logging
 
   redis:
     image: redis:7
@@ -93,6 +101,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 60
+    logging: *relay-logging
 
   server:
     build:
@@ -161,6 +170,7 @@ services:
       retries: 20
     ports:
       - "${WEB_HOST_PORT:-45274}:8080"
+    logging: *relay-logging
 
 volumes:
   postgres_data:
