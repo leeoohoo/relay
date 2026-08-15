@@ -4,12 +4,117 @@ const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
 const DEFAULT_MIN_AVAILABLE_MEMORY_BYTES: u64 = 1536 * MIB;
 const ESTIMATED_NEW_TRIGGER_MEMORY_BYTES: u64 = 512 * MIB;
+const LOAD_THROTTLE_RATIO: f64 = 0.70;
+const LOAD_PAUSE_RATIO: f64 = 0.90;
+
+#[derive(Debug)]
+pub(super) struct ResourcePressureState {
+    available_memory_bytes: Option<u64>,
+    one_minute_load_average: Option<f64>,
+    memory_claims_paused: bool,
+    load_claim_slots: usize,
+}
+
+impl Default for ResourcePressureState {
+    fn default() -> Self {
+        Self {
+            available_memory_bytes: None,
+            one_minute_load_average: None,
+            memory_claims_paused: false,
+            load_claim_slots: 2,
+        }
+    }
+}
+
+impl ResourcePressureState {
+    pub(super) fn refresh(
+        &mut self,
+        minimum_available_memory_bytes: u64,
+        logical_cpus: usize,
+    ) -> bool {
+        let was_aggressive = self.aggressive_browser_reclaim(minimum_available_memory_bytes);
+        self.available_memory_bytes = available_memory_bytes();
+        self.one_minute_load_average = one_minute_load_average();
+
+        let memory_paused = memory_bounded_claim_slots(
+            1,
+            self.available_memory_bytes,
+            minimum_available_memory_bytes,
+        ) == 0;
+        if memory_paused != self.memory_claims_paused {
+            if memory_paused {
+                tracing::warn!(
+                    available_memory_mb = self.available_memory_bytes.map(|bytes| bytes / MIB),
+                    minimum_available_memory_mb = minimum_available_memory_bytes / MIB,
+                    "memory pressure paused new Agent Trigger claims"
+                );
+            } else {
+                tracing::info!(
+                    available_memory_mb = self.available_memory_bytes.map(|bytes| bytes / MIB),
+                    "memory pressure recovered; Agent Trigger claims resumed"
+                );
+            }
+        }
+        self.memory_claims_paused = memory_paused;
+
+        let load_claim_slots =
+            load_bounded_claim_slots(2, self.one_minute_load_average, logical_cpus);
+        if load_claim_slots != self.load_claim_slots {
+            match load_claim_slots {
+                0 => tracing::warn!(
+                    one_minute_load = self.one_minute_load_average,
+                    logical_cpus,
+                    "CPU load paused new Agent Trigger claims"
+                ),
+                1 => tracing::info!(
+                    one_minute_load = self.one_minute_load_average,
+                    logical_cpus,
+                    "CPU load limited new Agent Trigger claims to one at a time"
+                ),
+                _ if self.load_claim_slots < 2 => tracing::info!(
+                    one_minute_load = self.one_minute_load_average,
+                    logical_cpus,
+                    "CPU load recovered; normal Agent Trigger concurrency resumed"
+                ),
+                _ => {}
+            }
+        }
+        self.load_claim_slots = load_claim_slots;
+
+        !was_aggressive && self.aggressive_browser_reclaim(minimum_available_memory_bytes)
+    }
+
+    pub(super) fn claim_slots(
+        &self,
+        concurrency_slots: usize,
+        minimum_available_memory_bytes: u64,
+        logical_cpus: usize,
+    ) -> usize {
+        let memory_slots = memory_bounded_claim_slots(
+            concurrency_slots,
+            self.available_memory_bytes,
+            minimum_available_memory_bytes,
+        );
+        load_bounded_claim_slots(memory_slots, self.one_minute_load_average, logical_cpus)
+    }
+
+    pub(super) fn aggressive_browser_reclaim(&self, minimum_available_memory_bytes: u64) -> bool {
+        should_aggressively_reclaim_browser(
+            self.available_memory_bytes,
+            minimum_available_memory_bytes,
+        )
+    }
+}
 
 pub(super) fn default_resource_concurrency_limit() -> usize {
-    let logical_cpus = std::thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(2);
+    let logical_cpus = logical_cpu_count();
     resource_concurrency_limit_for(logical_cpus, total_memory_bytes())
+}
+
+pub(super) fn logical_cpu_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(2)
 }
 
 pub(super) fn resource_concurrency_limit_for(
@@ -56,6 +161,36 @@ pub(super) fn available_memory_bytes() -> Option<u64> {
     platform_available_memory_bytes()
 }
 
+pub(super) fn should_aggressively_reclaim_browser(
+    available_memory_bytes: Option<u64>,
+    minimum_available_memory_bytes: u64,
+) -> bool {
+    available_memory_bytes
+        .is_some_and(|available| available < minimum_available_memory_bytes.saturating_mul(2))
+}
+
+pub(super) fn load_bounded_claim_slots(
+    concurrency_slots: usize,
+    one_minute_load_average: Option<f64>,
+    logical_cpus: usize,
+) -> usize {
+    let Some(load_average) = one_minute_load_average else {
+        return concurrency_slots;
+    };
+    let load_ratio = load_average / logical_cpus.max(1) as f64;
+    if load_ratio >= LOAD_PAUSE_RATIO {
+        0
+    } else if load_ratio >= LOAD_THROTTLE_RATIO {
+        concurrency_slots.min(1)
+    } else {
+        concurrency_slots
+    }
+}
+
+pub(super) fn one_minute_load_average() -> Option<f64> {
+    platform_one_minute_load_average()
+}
+
 #[cfg(target_os = "linux")]
 fn total_memory_bytes() -> Option<u64> {
     parse_meminfo_bytes(&std::fs::read_to_string("/proc/meminfo").ok()?, "MemTotal")
@@ -67,6 +202,16 @@ fn platform_available_memory_bytes() -> Option<u64> {
         &std::fs::read_to_string("/proc/meminfo").ok()?,
         "MemAvailable",
     )
+}
+
+#[cfg(target_os = "linux")]
+fn platform_one_minute_load_average() -> Option<f64> {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -91,6 +236,17 @@ fn total_memory_bytes() -> Option<u64> {
 #[cfg(target_os = "macos")]
 fn platform_available_memory_bytes() -> Option<u64> {
     parse_vm_stat_available_bytes(&command_output("vm_stat", &[])?)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_one_minute_load_average() -> Option<f64> {
+    command_output("sysctl", &["-n", "vm.loadavg"])?
+        .trim()
+        .trim_start_matches('{')
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -124,6 +280,11 @@ fn platform_available_memory_bytes() -> Option<u64> {
 }
 
 #[cfg(target_os = "windows")]
+fn platform_one_minute_load_average() -> Option<f64> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn windows_memory_kib(field: &str) -> Option<u64> {
     let query = format!("(Get-CimInstance Win32_OperatingSystem).{field}");
     command_output("powershell.exe", &["-NoProfile", "-Command", &query])?
@@ -138,6 +299,11 @@ fn total_memory_bytes() -> Option<u64> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn platform_available_memory_bytes() -> Option<u64> {
+    None
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn platform_one_minute_load_average() -> Option<f64> {
     None
 }
 
@@ -180,6 +346,28 @@ mod tests {
             memory_bounded_claim_slots(4, Some(reserve + 4 * GIB), reserve),
             4
         );
+    }
+
+    #[test]
+    fn browser_reclaim_starts_before_new_claims_are_fully_paused() {
+        let reserve = DEFAULT_MIN_AVAILABLE_MEMORY_BYTES;
+        assert!(!should_aggressively_reclaim_browser(None, reserve));
+        assert!(!should_aggressively_reclaim_browser(
+            Some(reserve * 2),
+            reserve
+        ));
+        assert!(should_aggressively_reclaim_browser(
+            Some(reserve * 2 - 1),
+            reserve
+        ));
+    }
+
+    #[test]
+    fn load_pressure_throttles_then_pauses_only_new_claims() {
+        assert_eq!(load_bounded_claim_slots(4, None, 8), 4);
+        assert_eq!(load_bounded_claim_slots(4, Some(5.5), 8), 4);
+        assert_eq!(load_bounded_claim_slots(4, Some(5.6), 8), 1);
+        assert_eq!(load_bounded_claim_slots(4, Some(7.2), 8), 0);
     }
 
     #[cfg(target_os = "linux")]

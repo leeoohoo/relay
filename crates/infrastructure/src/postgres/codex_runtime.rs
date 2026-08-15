@@ -1,6 +1,8 @@
 use super::mapping::*;
 use super::*;
-use ai_chat_domain::company::is_agent_codex_wake_reason;
+use ai_chat_domain::company::{
+    agent_codex_wake_coalesce_delay_seconds, is_agent_codex_wake_reason,
+};
 
 impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
     fn save_agent_codex_trigger_config(&self, config: AgentCodexTriggerConfig) -> AppResult<()> {
@@ -304,18 +306,20 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 "unsupported Codex trigger wake reason: {reason}"
             )));
         }
+        let run_not_before = requested_at
+            + chrono::Duration::seconds(agent_codex_wake_coalesce_delay_seconds(reason));
         self.with_client(|client| {
             client.execute(
                 r#"
                 UPDATE agent_codex_trigger_configs
-                SET next_run_at = LEAST(next_run_at, $2),
+                SET next_run_at = LEAST(next_run_at, $4),
                     wake_requested_at = GREATEST(wake_requested_at, $2),
                     wake_reason = $3,
                     updated_at = $2
                 WHERE agent_profile_id = $1
                   AND status = 'active'
                 "#,
-                &[&agent_id, &requested_at, &reason],
+                &[&agent_id, &requested_at, &reason, &run_not_before],
             )
         })
         .map(|updated| updated > 0)

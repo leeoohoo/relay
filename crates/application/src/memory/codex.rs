@@ -1,5 +1,7 @@
 use super::*;
-use ai_chat_domain::company::is_agent_codex_wake_reason;
+use ai_chat_domain::company::{
+    agent_codex_wake_coalesce_delay_seconds, is_agent_codex_wake_reason,
+};
 
 impl CodexControlPlatformRepository for MemoryPlatformRepository {
     fn save_company_codex_runner_profile(
@@ -434,7 +436,9 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
         if config.status != AGENT_CODEX_TRIGGER_STATUS_ACTIVE {
             return Ok(false);
         }
-        config.next_run_at = config.next_run_at.min(requested_at);
+        let run_not_before = requested_at
+            + chrono::Duration::seconds(agent_codex_wake_coalesce_delay_seconds(reason));
+        config.next_run_at = config.next_run_at.min(run_not_before);
         config.wake_requested_at = Some(
             config
                 .wake_requested_at

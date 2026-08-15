@@ -240,7 +240,11 @@ impl BrowserMcpConfig {
             host_page_idle_timeout: Duration::from_secs(15 * 60),
             pool: Arc::new(Mutex::new(None)),
         };
-        config.uses_host().then_some(config)
+        config
+            .host_browser_executable
+            .as_deref()
+            .is_some_and(test_safe_headless_browser)
+            .then_some(config)
     }
 
     fn uses_host(&self) -> bool {
@@ -281,7 +285,7 @@ impl BrowserMcpConfig {
     }
 
     fn host_server(&self, agent_id: Uuid) -> AppResult<ManagedCodexMcpServer> {
-        let endpoint = self.ensure_host_browser()?;
+        let endpoint = self.ensure_host_browser(agent_id)?;
         let page_id = self.ensure_agent_browser_page(&endpoint, agent_id)?;
         let host_command = self
             .host_mcp_command
@@ -304,7 +308,7 @@ impl BrowserMcpConfig {
         Ok(server)
     }
 
-    fn ensure_host_browser(&self) -> AppResult<String> {
+    fn ensure_host_browser(&self, first_agent_id: Uuid) -> AppResult<String> {
         let profile = self.profile();
         create_browser_profile(&profile)?;
         let profile = profile.canonicalize().map_err(|error| {
@@ -366,7 +370,9 @@ impl BrowserMcpConfig {
             .arg("--force-prefers-reduced-motion")
             .arg("--remote-allow-origins=*")
             .arg("--window-size=1440,900")
-            .arg("about:blank")
+            // Mark the browser's initial page for the first Agent instead of
+            // creating a second blank renderer immediately after startup.
+            .arg(agent_browser_page_url(first_agent_id))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -469,13 +475,24 @@ impl BrowserMcpConfig {
     fn prune_idle_host_browsers(
         &self,
         active_agent_ids: &HashSet<Uuid>,
+        aggressive: bool,
     ) -> AppResult<(usize, usize)> {
         let mut pool = self.pool.lock().map_err(|_| {
             AppError::Internal("managed browser process pool lock was poisoned".into())
         })?;
         let now = std::time::Instant::now();
+        let browser_idle_timeout = if aggressive {
+            Duration::ZERO
+        } else {
+            self.host_browser_idle_timeout
+        };
+        let page_idle_timeout = if aggressive {
+            Duration::ZERO
+        } else {
+            self.host_page_idle_timeout
+        };
         let expired = pool.as_ref().is_some_and(|process| {
-            now.saturating_duration_since(process.last_used_at) >= self.host_browser_idle_timeout
+            now.saturating_duration_since(process.last_used_at) >= browser_idle_timeout
                 && !process
                     .agent_pages
                     .keys()
@@ -489,8 +506,7 @@ impl BrowserMcpConfig {
             return Ok((0, 0));
         };
         let endpoint = process.endpoint.clone();
-        let expired_pages =
-            expired_agent_pages(process, active_agent_ids, now, self.host_page_idle_timeout);
+        let expired_pages = expired_agent_pages(process, active_agent_ids, now, page_idle_timeout);
         drop(pool);
         let mut closed_pages = 0;
         for (agent_id, page_id) in expired_pages {
@@ -586,6 +602,13 @@ impl BrowserMcpConfig {
     }
 }
 
+#[cfg(test)]
+fn test_safe_headless_browser(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains("headless"))
+}
+
 impl CodexTriggerRunner {
     pub fn managed_browser_mcp_server(
         &self,
@@ -601,8 +624,10 @@ impl CodexTriggerRunner {
     pub fn prune_idle_managed_browsers(
         &self,
         active_agent_ids: &HashSet<Uuid>,
+        aggressive: bool,
     ) -> AppResult<(usize, usize)> {
-        self.browser_mcp.prune_idle_host_browsers(active_agent_ids)
+        self.browser_mcp
+            .prune_idle_host_browsers(active_agent_ids, aggressive)
     }
 
     pub(super) async fn managed_browser_mcp_view(&self) -> Option<CodexMcpServerView> {

@@ -90,6 +90,7 @@ struct TriggerServiceConfig {
     run_heartbeat_stale_after_seconds: i64,
     batch_size: usize,
     resource_concurrency_limit: usize,
+    logical_cpus: usize,
     minimum_available_memory_bytes: u64,
     run_once: bool,
     model_catalog_path: PathBuf,
@@ -570,8 +571,7 @@ async fn run_trigger_loop(
     let mut next_watchdog = tokio::time::Instant::now();
     let mut next_browser_cleanup = tokio::time::Instant::now();
     let mut next_memory_probe = tokio::time::Instant::now();
-    let mut available_memory = None;
-    let mut memory_pressure_active = false;
+    let mut resource_pressure = ResourcePressureState::default();
     publish_codex_runtime_probe(codex_control, codex_runner)?;
     if codex_runner.detect_version().is_none() && config.codex_auto_install {
         let runtime = codex_control.runtime()?;
@@ -585,8 +585,17 @@ async fn run_trigger_loop(
         }
     }
     loop {
+        if tokio::time::Instant::now() >= next_memory_probe {
+            if resource_pressure.refresh(config.minimum_available_memory_bytes, config.logical_cpus)
+            {
+                next_browser_cleanup = tokio::time::Instant::now();
+            }
+            next_memory_probe = tokio::time::Instant::now() + StdDuration::from_secs(10);
+        }
         if tokio::time::Instant::now() >= next_browser_cleanup {
-            match codex_runner.prune_idle_managed_browsers(&running_agents) {
+            let aggressive =
+                resource_pressure.aggressive_browser_reclaim(config.minimum_available_memory_bytes);
+            match codex_runner.prune_idle_managed_browsers(&running_agents, aggressive) {
                 Ok((stopped_browsers, closed_pages))
                     if stopped_browsers > 0 || closed_pages > 0 =>
                 {
@@ -603,31 +612,6 @@ async fn run_trigger_loop(
                 ),
             }
             next_browser_cleanup = tokio::time::Instant::now() + StdDuration::from_secs(60);
-        }
-        if tokio::time::Instant::now() >= next_memory_probe {
-            available_memory = available_memory_bytes();
-            let pressure_now = memory_bounded_claim_slots(
-                1,
-                available_memory,
-                config.minimum_available_memory_bytes,
-            ) == 0;
-            if pressure_now != memory_pressure_active {
-                if pressure_now {
-                    tracing::warn!(
-                        available_memory_mb = available_memory.map(|bytes| bytes / 1024 / 1024),
-                        minimum_available_memory_mb =
-                            config.minimum_available_memory_bytes / 1024 / 1024,
-                        "memory pressure paused new Agent Trigger claims"
-                    );
-                } else if memory_pressure_active {
-                    tracing::info!(
-                        available_memory_mb = available_memory.map(|bytes| bytes / 1024 / 1024),
-                        "memory pressure recovered; Agent Trigger claims resumed"
-                    );
-                }
-                memory_pressure_active = pressure_now;
-            }
-            next_memory_probe = tokio::time::Instant::now() + StdDuration::from_secs(10);
         }
         if tokio::time::Instant::now() >= next_watchdog {
             match platform
@@ -725,10 +709,10 @@ async fn run_trigger_loop(
         };
         let effective_batch_size = requested_batch_size.min(config.resource_concurrency_limit);
         let concurrency_slots = effective_batch_size.saturating_sub(running.len());
-        let available_slots = memory_bounded_claim_slots(
+        let available_slots = resource_pressure.claim_slots(
             concurrency_slots,
-            available_memory,
             config.minimum_available_memory_bytes,
+            config.logical_cpus,
         );
         if available_slots > 0 {
             let claimed = platform
@@ -860,6 +844,7 @@ impl TriggerServiceConfig {
                 .map(|value| value.clamp(60, 900))
                 .unwrap_or(180);
         let batch_size = agent_trigger_batch_size_from_env();
+        let logical_cpus = logical_cpu_count();
         let resource_concurrency_limit = std::env::var("AGENT_TRIGGER_RESOURCE_CONCURRENCY_LIMIT")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -944,6 +929,7 @@ impl TriggerServiceConfig {
             run_heartbeat_stale_after_seconds,
             batch_size,
             resource_concurrency_limit,
+            logical_cpus,
             minimum_available_memory_bytes,
             run_once,
             model_catalog_path,

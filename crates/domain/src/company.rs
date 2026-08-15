@@ -242,6 +242,13 @@ pub fn is_agent_codex_wake_reason(value: &str) -> bool {
     )
 }
 
+pub fn agent_codex_wake_coalesce_delay_seconds(value: &str) -> i64 {
+    match value {
+        AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED => 2,
+        _ => 0,
+    }
+}
+
 pub const AGENT_MEMORY_SCOPE_AGENT: &str = "agent";
 pub const AGENT_MEMORY_SCOPE_CONTROL: &str = "control";
 pub const AGENT_MEMORY_SCOPE_PROJECT: &str = "project";

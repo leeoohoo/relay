@@ -1,5 +1,7 @@
 use super::*;
-use ai_chat_domain::company::AGENT_CODEX_SESSION_KIND_CONTROL;
+use ai_chat_domain::company::{
+    AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED,
+};
 
 fn seed_logged_in_company(
     repo: &MemoryPlatformRepository,
@@ -108,6 +110,41 @@ fn active_trigger_config(
         created_at: now,
         updated_at: now,
     }
+}
+
+#[test]
+fn rapid_task_status_wakes_share_the_first_short_coalescing_window() {
+    let repo = MemoryPlatformRepository::default();
+    let now = now_utc();
+    let agent_id = Uuid::new_v4();
+    let mut config = active_trigger_config(Uuid::new_v4(), agent_id, Uuid::new_v4(), now);
+    config.lease_owner = None;
+    config.lease_expires_at = None;
+    repo.inner
+        .write()
+        .expect("memory repo lock poisoned")
+        .agent_codex_trigger_configs
+        .insert(agent_id, config);
+
+    repo.request_agent_codex_trigger_wake(
+        agent_id,
+        now,
+        AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED,
+    )
+    .expect("first wake");
+    let second_wake = now + chrono::Duration::milliseconds(500);
+    repo.request_agent_codex_trigger_wake(
+        agent_id,
+        second_wake,
+        AGENT_CODEX_WAKE_REASON_TASK_STATUS_CHANGED,
+    )
+    .expect("second wake");
+
+    let config = repo
+        .get_agent_codex_trigger_config_by_agent(agent_id)
+        .expect("trigger config");
+    assert_eq!(config.next_run_at, now + chrono::Duration::seconds(2));
+    assert_eq!(config.wake_requested_at, Some(second_wake));
 }
 
 #[test]
