@@ -122,6 +122,7 @@ fn host_browser<const N: usize>(
     HostBrowserProcess {
         endpoint: "http://127.0.0.1:19001".into(),
         child: None,
+        proxy: None,
         last_used_at,
         agent_pages: pages
             .into_iter()

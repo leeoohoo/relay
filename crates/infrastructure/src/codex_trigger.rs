@@ -171,6 +171,8 @@ pub struct ManagedCodexMcpServer {
     pub command: String,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+    pub url: Option<String>,
+    pub env_http_headers: BTreeMap<String, String>,
     pub disabled_plugin_ids: Vec<String>,
     pub required: bool,
     pub startup_timeout_sec: Option<u64>,

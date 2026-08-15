@@ -1,14 +1,22 @@
 use super::*;
 use std::{
     collections::HashSet,
-    net::TcpListener,
     process::{Child, Command as StdCommand},
     thread,
 };
 
 mod debug_client;
+mod proxy;
+mod support;
 
 use debug_client::*;
+use proxy::*;
+pub(super) use support::host_mcp_args;
+use support::{
+    browser_container_user, configured_or_discovered_browser, configured_or_discovered_executable,
+    create_browser_artifacts, create_browser_profile, managed_server, parse_enabled,
+    read_reusable_endpoint, remove_stale_chromium_runtime_files, reserve_loopback_port,
+};
 
 pub(super) const MANAGED_BROWSER_MCP_NAME: &str = "chrome-devtools";
 const DEFAULT_BROWSER_MCP_IMAGE: &str = "relay/chrome-devtools-mcp:1.6.0";
@@ -17,7 +25,6 @@ const BROWSER_PROFILE_CONTAINER_PATH: &str = "/relay-browser-profile";
 const HOST_BROWSER_ENDPOINT_FILE: &str = ".relay-devtools-endpoint";
 const HOST_BROWSER_START_TIMEOUT: Duration = Duration::from_secs(12);
 const MAX_BROWSER_DEBUG_RESPONSE_BYTES: u64 = 1024 * 1024;
-pub(super) const RELAY_BROWSER_PAGE_ID_ENV: &str = "RELAY_BROWSER_PAGE_ID";
 pub(super) const BROWSER_ARTIFACTS_RELATIVE_PATH: &str = ".relay/browser-artifacts";
 pub(super) const CHROMIUM_RUNTIME_FILES: [&str; 4] = [
     "SingletonLock",
@@ -50,6 +57,7 @@ impl BrowserMcpMode {
 struct HostBrowserProcess {
     endpoint: String,
     child: Option<Child>,
+    proxy: Option<BrowserProxyRuntime>,
     last_used_at: std::time::Instant,
     agent_pages: HashMap<Uuid, AgentBrowserPage>,
 }
@@ -60,8 +68,16 @@ struct AgentBrowserPage {
     last_used_at: std::time::Instant,
 }
 
+fn disposable_browser_page_url(url: &str) -> bool {
+    matches!(
+        url,
+        "about:blank" | "chrome://new-tab-page/" | "chrome://newtab/"
+    )
+}
+
 impl Drop for HostBrowserProcess {
     fn drop(&mut self) {
+        self.proxy.take();
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
             let _ = child.wait();
@@ -78,11 +94,11 @@ fn expired_agent_pages(
     process
         .agent_pages
         .iter()
-        .filter_map(|(agent_id, page)| {
-            (!active_agent_ids.contains(agent_id)
-                && now.saturating_duration_since(page.last_used_at) >= idle_timeout)
-                .then(|| (*agent_id, page.page_id.clone()))
+        .filter(|(agent_id, page)| {
+            !active_agent_ids.contains(agent_id)
+                && now.saturating_duration_since(page.last_used_at) >= idle_timeout
         })
+        .map(|(agent_id, page)| (*agent_id, page.page_id.clone()))
         .collect()
 }
 
@@ -247,6 +263,26 @@ impl BrowserMcpConfig {
             .then_some(config)
     }
 
+    #[cfg(test)]
+    pub(super) fn host_page_urls_for_test(&self) -> AppResult<Vec<String>> {
+        let endpoint = self
+            .pool
+            .lock()
+            .map_err(|_| {
+                AppError::Internal("managed browser process pool lock was poisoned".into())
+            })?
+            .as_ref()
+            .map(|process| process.endpoint.clone())
+            .ok_or_else(|| AppError::Internal("managed browser process is not running".into()))?;
+        Ok(browser_debug_json(&endpoint, "GET", "/json/list")?
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|page| page.get("type").and_then(Value::as_str) == Some("page"))
+            .filter_map(|page| page.get("url").and_then(Value::as_str).map(str::to_string))
+            .collect())
+    }
+
     fn uses_host(&self) -> bool {
         self.mode != BrowserMcpMode::Docker
             && self.host_mcp_command.is_some()
@@ -263,6 +299,7 @@ impl BrowserMcpConfig {
         agent_id: Uuid,
         project_id: Uuid,
         workspace: &Path,
+        run_token: &str,
     ) -> AppResult<Option<ManagedCodexMcpServer>> {
         if !self.enabled {
             return Ok(None);
@@ -278,34 +315,119 @@ impl BrowserMcpConfig {
         create_browser_artifacts(&workspace)?;
 
         if self.uses_host() {
-            return self.host_server(agent_id).map(Some);
+            return self.host_server(agent_id, &workspace, run_token).map(Some);
         }
         self.docker_server(company_id, agent_id, project_id, &workspace)
             .map(Some)
     }
 
-    fn host_server(&self, agent_id: Uuid) -> AppResult<ManagedCodexMcpServer> {
+    fn host_server(
+        &self,
+        agent_id: Uuid,
+        workspace: &Path,
+        run_token: &str,
+    ) -> AppResult<ManagedCodexMcpServer> {
         let endpoint = self.ensure_host_browser(agent_id)?;
         let page_id = self.ensure_agent_browser_page(&endpoint, agent_id)?;
-        let host_command = self
+        let proxy_url = self.ensure_host_proxy(&endpoint)?;
+        self.close_unmanaged_disposable_pages(&endpoint);
+        let mut server = managed_server(String::new(), Vec::new(), 20);
+        server.url = Some(proxy_url);
+        server.env.clear();
+        server.env_http_headers.insert(
+            BROWSER_PROXY_TOKEN_HEADER.into(),
+            DEFAULT_RUN_TOKEN_ENV.into(),
+        );
+        server.prompt_hint = Some(
+            "此 Trigger 设备上的所有 Agent 共用一个 Chrome 和一个 Chrome DevTools MCP。Relay 已将你的工具调用强制绑定到专属标签页；无需传 pageId，也无法读取或操作其他 Agent 的标签页。"
+                .into(),
+        );
+        let mut pool = self.pool.lock().map_err(|_| {
+            AppError::Internal("managed browser process pool lock was poisoned".into())
+        })?;
+        let process = pool.as_mut().ok_or_else(|| {
+            AppError::Internal("managed browser process disappeared during proxy setup".into())
+        })?;
+        let proxy = process.proxy.as_ref().ok_or_else(|| {
+            AppError::Internal("managed browser MCP proxy disappeared during setup".into())
+        })?;
+        proxy.register(
+            run_token,
+            BrowserProxyGrant::new(agent_id, endpoint, page_id, workspace.to_path_buf()),
+        )?;
+        Ok(server)
+    }
+
+    fn ensure_host_proxy(&self, endpoint: &str) -> AppResult<String> {
+        let mut pool = self.pool.lock().map_err(|_| {
+            AppError::Internal("managed browser process pool lock was poisoned".into())
+        })?;
+        let process = pool.as_mut().ok_or_else(|| {
+            AppError::Internal("managed browser process disappeared during proxy startup".into())
+        })?;
+        if process
+            .proxy
+            .as_ref()
+            .is_some_and(BrowserProxyRuntime::is_running)
+        {
+            return Ok(process
+                .proxy
+                .as_ref()
+                .expect("running proxy exists")
+                .url()
+                .to_string());
+        }
+        process.proxy.take();
+        let command = self
             .host_mcp_command
             .as_ref()
-            .expect("host mode checks the MCP command");
-        let command = host_command.to_string_lossy().into_owned();
-        let mut server = managed_server(command, host_mcp_args(host_command, &endpoint), 45);
-        server
-            .env
-            .insert(RELAY_BROWSER_PAGE_ID_ENV.into(), page_id.clone());
-        server
-            .env
-            .insert("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS".into(), "1".into());
-        server
-            .env
-            .insert("CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS".into(), "1".into());
-        server.prompt_hint = Some(format!(
-            "此 Trigger 设备上的所有 Agent 共用一个 Chrome。你的专属标签页 pageId 是 `{page_id}`。所有支持 pageId 的 chrome-devtools 页面工具都必须显式传入该 pageId；不要读取或操作其他 pageId。"
-        ));
-        Ok(server)
+            .expect("host mode checks the MCP command")
+            .clone();
+        let proxy = BrowserProxyRuntime::start(command.clone(), host_mcp_args(&command, endpoint))?;
+        let url = proxy.url().to_string();
+        process.proxy = Some(proxy);
+        Ok(url)
+    }
+
+    fn close_unmanaged_disposable_pages(&self, endpoint: &str) {
+        let managed_page_ids = match self.pool.lock() {
+            Ok(pool) => pool
+                .as_ref()
+                .map(|process| {
+                    process
+                        .agent_pages
+                        .values()
+                        .map(|page| page.page_id.clone())
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default(),
+            Err(_) => return,
+        };
+        let Ok(pages) = browser_debug_json(endpoint, "GET", "/json/list") else {
+            return;
+        };
+        for page_id in pages
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|page| {
+                page.get("type").and_then(Value::as_str) == Some("page")
+                    && page
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .is_some_and(disposable_browser_page_url)
+            })
+            .filter_map(|page| page.get("id").and_then(Value::as_str))
+            .filter(|page_id| !managed_page_ids.contains(*page_id))
+        {
+            if let Err(error) = close_browser_page(endpoint, page_id) {
+                tracing::debug!(
+                    page_id,
+                    error = %error,
+                    "could not close an unused browser startup page"
+                );
+            }
+        }
     }
 
     fn ensure_host_browser(&self, first_agent_id: Uuid) -> AppResult<String> {
@@ -343,6 +465,7 @@ impl BrowserMcpConfig {
             *pool = Some(HostBrowserProcess {
                 endpoint: endpoint.clone(),
                 child: None,
+                proxy: None,
                 last_used_at: std::time::Instant::now(),
                 agent_pages: HashMap::new(),
             });
@@ -399,6 +522,7 @@ impl BrowserMcpConfig {
                 *pool = Some(HostBrowserProcess {
                     endpoint: endpoint.clone(),
                     child: Some(child),
+                    proxy: None,
                     last_used_at: std::time::Instant::now(),
                     agent_pages: HashMap::new(),
                 });
@@ -524,6 +648,9 @@ impl BrowserMcpConfig {
                             .is_some_and(|page| page.page_id == page_id);
                         if still_same_page {
                             process.agent_pages.remove(&agent_id);
+                            if let Some(proxy) = process.proxy.as_ref() {
+                                proxy.revoke_agents(std::iter::once(agent_id));
+                            }
                         }
                     }
                     closed_pages += 1;
@@ -536,6 +663,14 @@ impl BrowserMcpConfig {
             }
         }
         Ok((0, closed_pages))
+    }
+
+    fn revoke_run_token(&self, run_token: &str) {
+        if let Ok(pool) = self.pool.lock() {
+            if let Some(proxy) = pool.as_ref().and_then(|process| process.proxy.as_ref()) {
+                proxy.revoke_run_token(run_token);
+            }
+        }
     }
 
     fn docker_server(
@@ -604,9 +739,13 @@ impl BrowserMcpConfig {
 
 #[cfg(test)]
 fn test_safe_headless_browser(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.to_ascii_lowercase().contains("headless"))
+    std::env::var("RELAY_RUN_REAL_BROWSER_TESTS")
+        .ok()
+        .is_some_and(|value| parse_enabled(&value))
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.to_ascii_lowercase().contains("headless"))
 }
 
 impl CodexTriggerRunner {
@@ -616,9 +755,10 @@ impl CodexTriggerRunner {
         agent_id: Uuid,
         project_id: Uuid,
         workspace: &Path,
+        run_token: &str,
     ) -> AppResult<Option<ManagedCodexMcpServer>> {
         self.browser_mcp
-            .server(company_id, agent_id, project_id, workspace)
+            .server(company_id, agent_id, project_id, workspace, run_token)
     }
 
     pub fn prune_idle_managed_browsers(
@@ -628,6 +768,10 @@ impl CodexTriggerRunner {
     ) -> AppResult<(usize, usize)> {
         self.browser_mcp
             .prune_idle_host_browsers(active_agent_ids, aggressive)
+    }
+
+    pub fn revoke_managed_browser_run_token(&self, run_token: &str) {
+        self.browser_mcp.revoke_run_token(run_token);
     }
 
     pub(super) async fn managed_browser_mcp_view(&self) -> Option<CodexMcpServerView> {
@@ -666,11 +810,23 @@ impl CodexTriggerRunner {
         };
         Some(CodexMcpServerView {
             name: MANAGED_BROWSER_MCP_NAME.into(),
-            transport: CODEX_MCP_TRANSPORT_STDIO.into(),
+            transport: if host_available {
+                CODEX_MCP_TRANSPORT_HTTP.into()
+            } else {
+                CODEX_MCP_TRANSPORT_STDIO.into()
+            },
             enabled,
-            auth_status: Some("unsupported".into()),
-            address: host_available.then(|| "由本地 Trigger 设备共享宿主机浏览器".into()),
-            command,
+            auth_status: Some(
+                if host_available {
+                    "active"
+                } else {
+                    "unsupported"
+                }
+                .into(),
+            ),
+            address: host_available
+                .then(|| "由本地 Trigger 设备共享浏览器与 MCP；按 Agent 运行令牌隔离".into()),
+            command: (!host_available).then_some(command).flatten(),
             argument_count: 0,
             bearer_token_env_var: None,
             startup_timeout_sec: Some(if host_available { 45 } else { 90 }),
@@ -680,237 +836,6 @@ impl CodexTriggerRunner {
             managed_by_relay: true,
         })
     }
-}
-
-fn managed_server(
-    command: String,
-    args: Vec<String>,
-    startup_timeout_sec: u64,
-) -> ManagedCodexMcpServer {
-    let tool_approval_modes = ["navigate_page", "new_page", "upload_file"]
-        .into_iter()
-        .map(|tool| (tool.to_string(), "prompt".to_string()))
-        .collect();
-    ManagedCodexMcpServer {
-        name: MANAGED_BROWSER_MCP_NAME.into(),
-        command,
-        args,
-        env: BTreeMap::from([
-            ("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS".into(), "1".into()),
-            ("CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS".into(), "1".into()),
-        ]),
-        disabled_plugin_ids: vec![
-            "browser@openai-bundled".into(),
-            "chrome@openai-bundled".into(),
-        ],
-        required: false,
-        startup_timeout_sec: Some(startup_timeout_sec),
-        tool_timeout_sec: Some(180),
-        default_tools_approval_mode: "approve".into(),
-        tool_approval_modes,
-        prompt_hint: None,
-    }
-}
-
-pub(super) fn host_mcp_args(command: &Path, endpoint: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    if command
-        .file_name()
-        .and_then(|value| value.to_str())
-        .is_some_and(|value| value.to_ascii_lowercase().starts_with("npx"))
-    {
-        args.extend(["--yes".into(), DEFAULT_BROWSER_MCP_PACKAGE.into()]);
-    }
-    args.extend([
-        format!("--browserUrl={endpoint}"),
-        "--experimentalPageIdRouting".into(),
-        "--no-usage-statistics".into(),
-        "--no-performance-crux".into(),
-        "--allowUnrestrictedPaths".into(),
-    ]);
-    args
-}
-
-fn parse_enabled(value: &str) -> bool {
-    !matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "0" | "false" | "no" | "off"
-    )
-}
-
-fn configured_or_discovered_executable(variable: &str, candidates: &[&str]) -> Option<PathBuf> {
-    std::env::var_os(variable)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| executable_in_path(&value.to_string_lossy()))
-        .or_else(|| {
-            candidates
-                .iter()
-                .find_map(|candidate| executable_in_path(candidate))
-        })
-}
-
-fn configured_or_discovered_browser() -> Option<PathBuf> {
-    if let Some(configured) = std::env::var_os("RELAY_CHROME_EXECUTABLE")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-    {
-        return executable_in_path(&configured.to_string_lossy());
-    }
-    let fixed = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    ];
-    let fixed_browser = fixed
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|path| path.is_file());
-    if fixed_browser.is_some() {
-        return fixed_browser;
-    }
-    for root in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
-        if let Some(path) = std::env::var_os(root)
-            .map(PathBuf::from)
-            .map(|path| path.join("Google/Chrome/Application/chrome.exe"))
-            .filter(|path| path.is_file())
-        {
-            return Some(path);
-        }
-    }
-    [
-        "google-chrome",
-        "google-chrome-stable",
-        "chromium",
-        "chromium-browser",
-        "chrome",
-        "chrome.exe",
-    ]
-    .into_iter()
-    .find_map(executable_in_path)
-}
-
-fn executable_in_path(name: &str) -> Option<PathBuf> {
-    let candidate = Path::new(name);
-    if candidate.components().count() > 1 {
-        return candidate.is_file().then(|| candidate.to_path_buf());
-    }
-    let direct = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .map(|directory| directory.join(name))
-        .find(|path| path.is_file());
-    if direct.is_some() || !cfg!(windows) {
-        return direct;
-    }
-    let extensions = std::env::var_os("PATHEXT")
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
-    std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .flat_map(|directory| {
-            extensions
-                .split(';')
-                .map(move |extension| directory.join(format!("{name}{extension}")))
-                .collect::<Vec<_>>()
-        })
-        .find(|path| path.is_file())
-}
-
-fn reserve_loopback_port() -> AppResult<u16> {
-    TcpListener::bind(("127.0.0.1", 0))
-        .and_then(|listener| listener.local_addr())
-        .map(|address| address.port())
-        .map_err(|error| AppError::Internal(format!("cannot reserve browser port: {error}")))
-}
-
-fn read_reusable_endpoint(profile: &Path) -> Option<String> {
-    let endpoint = std::fs::read_to_string(profile.join(HOST_BROWSER_ENDPOINT_FILE)).ok()?;
-    let endpoint = endpoint.trim().to_string();
-    for _ in 0..3 {
-        if browser_endpoint_ready(&endpoint) {
-            return Some(endpoint);
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    None
-}
-
-fn create_browser_profile(path: &Path) -> AppResult<()> {
-    std::fs::create_dir_all(path).map_err(|error| {
-        AppError::Internal(format!("cannot create managed browser profile: {error}"))
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
-            |error| AppError::Internal(format!("cannot protect managed browser profile: {error}")),
-        )?;
-    }
-    Ok(())
-}
-
-fn create_browser_artifacts(workspace: &Path) -> AppResult<PathBuf> {
-    let path = workspace.join(BROWSER_ARTIFACTS_RELATIVE_PATH);
-    std::fs::create_dir_all(&path).map_err(|error| {
-        AppError::Internal(format!(
-            "cannot create managed browser artifact directory: {error}"
-        ))
-    })?;
-    let path = path.canonicalize().map_err(|error| {
-        AppError::Internal(format!(
-            "cannot resolve managed browser artifact directory: {error}"
-        ))
-    })?;
-    if !path.starts_with(workspace) {
-        return Err(AppError::Validation(
-            "managed browser artifact directory must remain inside the project workspace".into(),
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).map_err(
-            |error| {
-                AppError::Internal(format!(
-                    "cannot protect managed browser artifact directory: {error}"
-                ))
-            },
-        )?;
-    }
-    Ok(path)
-}
-
-fn remove_stale_chromium_runtime_files(profile: &Path) -> AppResult<()> {
-    for name in CHROMIUM_RUNTIME_FILES {
-        let path = profile.join(name);
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(AppError::Internal(format!(
-                    "cannot remove stale Chromium runtime file {}: {error}",
-                    path.display()
-                )));
-            }
-        }
-    }
-    let _ = std::fs::remove_file(profile.join(HOST_BROWSER_ENDPOINT_FILE));
-    Ok(())
-}
-
-#[cfg(unix)]
-fn browser_container_user(profile: &Path) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::metadata(profile).ok()?;
-    Some(format!("{}:{}", metadata.uid(), metadata.gid()))
-}
-
-#[cfg(not(unix))]
-fn browser_container_user(_profile: &Path) -> Option<String> {
-    None
 }
 
 #[cfg(test)]

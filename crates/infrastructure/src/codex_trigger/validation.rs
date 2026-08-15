@@ -374,7 +374,28 @@ pub(super) fn validate_request(request: &CodexRunRequest) -> AppResult<()> {
     }
     for server in &request.managed_mcp_servers {
         validate_config_key(&server.name, "managed MCP server name")?;
-        validate_safe_value(&server.command, "managed MCP command", 1_024)?;
+        if let Some(url) = server.url.as_deref() {
+            let parsed = reqwest::Url::parse(url)
+                .map_err(|_| AppError::Validation("managed MCP URL is invalid".into()))?;
+            if parsed.scheme() != "http"
+                || parsed.host_str() != Some("127.0.0.1")
+                || parsed.username() != ""
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(AppError::Validation(
+                    "managed MCP URL must use the local 127.0.0.1 loopback address".into(),
+                ));
+            }
+            if !server.command.is_empty() || !server.args.is_empty() || !server.env.is_empty() {
+                return Err(AppError::Validation(
+                    "managed HTTP MCP cannot also configure stdio transport".into(),
+                ));
+            }
+        } else {
+            validate_safe_value(&server.command, "managed MCP command", 1_024)?;
+        }
         if server.args.len() > 128 {
             return Err(AppError::Validation(
                 "managed MCP server has too many arguments".into(),
@@ -386,6 +407,10 @@ pub(super) fn validate_request(request: &CodexRunRequest) -> AppResult<()> {
         for (key, value) in &server.env {
             validate_environment_name(key)?;
             validate_safe_value(value, "managed MCP environment value", 4_096)?;
+        }
+        for (header, environment_name) in &server.env_http_headers {
+            validate_http_header_name(header)?;
+            validate_environment_name(environment_name)?;
         }
         if server.disabled_plugin_ids.len() > 16 {
             return Err(AppError::Validation(
@@ -402,6 +427,38 @@ pub(super) fn validate_request(request: &CodexRunRequest) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+fn validate_http_header_name(value: &str) -> AppResult<()> {
+    if !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+    {
+        Ok(())
+    } else {
+        Err(AppError::Validation(
+            "managed MCP HTTP header name is invalid".into(),
+        ))
+    }
 }
 
 fn validate_mcp_approval_mode(value: &str) -> AppResult<()> {
@@ -586,11 +643,18 @@ pub(super) fn toml_string_array(values: &[String]) -> String {
 pub(super) fn apply_managed_mcp_settings(command: &mut Command, servers: &[ManagedCodexMcpServer]) {
     for server in servers {
         let prefix = format!("mcp_servers.{}", server.name);
+        if let Some(url) = server.url.as_deref() {
+            command
+                .arg("--config")
+                .arg(format!("{prefix}.url={}", toml_string(url)));
+        } else {
+            command
+                .arg("--config")
+                .arg(format!("{prefix}.command={}", toml_string(&server.command)))
+                .arg("--config")
+                .arg(format!("{prefix}.args={}", toml_string_array(&server.args)));
+        }
         command
-            .arg("--config")
-            .arg(format!("{prefix}.command={}", toml_string(&server.command)))
-            .arg("--config")
-            .arg(format!("{prefix}.args={}", toml_string_array(&server.args)))
             .arg("--config")
             .arg(format!("{prefix}.required={}", server.required))
             .arg("--config")
@@ -618,6 +682,17 @@ pub(super) fn apply_managed_mcp_settings(command: &mut Command, servers: &[Manag
             command
                 .arg("--config")
                 .arg(format!("{prefix}.env={{ {env} }}"));
+        }
+        if !server.env_http_headers.is_empty() {
+            let headers = server
+                .env_http_headers
+                .iter()
+                .map(|(key, value)| format!("{} = {}", toml_string(key), toml_string(value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            command
+                .arg("--config")
+                .arg(format!("{prefix}.env_http_headers={{ {headers} }}"));
         }
         for (tool, mode) in &server.tool_approval_modes {
             command.arg("--config").arg(format!(

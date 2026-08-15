@@ -388,6 +388,8 @@ enabled = false
                 command: "docker".into(),
                 args: Vec::new(),
                 env: BTreeMap::new(),
+                url: None,
+                env_http_headers: BTreeMap::new(),
                 disabled_plugin_ids: conflicting_plugins(),
                 required: false,
                 startup_timeout_sec: None,

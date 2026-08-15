@@ -91,6 +91,46 @@ fn managed_cli_settings_are_injected_as_cli_overrides() {
 }
 
 #[test]
+fn managed_http_mcp_settings_use_environment_backed_auth_headers() {
+    let server = ManagedCodexMcpServer {
+        name: "chrome-devtools".into(),
+        command: String::new(),
+        args: Vec::new(),
+        env: BTreeMap::new(),
+        url: Some("http://127.0.0.1:19090/mcp".into()),
+        env_http_headers: BTreeMap::from([(
+            "x-agent-run-token".into(),
+            DEFAULT_RUN_TOKEN_ENV.into(),
+        )]),
+        disabled_plugin_ids: Vec::new(),
+        required: false,
+        startup_timeout_sec: Some(20),
+        tool_timeout_sec: Some(180),
+        default_tools_approval_mode: "approve".into(),
+        tool_approval_modes: BTreeMap::new(),
+        prompt_hint: None,
+    };
+    let mut command = Command::new("codex");
+    apply_managed_mcp_settings(&mut command, &[server]);
+    let args = command
+        .as_std()
+        .get_args()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert!(args.contains(&"mcp_servers.chrome-devtools.url=\"http://127.0.0.1:19090/mcp\"".into()));
+    assert!(args.contains(
+        &"mcp_servers.chrome-devtools.env_http_headers={ \"x-agent-run-token\" = \"RELAY_AGENT_RUN_TOKEN\" }".into()
+    ));
+    assert!(!args
+        .iter()
+        .any(|argument| argument.starts_with("mcp_servers.chrome-devtools.command=")));
+    assert!(!args
+        .iter()
+        .any(|argument| argument.starts_with("mcp_servers.chrome-devtools.args=")));
+}
+
+#[test]
 fn workspace_runs_receive_an_isolated_writable_temp_root() {
     let root = std::env::temp_dir().join(format!(
         "relay-codex-runtime-temp-test-{}",

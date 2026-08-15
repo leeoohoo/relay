@@ -73,11 +73,11 @@ fn docker_fallback_profiles_are_isolated_by_project_and_resource_limited() {
     let canonical_workspace = workspace.canonicalize().expect("canonical workspace");
 
     let first = runner
-        .managed_browser_mcp_server(company, agent, first_project, &workspace)
+        .managed_browser_mcp_server(company, agent, first_project, &workspace, "run-first")
         .expect("first browser MCP")
         .expect("enabled browser MCP");
     let second = runner
-        .managed_browser_mcp_server(company, agent, second_project, &workspace)
+        .managed_browser_mcp_server(company, agent, second_project, &workspace, "run-second")
         .expect("second browser MCP")
         .expect("enabled browser MCP");
     let first_profile_mount = first
@@ -184,7 +184,7 @@ fn managed_browser_profile_removes_stale_chromium_runtime_files() {
     runner.browser_mcp = BrowserMcpConfig::for_test(root.clone());
 
     runner
-        .managed_browser_mcp_server(company, agent, project, &workspace)
+        .managed_browser_mcp_server(company, agent, project, &workspace, "run-cleanup")
         .expect("browser MCP")
         .expect("enabled browser MCP");
 
@@ -246,77 +246,259 @@ fn host_browser_is_shared_by_the_trigger_with_one_tab_per_agent() {
     let agent = Uuid::new_v4();
 
     let first = runner
-        .managed_browser_mcp_server(company, agent, Uuid::new_v4(), &workspace)
+        .managed_browser_mcp_server(company, agent, Uuid::new_v4(), &workspace, "run-first")
         .expect("first host browser")
         .expect("enabled host browser");
     let second = runner
-        .managed_browser_mcp_server(company, agent, Uuid::new_v4(), &workspace)
+        .managed_browser_mcp_server(company, agent, Uuid::new_v4(), &workspace, "run-second")
         .expect("second host browser")
         .expect("enabled host browser");
     let other_agent = runner
-        .managed_browser_mcp_server(company, Uuid::new_v4(), Uuid::new_v4(), &workspace)
+        .managed_browser_mcp_server(
+            company,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &workspace,
+            "run-other-agent",
+        )
         .expect("other Agent host browser")
         .expect("enabled host browser");
     let same_agent_other_company = runner
-        .managed_browser_mcp_server(Uuid::new_v4(), agent, Uuid::new_v4(), &workspace)
+        .managed_browser_mcp_server(
+            Uuid::new_v4(),
+            agent,
+            Uuid::new_v4(),
+            &workspace,
+            "run-same-agent",
+        )
         .expect("same Agent in another company host browser")
         .expect("enabled host browser");
     let other_company = runner
-        .managed_browser_mcp_server(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), &workspace)
+        .managed_browser_mcp_server(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &workspace,
+            "run-other-company",
+        )
         .expect("other company host browser")
         .expect("enabled host browser");
-    let first_url = first
-        .args
-        .iter()
-        .find(|argument| argument.starts_with("--browserUrl="))
-        .expect("first browser URL");
-    let second_url = second
-        .args
-        .iter()
-        .find(|argument| argument.starts_with("--browserUrl="))
-        .expect("second browser URL");
-    let other_agent_url = other_agent
-        .args
-        .iter()
-        .find(|argument| argument.starts_with("--browserUrl="))
-        .expect("other Agent browser URL");
-    let same_agent_other_company_url = same_agent_other_company
-        .args
-        .iter()
-        .find(|argument| argument.starts_with("--browserUrl="))
-        .expect("same Agent in another company browser URL");
-    let other_company_url = other_company
-        .args
-        .iter()
-        .find(|argument| argument.starts_with("--browserUrl="))
-        .expect("other company browser URL");
-
-    assert_eq!(first_url, second_url);
-    assert_eq!(first_url, other_agent_url);
-    assert_eq!(first_url, same_agent_other_company_url);
-    assert_eq!(first_url, other_company_url);
+    let first_url = first.url.as_deref().expect("first browser proxy URL");
+    assert_eq!(first.url, second.url);
+    assert_eq!(first.url, other_agent.url);
+    assert_eq!(first.url, same_agent_other_company.url);
+    assert_eq!(first.url, other_company.url);
+    assert!(first_url.starts_with("http://127.0.0.1:"));
+    assert!(first_url.ends_with("/mcp"));
     assert_eq!(first.prompt_hint, second.prompt_hint);
     assert_eq!(first.prompt_hint, same_agent_other_company.prompt_hint);
-    assert_ne!(first.prompt_hint, other_agent.prompt_hint);
-    assert_ne!(other_agent.prompt_hint, other_company.prompt_hint);
-    assert!(first
-        .env
-        .get(RELAY_BROWSER_PAGE_ID_ENV)
-        .is_some_and(|page_id| first
-            .prompt_hint
-            .as_deref()
-            .is_some_and(|hint| hint.contains(page_id))));
+    assert_eq!(first.prompt_hint, other_agent.prompt_hint);
+    assert_eq!(other_agent.prompt_hint, other_company.prompt_hint);
+    assert!(first.command.is_empty());
+    assert!(first.args.is_empty());
+    assert!(first.env.is_empty());
     assert_eq!(
-        first.env.get("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"),
-        Some(&"1".to_string())
-    );
-    assert_eq!(
-        first.env.get("CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS"),
-        Some(&"1".to_string())
+        first.env_http_headers.get("x-agent-run-token"),
+        Some(&DEFAULT_RUN_TOKEN_ENV.to_string())
     );
     assert_eq!(first.command, second.command);
     drop(runner);
     std::fs::remove_dir_all(root).expect("cleanup host browser profiles");
+}
+
+#[test]
+fn shared_browser_proxy_isolates_agent_pages_and_tokens() {
+    let root = std::env::temp_dir().join(format!(
+        "relay-host-browser-proxy-test-{}",
+        Uuid::new_v4().simple()
+    ));
+    let Some(config) = BrowserMcpConfig::for_test_host(root.clone()) else {
+        return;
+    };
+    let mut runner = CodexTriggerRunner::new(
+        PathBuf::from("codex"),
+        Vec::new(),
+        "http://127.0.0.1:8080/mcp".into(),
+        "relay_company".into(),
+        DEFAULT_RUN_TOKEN_ENV.into(),
+    )
+    .expect("runner");
+    runner.browser_mcp = config;
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let company = Uuid::new_v4();
+    let project = Uuid::new_v4();
+    let first_agent = Uuid::new_v4();
+    let second_agent = Uuid::new_v4();
+    let first = runner
+        .managed_browser_mcp_server(company, first_agent, project, &workspace, "proxy-run-first")
+        .expect("first browser MCP")
+        .expect("enabled first browser MCP");
+    let second = runner
+        .managed_browser_mcp_server(
+            company,
+            second_agent,
+            project,
+            &workspace,
+            "proxy-run-second",
+        )
+        .expect("second browser MCP")
+        .expect("enabled second browser MCP");
+    let url = first.url.as_deref().expect("browser proxy URL");
+    assert_eq!(first.url, second.url);
+
+    for token in ["proxy-run-first", "proxy-run-second"] {
+        browser_proxy_rpc(
+            url,
+            token,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "relay-test", "version": "1"}
+                }
+            }),
+        );
+    }
+    let tools = browser_proxy_rpc(
+        url,
+        "proxy-run-first",
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+    );
+    let tools = tools["result"]["tools"]
+        .as_array()
+        .expect("browser proxy tools");
+    assert!(!tools
+        .iter()
+        .any(|tool| { matches!(tool["name"].as_str(), Some("select_page" | "close_page")) }));
+    assert!(tools
+        .iter()
+        .all(|tool| { tool["inputSchema"]["properties"].get("pageId").is_none() }));
+
+    let first_pages = browser_proxy_tool_call(url, "proxy-run-first", 3, "list_pages", json!({}));
+    let second_pages = browser_proxy_tool_call(url, "proxy-run-second", 4, "list_pages", json!({}));
+    assert!(
+        first_pages["result"]["structuredContent"]["pages"][0]["url"].is_string(),
+        "unexpected first Agent page response: {first_pages:#}"
+    );
+    assert!(
+        second_pages["result"]["structuredContent"]["pages"][0]["url"].is_string(),
+        "unexpected second Agent page response: {second_pages:#}"
+    );
+    assert_eq!(
+        first_pages["result"]["structuredContent"]["pages"][0]["url"],
+        format!("about:blank#relay-agent-{first_agent}")
+    );
+    assert_eq!(
+        second_pages["result"]["structuredContent"]["pages"][0]["url"],
+        format!("about:blank#relay-agent-{second_agent}")
+    );
+    assert_eq!(
+        first_pages["result"]["structuredContent"]["pages"]
+            .as_array()
+            .expect("first Agent pages")
+            .len(),
+        1
+    );
+    assert_eq!(
+        second_pages["result"]["structuredContent"]["pages"]
+            .as_array()
+            .expect("second Agent pages")
+            .len(),
+        1
+    );
+    let browser_urls = runner
+        .browser_mcp
+        .host_page_urls_for_test()
+        .expect("shared browser pages");
+    assert_eq!(
+        browser_urls.len(),
+        2,
+        "unexpected browser pages: {browser_urls:#?}"
+    );
+
+    let navigate = browser_proxy_tool_call(
+        url,
+        "proxy-run-first",
+        5,
+        "new_page",
+        json!({"url": "about:blank"}),
+    );
+    assert_ne!(navigate["result"]["isError"], true, "{navigate:#}");
+    let first_after_navigation =
+        browser_proxy_tool_call(url, "proxy-run-first", 6, "list_pages", json!({}));
+    let second_after_navigation =
+        browser_proxy_tool_call(url, "proxy-run-second", 7, "list_pages", json!({}));
+    assert_eq!(
+        first_after_navigation["result"]["structuredContent"]["pages"][0]["url"],
+        "about:blank"
+    );
+    assert_eq!(
+        second_after_navigation["result"]["structuredContent"]["pages"][0]["url"],
+        format!("about:blank#relay-agent-{second_agent}")
+    );
+    let browser_urls = runner
+        .browser_mcp
+        .host_page_urls_for_test()
+        .expect("shared browser pages after navigation");
+    assert_eq!(
+        browser_urls.len(),
+        2,
+        "new_page created a tab: {browser_urls:#?}"
+    );
+
+    let hidden = browser_proxy_tool_call(
+        url,
+        "proxy-run-first",
+        8,
+        "select_page",
+        json!({"pageId": 999}),
+    );
+    assert_eq!(hidden["result"]["isError"], true);
+    let unauthorized = browser_proxy_rpc(
+        url,
+        "invalid-run-token",
+        json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list", "params": {}}),
+    );
+    assert!(unauthorized.get("error").is_some());
+
+    drop(runner);
+    std::fs::remove_dir_all(root).expect("cleanup host browser profiles");
+}
+
+fn browser_proxy_tool_call(url: &str, token: &str, id: u64, name: &str, arguments: Value) -> Value {
+    browser_proxy_rpc(
+        url,
+        token,
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        }),
+    )
+}
+
+fn browser_proxy_rpc(url: &str, token: &str, body: Value) -> Value {
+    let response = reqwest::blocking::Client::new()
+        .post(url)
+        .header("accept", "application/json, text/event-stream")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2025-11-25")
+        .header("x-agent-run-token", token)
+        .json(&body)
+        .send()
+        .expect("browser proxy request");
+    let status = response.status();
+    let body = response.text().expect("browser proxy response body");
+    assert!(
+        status.is_success(),
+        "browser proxy returned {status}: {body}"
+    );
+    serde_json::from_str(&body).expect("browser proxy JSON response")
 }
 
 #[cfg(unix)]
@@ -375,6 +557,8 @@ printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-browser",
         command: "docker".into(),
         args: vec!["run".into(), "browser".into()],
         env: BTreeMap::new(),
+        url: None,
+        env_http_headers: BTreeMap::new(),
         disabled_plugin_ids: vec![
             "browser@openai-bundled".into(),
             "chrome@openai-bundled".into(),

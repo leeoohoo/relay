@@ -1,10 +1,14 @@
 use super::*;
 
 mod capabilities;
+mod run_token_guard;
+mod scheduling;
 mod settings;
 mod workspace;
 
 use capabilities::*;
+use run_token_guard::ManagedBrowserRunTokenGuard;
+pub(super) use scheduling::next_trigger_run_at;
 pub(super) use settings::resolve_effective_cli_settings;
 use workspace::prepare_project_workspace_with_credential_recovery;
 
@@ -71,22 +75,6 @@ pub(super) async fn process_claimed_trigger(
         );
     }
     trigger.agent_profile_id
-}
-
-pub(super) fn next_trigger_run_at(
-    trigger: &AgentCodexTriggerConfig,
-    finished_at: chrono::DateTime<chrono::Utc>,
-    succeeded: bool,
-) -> chrono::DateTime<chrono::Utc> {
-    if succeeded {
-        return finished_at + Duration::seconds(i64::from(trigger.interval_seconds));
-    }
-    let retry_delay_seconds = match trigger.consecutive_failure_count {
-        0 => 10,
-        1 => 30,
-        _ => i64::from(trigger.interval_seconds),
-    };
-    finished_at + Duration::seconds(retry_delay_seconds)
 }
 
 pub(super) async fn execute_trigger(
@@ -203,6 +191,8 @@ pub(super) async fn execute_trigger(
             return Err(error);
         }
     };
+    let _browser_token_guard =
+        ManagedBrowserRunTokenGuard::new(codex_runner, &token.plaintext_token);
     if decision.resume_existing_intents_directly {
         record_run_activity(
             platform,
@@ -706,6 +696,7 @@ async fn run_codex_stage(
                 trigger.agent_profile_id,
                 project_id,
                 &workspace.path,
+                run_token,
             )
         })
         .transpose()?
