@@ -390,8 +390,23 @@ fn only_pre_initialize_app_server_disconnects_are_retried() {
 #[test]
 fn codex_prompt_accepts_multiline_instructions_but_rejects_unsafe_controls() {
     assert!(validate_prompt("先读取 Inbox。\n然后处理任务。\n\t没有任务时结束。").is_ok());
-    assert!(validate_prompt("unsafe\rprompt").is_err());
-    assert!(validate_prompt("unsafe\0prompt").is_err());
+    assert_eq!(
+        validate_prompt("unsafe\rprompt")
+            .expect_err("carriage return must be rejected")
+            .to_string(),
+        "validation error: Codex prompt contains unsupported control character U+000D at character 6"
+    );
+    assert_eq!(
+        validate_prompt("unsafe\0prompt")
+            .expect_err("NUL must be rejected")
+            .to_string(),
+        "validation error: Codex prompt contains unsupported control character U+0000 at character 6"
+    );
+    assert!(validate_prompt(&"x".repeat(100_000)).is_ok());
+    assert!(validate_prompt(&"x".repeat(100_001))
+        .expect_err("oversized prompt must be rejected")
+        .to_string()
+        .contains("100001 characters"));
 }
 
 #[test]

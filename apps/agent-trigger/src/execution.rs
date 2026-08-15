@@ -339,7 +339,6 @@ pub(super) async fn execute_trigger(
             .as_deref()
             .map(|message| truncate(message, 2_000));
     }
-
     let mut worker_failure = None;
     let mut worker_retry_requested = false;
     let mut worker_retry_counts_as_failure = false;
@@ -750,7 +749,7 @@ async fn run_codex_stage(
             feature_goals: settings.feature_goals,
             feature_shell_tool: settings.feature_shell_tool,
             max_run_seconds: remaining_run_seconds,
-            prompt,
+            prompt: normalize_codex_prompt(&prompt),
             existing_thread_id,
             run_token: run_token.into(),
             session_kind: if project_id.is_some() {

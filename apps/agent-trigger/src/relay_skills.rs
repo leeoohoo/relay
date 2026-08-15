@@ -1,6 +1,9 @@
 use super::*;
 use ai_chat_application::AgentControlSnapshot;
-use serde_json::json;
+
+mod control_snapshot;
+pub(crate) use control_snapshot::normalize_codex_prompt;
+use control_snapshot::render_control_snapshot;
 
 pub(super) struct WakeupPromptContext<'a> {
     pub(super) agent: &'a AgentProfile,
@@ -75,116 +78,6 @@ pub(super) fn build_wakeup_prompt(context: WakeupPromptContext<'_>) -> String {
         snapshot_version = control_snapshot.snapshot_version,
         unread_message_count = control_snapshot.unread_messages.len(),
     )
-}
-
-fn render_control_snapshot(snapshot: &AgentControlSnapshot) -> String {
-    let readiness_by_task = snapshot
-        .task_readiness
-        .iter()
-        .map(|readiness| (readiness.task_id, readiness))
-        .collect::<std::collections::HashMap<_, _>>();
-    let unread_messages = snapshot
-        .unread_messages
-        .iter()
-        .take(50)
-        .map(|event| {
-            json!({
-                "event_id": event.id,
-                "created_at": event.created_at,
-                "conversation_id": event.payload_json.get("conversation_id"),
-                "message_id": event.payload_json.get("message_id"),
-                "sender_agent_id": event.payload_json.get("sender_agent_id"),
-                "sender_human_user_id": event.payload_json.get("sender_human_user_id"),
-                "content": event.payload_json.get("content"),
-                "mentioned": event.payload_json.get("mentioned"),
-                "requires_action": event.requires_action,
-            })
-        })
-        .collect::<Vec<_>>();
-    let actionable_events = snapshot
-        .actionable_events
-        .iter()
-        .take(20)
-        .map(|event| {
-            json!({
-                "id": event.id,
-                "type": event.event_type,
-                "class": event.event_class,
-                "priority": event.priority,
-                "payload": event.payload_json,
-            })
-        })
-        .collect::<Vec<_>>();
-    let ready_tasks = snapshot
-        .ready_tasks
-        .iter()
-        .take(20)
-        .map(|task| {
-            let readiness = readiness_by_task.get(&task.id);
-            json!({
-                "id": task.id,
-                "project_id": task.project_id,
-                "title": task.title,
-                "status": task.status,
-                "priority": task.priority,
-                "readiness": readiness.map(|item| json!({
-                    "can_start": item.can_start,
-                    "waiting_reasons": &item.waiting_reasons,
-                    "suggested_actions": &item.suggested_actions,
-                })),
-            })
-        })
-        .collect::<Vec<_>>();
-    let waiting_tasks = snapshot
-        .waiting_tasks
-        .iter()
-        .take(20)
-        .map(|task| {
-            let readiness = readiness_by_task.get(&task.id);
-            json!({
-                "id": task.id,
-                "project_id": task.project_id,
-                "title": task.title,
-                "status": task.status,
-                "readiness": readiness.map(|item| json!({
-                    "can_start": item.can_start,
-                    "waiting_reasons": &item.waiting_reasons,
-                    "suggested_actions": &item.suggested_actions,
-                })),
-            })
-        })
-        .collect::<Vec<_>>();
-    let active_intents = snapshot
-        .active_intents
-        .iter()
-        .take(10)
-        .map(|intent| {
-            json!({
-                "id": intent.id,
-                "project_id": intent.project_id,
-                "status": intent.status,
-                "objective": intent.objective,
-                "task_ids": intent.task_ids,
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_string(&json!({
-        "unread_messages_total": snapshot.unread_messages.len(),
-        "unread_messages_truncated": snapshot.unread_messages.len() > 50,
-        "unread_messages": unread_messages,
-        "actionable_events": actionable_events,
-        "ready_tasks": ready_tasks,
-        "waiting_tasks": waiting_tasks,
-        "active_intents": active_intents,
-        "work_sessions": snapshot.work_sessions.iter().take(10).map(|session| json!({
-            "id": session.id,
-            "kind": session.session_kind,
-            "project_id": session.project_id,
-            "status": session.status,
-            "checkpoint": session.summary_short,
-        })).collect::<Vec<_>>(),
-    }))
-    .unwrap_or_else(|_| "{}".into())
 }
 
 pub(super) fn build_worker_prompt(context: WorkerPromptContext<'_>) -> String {

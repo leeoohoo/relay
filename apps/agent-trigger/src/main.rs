@@ -851,4 +851,6 @@ use execution_result::*;
 use relay_skills::*;
 
 #[cfg(test)]
+mod prompt_tests;
+#[cfg(test)]
 mod tests;
