@@ -808,9 +808,11 @@ async fn run_trigger_loop(
             );
             agent_claims_blocked_by_resources = concurrency_slots > 0 && available_slots == 0;
             if available_slots > 0 {
-                let claimed = platform
-                    .claim_due_agent_codex_triggers(&config.lease_owner, available_slots)
-                    .map_err(anyhow::Error::msg)?;
+                let claim_started = std::time::Instant::now();
+                let claim_result =
+                    platform.claim_due_agent_codex_triggers(&config.lease_owner, available_slots);
+                observability::record_trigger_claim(claim_started.elapsed(), claim_result.is_ok());
+                let claimed = claim_result.map_err(anyhow::Error::msg)?;
                 for trigger in claimed {
                     running_agents.insert(trigger.agent_profile_id);
                     running.push(process_claimed_trigger(
@@ -955,6 +957,7 @@ mod codex_control;
 mod discovery;
 mod execution;
 mod execution_result;
+mod observability;
 mod relay_skills;
 mod resource_limits;
 mod trigger_config;

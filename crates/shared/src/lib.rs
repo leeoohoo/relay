@@ -3,6 +3,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub mod latency;
+
 pub type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug, Error, Serialize, Clone)]

@@ -10,6 +10,7 @@ use std::{
     thread::JoinHandle,
 };
 
+use ai_chat_shared::latency::{LatencyPercentiles, LatencyRecorder};
 use axum::Router;
 use http::request::Parts;
 use rmcp::{
@@ -208,6 +209,8 @@ struct BrowserProxyHandler {
     upstream_tools: Arc<HashMap<String, Tool>>,
     grants: Arc<RwLock<HashMap<String, BrowserProxyGrant>>>,
     calls: Arc<tokio::sync::Mutex<()>>,
+    queue_latency: Arc<LatencyRecorder>,
+    tool_latency: Arc<LatencyRecorder>,
     healthy: Arc<AtomicBool>,
 }
 
@@ -238,8 +241,22 @@ impl ServerHandler for BrowserProxyHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let grant = self.authorize(&context)?;
+        let tool_name = request.name.to_string();
+        let queue_started = std::time::Instant::now();
         let _call = self.calls.lock().await;
-        match self.call_tool_serialized(request, &grant).await {
+        record_browser_latency("queue", &self.queue_latency, queue_started.elapsed(), true);
+        let tool_started = std::time::Instant::now();
+        let result = self.call_tool_serialized(request, &grant).await;
+        let succeeded = result
+            .as_ref()
+            .is_ok_and(|result| !result.is_error.unwrap_or(false));
+        record_browser_latency(
+            "tool",
+            &self.tool_latency,
+            tool_started.elapsed(),
+            succeeded,
+        );
+        match result {
             Ok(result) => Ok(result),
             Err(error) => {
                 if self.upstream.is_transport_closed() {
@@ -247,6 +264,7 @@ impl ServerHandler for BrowserProxyHandler {
                 }
                 tracing::warn!(
                     agent_id = %grant.agent_id,
+                    tool = %tool_name,
                     error = %error,
                     "shared browser MCP call failed"
                 );
@@ -473,6 +491,8 @@ async fn run_proxy_server(
         ),
         grants,
         calls: Arc::new(tokio::sync::Mutex::new(())),
+        queue_latency: Arc::new(LatencyRecorder::operational_default()),
+        tool_latency: Arc::new(LatencyRecorder::operational_default()),
         healthy: healthy.clone(),
     };
     let service: StreamableHttpService<BrowserProxyHandler, LocalSessionManager> =
@@ -521,6 +541,33 @@ async fn run_proxy_server(
     }
     healthy.store(false, Ordering::Release);
     let _ = client.cancel().await;
+}
+
+fn record_browser_latency(
+    stage: &str,
+    recorder: &LatencyRecorder,
+    elapsed: Duration,
+    succeeded: bool,
+) {
+    let Some(summary) = recorder.record(elapsed, succeeded) else {
+        return;
+    };
+    log_browser_latency(stage, summary);
+}
+
+fn log_browser_latency(stage: &str, summary: LatencyPercentiles) {
+    tracing::info!(
+        stage,
+        observations = summary.observed_count,
+        sampled = summary.sample_count,
+        failures = summary.failure_count,
+        average_us = summary.average_us,
+        p50_us = summary.p50_us,
+        p95_us = summary.p95_us,
+        p99_us = summary.p99_us,
+        max_us = summary.max_us,
+        "shared browser MCP latency window"
+    );
 }
 
 fn sanitize_tools(tools: &[Tool]) -> Vec<Tool> {

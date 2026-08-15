@@ -119,15 +119,19 @@ pub(super) async fn process_codex_control_request(
     config: &TriggerServiceConfig,
     claimed: ClaimedCodexControlRequest,
 ) {
+    let started = std::time::Instant::now();
     if let Err(error) = codex_control.mark_request_processing(&claimed.request) {
         tracing::error!(error = %sanitize_error(&error.to_string()), "cannot mark Codex control request as processing");
+        observability::record_control_request(started.elapsed(), false);
         return;
     }
     let result =
         execute_codex_control_request(codex_control, codex_runner, config, &claimed.request).await;
+    let mut succeeded = result.is_ok();
     match result {
         Ok(()) => {
             if let Err(error) = codex_control.finish_request(claimed) {
+                succeeded = false;
                 tracing::error!(error = %sanitize_error(&error.to_string()), "cannot finish Codex control request");
             }
         }
@@ -139,6 +143,7 @@ pub(super) async fn process_codex_control_request(
             }
         }
     }
+    observability::record_control_request(started.elapsed(), succeeded);
 }
 
 pub(super) async fn execute_codex_control_request(
