@@ -27,8 +27,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         agent_profile_id: Uuid,
         company_id: Uuid,
     ) -> AppResult<AgentControlSnapshot> {
-        let now = now_utc();
-        let projects = self
+        let projects = self.active_company_projects_for_agent(agent_profile_id, company_id)?;
+        self.agent_control_snapshot_with_projects(agent_profile_id, company_id, &projects)
+    }
+
+    pub(super) fn active_company_projects_for_agent(
+        &self,
+        agent_profile_id: Uuid,
+        company_id: Uuid,
+    ) -> AppResult<Vec<CompanyProject>> {
+        Ok(self
             .repo
             .list_company_projects_result(company_id)?
             .into_iter()
@@ -39,7 +47,16 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
                         .get_company_project_member(project.id, agent_profile_id)
                         .is_some_and(|member| member.left_at.is_none())
             })
-            .collect::<Vec<_>>();
+            .collect())
+    }
+
+    pub(super) fn agent_control_snapshot_with_projects(
+        &self,
+        agent_profile_id: Uuid,
+        company_id: Uuid,
+        projects: &[CompanyProject],
+    ) -> AppResult<AgentControlSnapshot> {
+        let now = now_utc();
         let active_project_ids = projects
             .iter()
             .map(|project| project.id)
@@ -85,7 +102,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         let mut ready_tasks = Vec::new();
         let mut waiting_tasks = Vec::new();
         let mut task_readiness = Vec::new();
-        for project in &projects {
+        for project in projects {
             let tasks = self.repo.list_company_project_tasks_result(project.id)?;
             for task in tasks.iter().filter(|task| {
                 task.assignee_agent_id == Some(agent_profile_id)

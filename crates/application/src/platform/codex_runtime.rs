@@ -207,20 +207,13 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .filter(|company| company.status == "active")
             .ok_or_else(|| AppError::NotFound("active company not found".into()))?;
         let now = now_utc();
-        let mut control_snapshot = self
-            .agent_control_snapshot_for_active_member(config.agent_profile_id, config.company_id)?;
-        let projects = self
-            .repo
-            .list_company_projects_result(config.company_id)?
-            .into_iter()
-            .filter(|project| {
-                project.status != PROJECT_STATUS_PAUSED
-                    && self
-                        .repo
-                        .get_company_project_member(project.id, membership.agent_profile_id)
-                        .is_some_and(|member| member.left_at.is_none())
-            })
-            .collect::<Vec<_>>();
+        let projects =
+            self.active_company_projects_for_agent(config.agent_profile_id, config.company_id)?;
+        let mut control_snapshot = self.agent_control_snapshot_with_projects(
+            config.agent_profile_id,
+            config.company_id,
+            &projects,
+        )?;
         let in_progress_task_ids = control_snapshot
             .ready_tasks
             .iter()
@@ -247,9 +240,10 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             }
         }
         if recovered_intent {
-            control_snapshot = self.agent_control_snapshot_for_active_member(
+            control_snapshot = self.agent_control_snapshot_with_projects(
                 config.agent_profile_id,
                 config.company_id,
+                &projects,
             )?;
         }
         let pending_events = control_snapshot.actionable_events.clone();
