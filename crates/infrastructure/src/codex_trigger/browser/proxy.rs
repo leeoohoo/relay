@@ -48,6 +48,7 @@ pub(super) struct BrowserProxyGrant {
     pub cdp_page_id: String,
     pub marker_url: String,
     pub workspace: PathBuf,
+    last_used_at: Arc<StdMutex<std::time::Instant>>,
     upstream_page_id: Arc<StdMutex<Option<u64>>>,
 }
 
@@ -56,6 +57,7 @@ impl BrowserProxyGrant {
         agent_id: Uuid,
         browser_endpoint: String,
         cdp_page_id: String,
+        last_used_at: Arc<StdMutex<std::time::Instant>>,
         workspace: PathBuf,
     ) -> Self {
         Self {
@@ -64,7 +66,14 @@ impl BrowserProxyGrant {
             cdp_page_id,
             marker_url: agent_browser_page_url(agent_id),
             workspace,
+            last_used_at,
             upstream_page_id: Arc::new(StdMutex::new(None)),
+        }
+    }
+
+    fn touch(&self) {
+        if let Ok(mut last_used_at) = self.last_used_at.lock() {
+            *last_used_at = std::time::Instant::now();
         }
     }
 }
@@ -265,14 +274,17 @@ impl BrowserProxyHandler {
             .ok_or_else(|| {
                 ErrorData::invalid_request("managed browser authentication is missing", None)
             })?;
-        self.grants
+        let grant = self
+            .grants
             .read()
             .map_err(|_| ErrorData::internal_error("browser grant lock failed", None))?
             .get(token)
             .cloned()
             .ok_or_else(|| {
                 ErrorData::invalid_request("managed browser authentication is invalid", None)
-            })
+            })?;
+        grant.touch();
+        Ok(grant)
     }
 
     async fn call_tool_serialized(
@@ -802,6 +814,7 @@ mod tests {
                         agent_id,
                         "http://127.0.0.1:9222".into(),
                         "page".into(),
+                        Arc::new(StdMutex::new(std::time::Instant::now())),
                         root.clone(),
                     ),
                 )

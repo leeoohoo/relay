@@ -65,7 +65,7 @@ struct HostBrowserProcess {
 #[derive(Debug, Clone)]
 struct AgentBrowserPage {
     page_id: String,
-    last_used_at: std::time::Instant,
+    last_used_at: Arc<Mutex<std::time::Instant>>,
 }
 
 fn disposable_browser_page_url(url: &str) -> bool {
@@ -85,20 +85,35 @@ impl Drop for HostBrowserProcess {
     }
 }
 
-fn expired_agent_pages(
+fn reclaimable_agent_pages(
     process: &HostBrowserProcess,
     active_agent_ids: &HashSet<Uuid>,
     now: std::time::Instant,
     idle_timeout: Duration,
+    max_idle_pages: usize,
 ) -> Vec<(Uuid, String)> {
-    process
+    let mut inactive_pages = process
         .agent_pages
         .iter()
-        .filter(|(agent_id, page)| {
-            !active_agent_ids.contains(agent_id)
-                && now.saturating_duration_since(page.last_used_at) >= idle_timeout
+        .filter(|(agent_id, _)| !active_agent_ids.contains(agent_id))
+        .map(|(agent_id, page)| {
+            let last_used_at = page
+                .last_used_at
+                .lock()
+                .map(|last_used_at| *last_used_at)
+                .unwrap_or(now);
+            (*agent_id, page.page_id.clone(), last_used_at)
         })
-        .map(|(agent_id, page)| (*agent_id, page.page_id.clone()))
+        .collect::<Vec<_>>();
+    inactive_pages.sort_by_key(|(agent_id, _, last_used_at)| (*last_used_at, *agent_id));
+    let overflow = inactive_pages.len().saturating_sub(max_idle_pages);
+    inactive_pages
+        .into_iter()
+        .enumerate()
+        .filter(|(index, (_, _, last_used_at))| {
+            *index < overflow || now.saturating_duration_since(*last_used_at) >= idle_timeout
+        })
+        .map(|(_, (agent_id, page_id, _))| (agent_id, page_id))
         .collect()
 }
 
@@ -115,6 +130,7 @@ pub(super) struct BrowserMcpConfig {
     docker_memory: String,
     host_browser_idle_timeout: Duration,
     host_page_idle_timeout: Duration,
+    host_max_idle_pages: usize,
     pool: Arc<Mutex<Option<HostBrowserProcess>>>,
 }
 
@@ -132,6 +148,7 @@ impl BrowserMcpConfig {
             docker_memory: "768m".into(),
             host_browser_idle_timeout: Duration::from_secs(15 * 60),
             host_page_idle_timeout: Duration::from_secs(15 * 60),
+            host_max_idle_pages: 2,
             pool: Arc::new(Mutex::new(None)),
         }
     }
@@ -186,6 +203,11 @@ impl BrowserMcpConfig {
                 .map(|value| value.clamp(300, 86_400))
                 .unwrap_or(15 * 60),
         );
+        let host_max_idle_pages = std::env::var("RELAY_CHROME_MAX_IDLE_PAGES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.min(32))
+            .unwrap_or(2);
         validate_safe_value(&docker_command, "Chrome DevTools MCP Docker command", 1_024)?;
         validate_safe_value(&image, "Chrome DevTools MCP image", 256)?;
         validate_safe_value(&docker_cpus, "Chrome Docker CPU limit", 32)?;
@@ -215,6 +237,7 @@ impl BrowserMcpConfig {
             docker_memory,
             host_browser_idle_timeout,
             host_page_idle_timeout,
+            host_max_idle_pages,
             pool: Arc::new(Mutex::new(None)),
         })
     }
@@ -233,6 +256,7 @@ impl BrowserMcpConfig {
             docker_memory: "768m".into(),
             host_browser_idle_timeout: Duration::from_secs(15 * 60),
             host_page_idle_timeout: Duration::from_secs(15 * 60),
+            host_max_idle_pages: 2,
             pool: Arc::new(Mutex::new(None)),
         }
     }
@@ -254,6 +278,7 @@ impl BrowserMcpConfig {
             docker_memory: "768m".into(),
             host_browser_idle_timeout: Duration::from_secs(15 * 60),
             host_page_idle_timeout: Duration::from_secs(15 * 60),
+            host_max_idle_pages: 2,
             pool: Arc::new(Mutex::new(None)),
         };
         config
@@ -328,7 +353,7 @@ impl BrowserMcpConfig {
         run_token: &str,
     ) -> AppResult<ManagedCodexMcpServer> {
         let endpoint = self.ensure_host_browser(agent_id)?;
-        let page_id = self.ensure_agent_browser_page(&endpoint, agent_id)?;
+        let page = self.ensure_agent_browser_page(&endpoint, agent_id)?;
         let proxy_url = self.ensure_host_proxy(&endpoint)?;
         self.close_unmanaged_disposable_pages(&endpoint);
         let mut server = managed_server(String::new(), Vec::new(), 20);
@@ -353,7 +378,13 @@ impl BrowserMcpConfig {
         })?;
         proxy.register(
             run_token,
-            BrowserProxyGrant::new(agent_id, endpoint, page_id, workspace.to_path_buf()),
+            BrowserProxyGrant::new(
+                agent_id,
+                endpoint,
+                page.page_id,
+                page.last_used_at,
+                workspace.to_path_buf(),
+            ),
         )?;
         Ok(server)
     }
@@ -543,7 +574,11 @@ impl BrowserMcpConfig {
         )))
     }
 
-    fn ensure_agent_browser_page(&self, endpoint: &str, agent_id: Uuid) -> AppResult<String> {
+    fn ensure_agent_browser_page(
+        &self,
+        endpoint: &str,
+        agent_id: Uuid,
+    ) -> AppResult<AgentBrowserPage> {
         let page_url = agent_browser_page_url(agent_id);
         let browser_pages = browser_debug_json(endpoint, "GET", "/json/list")?;
         let browser_pages = browser_pages.as_array().ok_or_else(|| {
@@ -560,8 +595,10 @@ impl BrowserMcpConfig {
                 .iter()
                 .any(|item| item.get("id").and_then(Value::as_str) == Some(page.page_id.as_str()))
         }) {
-            page.last_used_at = std::time::Instant::now();
-            return Ok(page.page_id.clone());
+            if let Ok(mut last_used_at) = page.last_used_at.lock() {
+                *last_used_at = std::time::Instant::now();
+            }
+            return Ok(page.clone());
         }
         if let Some(page_id) = browser_pages.iter().find_map(|page| {
             (page.get("url").and_then(Value::as_str) == Some(page_url.as_str()))
@@ -569,14 +606,12 @@ impl BrowserMcpConfig {
                 .flatten()
         }) {
             validate_browser_page_id(page_id)?;
-            process.agent_pages.insert(
-                agent_id,
-                AgentBrowserPage {
-                    page_id: page_id.to_string(),
-                    last_used_at: std::time::Instant::now(),
-                },
-            );
-            return Ok(page_id.to_string());
+            let page = AgentBrowserPage {
+                page_id: page_id.to_string(),
+                last_used_at: Arc::new(Mutex::new(std::time::Instant::now())),
+            };
+            process.agent_pages.insert(agent_id, page.clone());
+            return Ok(page);
         }
 
         let encoded_url = page_url.replace('#', "%23");
@@ -586,14 +621,12 @@ impl BrowserMcpConfig {
             .and_then(Value::as_str)
             .ok_or_else(|| AppError::Internal("managed browser did not return a page ID".into()))?;
         validate_browser_page_id(page_id)?;
-        process.agent_pages.insert(
-            agent_id,
-            AgentBrowserPage {
-                page_id: page_id.to_string(),
-                last_used_at: std::time::Instant::now(),
-            },
-        );
-        Ok(page_id.to_string())
+        let page = AgentBrowserPage {
+            page_id: page_id.to_string(),
+            last_used_at: Arc::new(Mutex::new(std::time::Instant::now())),
+        };
+        process.agent_pages.insert(agent_id, page.clone());
+        Ok(page)
     }
 
     fn prune_idle_host_browsers(
@@ -630,7 +663,13 @@ impl BrowserMcpConfig {
             return Ok((0, 0));
         };
         let endpoint = process.endpoint.clone();
-        let expired_pages = expired_agent_pages(process, active_agent_ids, now, page_idle_timeout);
+        let expired_pages = reclaimable_agent_pages(
+            process,
+            active_agent_ids,
+            now,
+            page_idle_timeout,
+            self.host_max_idle_pages,
+        );
         drop(pool);
         let mut closed_pages = 0;
         for (agent_id, page_id) in expired_pages {
