@@ -13,6 +13,8 @@ use uuid::Uuid;
 use ai_chat_domain::company::CompanyRealtimeSignal;
 use ai_chat_shared::{AppError, AppResult};
 
+const REALTIME_COALESCE_WINDOW: Duration = Duration::from_millis(10);
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct QueueChecks {
     pub(super) agents: bool,
@@ -97,8 +99,9 @@ pub(super) async fn next_realtime_wake(
     loop {
         match receiver.recv().await {
             Ok(signal) => {
-                let checks = filter.classify(signal);
+                let mut checks = filter.classify(signal);
                 if !checks.is_empty() {
+                    coalesce_realtime_wakes(receiver, filter, &mut checks).await;
                     return checks;
                 }
                 ignored += 1;
@@ -118,6 +121,45 @@ pub(super) async fn next_realtime_wake(
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 return QueueChecks::all();
             }
+        }
+    }
+}
+
+async fn coalesce_realtime_wakes(
+    receiver: &mut broadcast::Receiver<CompanyRealtimeSignal>,
+    filter: &mut RealtimeWakeFilter,
+    combined: &mut QueueChecks,
+) {
+    let deadline = tokio::time::Instant::now() + REALTIME_COALESCE_WINDOW;
+    loop {
+        let received = match receiver.try_recv() {
+            Ok(signal) => Ok(signal),
+            Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                tracing::warn!(
+                    skipped,
+                    "Trigger realtime listener lagged while coalescing; reconciling queues"
+                );
+                combined.merge(QueueChecks::all());
+                continue;
+            }
+            Err(broadcast::error::TryRecvError::Closed) => break,
+            Err(broadcast::error::TryRecvError::Empty) => {
+                match tokio::time::timeout_at(deadline, receiver.recv()).await {
+                    Ok(result) => result,
+                    Err(_) => break,
+                }
+            }
+        };
+        match received {
+            Ok(signal) => combined.merge(filter.classify(signal)),
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(
+                    skipped,
+                    "Trigger realtime listener lagged while coalescing; reconciling queues"
+                );
+                combined.merge(QueueChecks::all());
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
         }
     }
 }
@@ -256,6 +298,55 @@ mod tests {
         assert!(filter.classify(signal(5, None)).agents);
         assert!(filter.classify(signal(5, None)).is_empty());
         assert!(filter.classify(signal(4, None)).is_empty());
+    }
+
+    #[tokio::test]
+    async fn realtime_wake_coalesces_events_already_waiting_in_the_channel() {
+        let (sender, _) = broadcast::channel(8);
+        let mut receiver = sender.subscribe();
+        sender
+            .send(signal(1, Some("codex.trigger.updated")))
+            .expect("send first Agent wake");
+        sender
+            .send(signal(2, Some("codex.plugin.operation.updated")))
+            .expect("send plugin wake");
+        sender
+            .send(signal(3, Some("codex.trigger.updated")))
+            .expect("send second Agent wake");
+
+        let mut filter = RealtimeWakeFilter::default();
+        let checks = next_realtime_wake(&mut receiver, &mut filter).await;
+
+        assert!(checks.agents);
+        assert!(checks.plugins);
+        assert_eq!(filter.last_sequence_by_company.get(&Uuid::nil()), Some(&3));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn realtime_wake_coalesces_events_arriving_in_the_same_short_burst() {
+        let (sender, _) = broadcast::channel(8);
+        let mut receiver = sender.subscribe();
+        sender
+            .send(signal(1, Some("codex.trigger.updated")))
+            .expect("send Agent wake");
+        let delayed_sender = sender.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            delayed_sender
+                .send(signal(2, Some("codex.plugin.operation.updated")))
+                .expect("send delayed plugin wake");
+        });
+
+        let mut filter = RealtimeWakeFilter::default();
+        let checks = next_realtime_wake(&mut receiver, &mut filter).await;
+
+        assert!(checks.agents);
+        assert!(checks.plugins);
+        assert_eq!(filter.last_sequence_by_company.get(&Uuid::nil()), Some(&2));
     }
 
     #[test]
