@@ -89,6 +89,7 @@ services:
       API_PORT: 8080
       DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}
       DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-16}
+      DATABASE_POOL_MIN_IDLE: ${DATABASE_POOL_MIN_IDLE:-1}
       AGENT_TRIGGER_MANAGED_PROJECTS_ROOT: ${AGENT_TRIGGER_MANAGED_PROJECTS_ROOT:-/relay-workspace}
       RELAY_DEFAULT_WORKSPACE_ROOT: ${RELAY_DEFAULT_WORKSPACE_ROOT:-/relay-workspace}
       AGENT_TRIGGER_MODEL_CATALOG_PATH: /relay-trigger-state/codex-models.json

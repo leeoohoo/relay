@@ -103,14 +103,14 @@ impl PostgresPlatformRepository {
     pub fn connect(database_url: &str) -> anyhow::Result<Self> {
         let postgres_config = database_url.parse::<postgres::Config>()?;
         let manager = PostgresConnectionManager::new(postgres_config, NoTls);
-        let max_size = std::env::var("DATABASE_POOL_SIZE")
-            .ok()
-            .and_then(|value| value.parse::<u32>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(16);
+        let (max_size, min_idle) = database_pool_sizes(
+            std::env::var("DATABASE_POOL_SIZE").ok().as_deref(),
+            std::env::var("DATABASE_POOL_MIN_IDLE").ok().as_deref(),
+        );
         let pool = run_sync_postgres(|| {
             Pool::builder()
                 .max_size(max_size)
+                .min_idle(Some(min_idle))
                 .build(manager)
                 .map_err(|error| AppError::Internal(format!("postgres pool error: {error}")))
         })
@@ -164,6 +164,18 @@ impl PostgresPlatformRepository {
             Ok(output)
         })
     }
+}
+
+fn database_pool_sizes(max_size: Option<&str>, min_idle: Option<&str>) -> (u32, u32) {
+    let max_size = max_size
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(16);
+    let min_idle = min_idle
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1)
+        .min(max_size);
+    (max_size, min_idle)
 }
 
 fn run_sync_postgres<T: Send>(f: impl FnOnce() -> AppResult<T> + Send) -> AppResult<T> {

@@ -6,6 +6,18 @@ fn integration_database_url() -> String {
 }
 
 #[test]
+fn postgres_pool_keeps_a_small_idle_floor_and_expands_on_demand() {
+    assert_eq!(database_pool_sizes(None, None), (16, 1));
+    assert_eq!(database_pool_sizes(Some("8"), Some("2")), (8, 2));
+    assert_eq!(database_pool_sizes(Some("4"), Some("20")), (4, 4));
+    assert_eq!(
+        database_pool_sizes(Some("invalid"), Some("invalid")),
+        (16, 1)
+    );
+    assert_eq!(database_pool_sizes(Some("8"), Some("0")), (8, 0));
+}
+
+#[test]
 #[ignore = "requires a migrated PostgreSQL database"]
 fn project_cleanup_jobs_enforce_postgres_leases_retries_and_completion() {
     let repository = PostgresPlatformRepository::connect(&integration_database_url())
