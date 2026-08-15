@@ -244,6 +244,13 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         })
     }
 
+    fn next_eligible_agent_codex_trigger_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
+        super::codex_runtime_schedule::next_eligible_agent_codex_trigger_at(self, now)
+    }
+
     fn abandon_agent_codex_trigger_leases(
         &self,
         lease_owner: &str,
@@ -984,16 +991,6 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         &self,
         now: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<usize> {
-        self.with_client(|client| {
-            client
-                .execute(
-                    r#"
-                    DELETE FROM agent_codex_run_tokens
-                    WHERE expires_at <= $1 OR revoked_at IS NOT NULL
-                    "#,
-                    &[&now],
-                )
-                .map(|count| count as usize)
-        })
+        super::codex_runtime_tokens::delete_expired_agent_codex_run_tokens(self, now)
     }
 }

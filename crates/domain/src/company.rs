@@ -799,6 +799,12 @@ pub struct CompanyRealtimeEvent {
 pub struct CompanyRealtimeSignal {
     pub sequence_id: i64,
     pub company_id: Uuid,
+    #[serde(default)]
+    pub event_type: Option<String>,
+    #[serde(default)]
+    pub aggregate_type: Option<String>,
+    #[serde(default)]
+    pub aggregate_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

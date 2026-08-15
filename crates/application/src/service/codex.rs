@@ -125,6 +125,12 @@ pub trait CodexRuntimePlatformRepository: Send + Sync {
     ) -> AppResult<Vec<AgentCodexTriggerConfig>> {
         Ok(Vec::new())
     }
+    fn next_eligible_agent_codex_trigger_at(
+        &self,
+        _now: DateTime<Utc>,
+    ) -> AppResult<Option<DateTime<Utc>>> {
+        Ok(None)
+    }
     fn abandon_agent_codex_trigger_leases(
         &self,
         _lease_owner: &str,

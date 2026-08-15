@@ -374,6 +374,58 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             .collect())
     }
 
+    fn next_eligible_agent_codex_trigger_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
+        let guard = self.inner.read().expect("memory repo lock poisoned");
+        let logged_in_human_ids = guard
+            .human_sessions
+            .values()
+            .filter(|session| {
+                session.revoked_at.is_none()
+                    && session.expires_at > now
+                    && session.last_used_at.unwrap_or(session.created_at)
+                        > now - chrono::Duration::seconds(60)
+            })
+            .map(|session| session.human_user_id)
+            .collect::<std::collections::HashSet<_>>();
+        let logged_in_company_ids = guard
+            .company_human_members
+            .values()
+            .filter(|membership| {
+                membership.status == "active"
+                    && logged_in_human_ids.contains(&membership.human_user_id)
+            })
+            .map(|membership| membership.company_id)
+            .collect::<std::collections::HashSet<_>>();
+        Ok(guard
+            .agent_codex_trigger_configs
+            .values()
+            .filter(|config| {
+                config.status == AGENT_CODEX_TRIGGER_STATUS_ACTIVE
+                    && logged_in_company_ids.contains(&config.company_id)
+            })
+            .filter(|config| {
+                !guard.agent_codex_trigger_runs.values().any(|run| {
+                    run.agent_profile_id == config.agent_profile_id
+                        && run.status == AGENT_CODEX_RUN_STATUS_RUNNING
+                        && run.started_at
+                            + chrono::Duration::seconds(i64::from(config.max_run_seconds) + 60)
+                            > now
+                })
+            })
+            .map(|config| {
+                config
+                    .lease_expires_at
+                    .filter(|expires_at| *expires_at > now)
+                    .map_or(config.next_run_at, |expires_at| {
+                        config.next_run_at.max(expires_at)
+                    })
+            })
+            .min())
+    }
+
     fn abandon_agent_codex_trigger_leases(
         &self,
         lease_owner: &str,

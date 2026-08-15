@@ -63,6 +63,7 @@ use ai_chat_infrastructure::{
         PreparedGitWorkspace,
     },
     harness::HarnessProvisioner,
+    realtime::spawn_postgres_realtime_listener,
     RepositoryAdapter,
 };
 use ai_chat_shared::{hash_secret, now_utc, AppError, AppResult};
@@ -535,6 +536,7 @@ fn main() -> anyhow::Result<()> {
         &codex_runner,
         &codex_control,
         &config,
+        &api_config.database_url,
     ))
 }
 
@@ -545,6 +547,7 @@ async fn run_trigger_loop(
     codex_runner: &CodexTriggerRunner,
     codex_control: &CodexControlStore,
     config: &TriggerServiceConfig,
+    database_url: &str,
 ) -> anyhow::Result<()> {
     let requested_initial_batch_size =
         effective_agent_trigger_batch_size(codex_control, config.batch_size)
@@ -552,7 +555,7 @@ async fn run_trigger_loop(
     let initial_batch_size = requested_initial_batch_size.min(config.resource_concurrency_limit);
     tracing::info!(
         lease_owner = %config.lease_owner,
-        poll_interval_seconds = config.poll_interval.as_secs(),
+        fallback_poll_interval_seconds = config.poll_interval.as_secs(),
         environment_batch_size = config.batch_size,
         resource_concurrency_limit = config.resource_concurrency_limit,
         effective_batch_size = initial_batch_size,
@@ -572,6 +575,23 @@ async fn run_trigger_loop(
     let mut next_browser_cleanup = tokio::time::Instant::now();
     let mut next_memory_probe = tokio::time::Instant::now();
     let mut resource_pressure = ResourcePressureState::default();
+    let (realtime_sender, _) = tokio::sync::broadcast::channel(2_048);
+    let mut realtime_receiver = realtime_sender.subscribe();
+    let _realtime_listener =
+        spawn_postgres_realtime_listener(database_url.to_string(), realtime_sender);
+    let mut realtime_filter = RealtimeWakeFilter::default();
+    let mut control_watcher = match ControlFileWatcher::start(codex_control.control_root()) {
+        Ok(watcher) => Some(watcher),
+        Err(error) => {
+            tracing::warn!(%error, "Codex control file events unavailable; fallback reconciliation remains active");
+            None
+        }
+    };
+    let fallback_interval = jittered_fallback_interval(config.poll_interval, &config.lease_owner);
+    let mut next_fallback = tokio::time::Instant::now() + fallback_interval;
+    let mut next_agent_due_at = None;
+    let mut queue_checks = QueueChecks::all();
+    let mut agent_claims_blocked_by_resources = false;
     publish_codex_runtime_probe(codex_control, codex_runner)?;
     if codex_runner.detect_version().is_none() && config.codex_auto_install {
         let runtime = codex_control.runtime()?;
@@ -589,6 +609,9 @@ async fn run_trigger_loop(
             if resource_pressure.refresh(config.minimum_available_memory_bytes, config.logical_cpus)
             {
                 next_browser_cleanup = tokio::time::Instant::now();
+            }
+            if agent_claims_blocked_by_resources {
+                queue_checks.agents = true;
             }
             next_memory_probe = tokio::time::Instant::now() + StdDuration::from_secs(10);
         }
@@ -625,10 +648,16 @@ async fn run_trigger_loop(
                     tracing::warn!(error = %sanitize_error(&error.to_string()), "Codex run Watchdog failed")
                 }
             }
-            next_watchdog = tokio::time::Instant::now() + StdDuration::from_secs(10);
+            next_watchdog = tokio::time::Instant::now()
+                + if running.is_empty() {
+                    StdDuration::from_secs(60)
+                } else {
+                    StdDuration::from_secs(10)
+                };
         }
-        if running.is_empty() && plugin_operations.is_empty() {
-            if let Some(request) = codex_control.claim_next_request()? {
+        if queue_checks.control && running.is_empty() && plugin_operations.is_empty() {
+            queue_checks.control = false;
+            while let Some(request) = codex_control.claim_next_request()? {
                 process_codex_control_request(codex_control, codex_runner, config, request).await;
                 publish_codex_runtime_probe(codex_control, codex_runner)?;
                 next_model_discovery = tokio::time::Instant::now();
@@ -669,7 +698,8 @@ async fn run_trigger_loop(
             }
             next_plugin_discovery = tokio::time::Instant::now() + config.plugin_discovery_interval;
         }
-        if plugin_operations.is_empty() {
+        if queue_checks.plugins && plugin_operations.is_empty() {
+            queue_checks.plugins = false;
             match platform.claim_codex_plugin_operations(
                 &config.plugin_host_id,
                 &config.lease_owner,
@@ -693,43 +723,55 @@ async fn run_trigger_loop(
                 }
             }
         }
-        let requested_batch_size = match effective_agent_trigger_batch_size(
-            codex_control,
-            config.batch_size,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(
-                    error = %sanitize_error(&error.to_string()),
-                    environment_batch_size = config.batch_size,
-                    "cannot read managed Agent Trigger batch size; using the environment default"
-                );
-                config.batch_size
+        if queue_checks.agents {
+            queue_checks.agents = false;
+            let requested_batch_size = match effective_agent_trigger_batch_size(
+                codex_control,
+                config.batch_size,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %sanitize_error(&error.to_string()),
+                        environment_batch_size = config.batch_size,
+                        "cannot read managed Agent Trigger batch size; using the environment default"
+                    );
+                    config.batch_size
+                }
+            };
+            let effective_batch_size = requested_batch_size.min(config.resource_concurrency_limit);
+            let concurrency_slots = effective_batch_size.saturating_sub(running.len());
+            let available_slots = resource_pressure.claim_slots(
+                concurrency_slots,
+                config.minimum_available_memory_bytes,
+                config.logical_cpus,
+            );
+            agent_claims_blocked_by_resources = concurrency_slots > 0 && available_slots == 0;
+            if available_slots > 0 {
+                let claimed = platform
+                    .claim_due_agent_codex_triggers(&config.lease_owner, available_slots)
+                    .map_err(anyhow::Error::msg)?;
+                for trigger in claimed {
+                    running_agents.insert(trigger.agent_profile_id);
+                    running.push(process_claimed_trigger(
+                        platform,
+                        harness,
+                        workspace_manager,
+                        codex_runner,
+                        codex_control,
+                        config,
+                        trigger,
+                    ));
+                }
             }
-        };
-        let effective_batch_size = requested_batch_size.min(config.resource_concurrency_limit);
-        let concurrency_slots = effective_batch_size.saturating_sub(running.len());
-        let available_slots = resource_pressure.claim_slots(
-            concurrency_slots,
-            config.minimum_available_memory_bytes,
-            config.logical_cpus,
-        );
-        if available_slots > 0 {
-            let claimed = platform
-                .claim_due_agent_codex_triggers(&config.lease_owner, available_slots)
-                .map_err(anyhow::Error::msg)?;
-            for trigger in claimed {
-                running_agents.insert(trigger.agent_profile_id);
-                running.push(process_claimed_trigger(
-                    platform,
-                    harness,
-                    workspace_manager,
-                    codex_runner,
-                    codex_control,
-                    config,
-                    trigger,
-                ));
-            }
+            next_agent_due_at = if available_slots > 0 && running.len() < effective_batch_size {
+                platform.next_eligible_agent_codex_trigger_at().unwrap_or_else(|error| {
+                    tracing::warn!(%error, "cannot schedule next Agent Trigger deadline; fallback reconciliation will retry");
+                    None
+                })
+            } else {
+                None
+            };
         }
 
         if config.run_once {
@@ -740,23 +782,55 @@ async fn run_trigger_loop(
             break;
         }
 
-        let shutdown_requested = if running.is_empty() && plugin_operations.is_empty() {
-            tokio::select! {
-                _ = tokio::time::sleep(config.poll_interval) => false,
-                _ = &mut shutdown => true,
-            }
-        } else {
-            tokio::select! {
-                _ = tokio::time::sleep(config.poll_interval) => false,
-                completed_agent = running.next(), if !running.is_empty() => {
-                    if let Some(agent_id) = completed_agent {
-                        running_agents.remove(&agent_id);
-                    }
-                    false
-                },
-                _ = plugin_operations.next(), if !plugin_operations.is_empty() => false,
-                _ = &mut shutdown => true,
-            }
+        let next_maintenance = [
+            next_model_discovery,
+            next_default_auth_discovery,
+            next_mcp_discovery,
+            next_plugin_discovery,
+            next_update_check,
+            next_watchdog,
+            next_browser_cleanup,
+            next_memory_probe,
+        ]
+        .into_iter()
+        .min()
+        .expect("maintenance deadlines are available");
+        let scheduled_deadline = scheduled_instant(next_agent_due_at);
+        let shutdown_requested = tokio::select! {
+            _ = tokio::time::sleep_until(next_maintenance) => false,
+            _ = tokio::time::sleep_until(next_fallback) => {
+                tracing::debug!("Trigger fallback reconciliation requested");
+                queue_checks.merge(QueueChecks::all());
+                next_fallback = tokio::time::Instant::now() + fallback_interval;
+                false
+            },
+            _ = tokio::time::sleep_until(scheduled_deadline), if next_agent_due_at.is_some() => {
+                tracing::debug!("scheduled Agent Trigger deadline reached");
+                queue_checks.agents = true;
+                false
+            },
+            checks = next_realtime_wake(&mut realtime_receiver, &mut realtime_filter) => {
+                tracing::debug!(agents = checks.agents, plugins = checks.plugins, "Trigger realtime queue wake received");
+                queue_checks.merge(checks);
+                false
+            },
+            checks = next_control_wake(&mut control_watcher) => {
+                tracing::debug!(agents = checks.agents, control = checks.control, "Trigger local control file wake received");
+                queue_checks.merge(checks);
+                false
+            },
+            completed_agent = running.next(), if !running.is_empty() => {
+                if let Some(agent_id) = completed_agent {
+                    running_agents.remove(&agent_id);
+                }
+                queue_checks.agents = true;
+                false
+            },
+            _ = plugin_operations.next(), if !plugin_operations.is_empty() => {
+                queue_checks.plugins = true;
+                false
+            },
+            _ = &mut shutdown => true,
         };
         if shutdown_requested {
             tracing::info!(
@@ -808,155 +882,20 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-impl TriggerServiceConfig {
-    fn from_env() -> AppResult<Self> {
-        let instance = std::env::var("AGENT_TRIGGER_INSTANCE_ID")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
-        if instance.chars().count() > 80 || instance.chars().any(char::is_control) {
-            return Err(AppError::Validation(
-                "AGENT_TRIGGER_INSTANCE_ID is invalid".into(),
-            ));
-        }
-        let host = whoami::fallible::hostname().unwrap_or_else(|_| "unknown-host".into());
-        let os_user = std::env::var("USER")
-            .or_else(|_| std::env::var("USERNAME"))
-            .unwrap_or_else(|_| "unknown-user".into());
-        let plugin_host_id = std::env::var("AGENT_TRIGGER_PLUGIN_HOST_ID")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| format!("{host}:{os_user}"));
-        if plugin_host_id.chars().count() > 160 || plugin_host_id.chars().any(char::is_control) {
-            return Err(AppError::Validation(
-                "AGENT_TRIGGER_PLUGIN_HOST_ID is invalid".into(),
-            ));
-        }
-        let poll_interval_seconds = std::env::var("AGENT_TRIGGER_POLL_INTERVAL_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(|value| value.clamp(1, 60))
-            .unwrap_or(2);
-        let run_heartbeat_stale_after_seconds =
-            std::env::var("AGENT_TRIGGER_RUN_HEARTBEAT_STALE_SECONDS")
-                .ok()
-                .and_then(|value| value.parse::<i64>().ok())
-                .map(|value| value.clamp(60, 900))
-                .unwrap_or(180);
-        let batch_size = agent_trigger_batch_size_from_env();
-        let logical_cpus = logical_cpu_count();
-        let resource_concurrency_limit = std::env::var("AGENT_TRIGGER_RESOURCE_CONCURRENCY_LIMIT")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .map(|value| value.clamp(1, 32))
-            .unwrap_or_else(default_resource_concurrency_limit);
-        let minimum_available_memory_bytes = minimum_available_memory_bytes_from_env();
-        let run_once = bool_env("AGENT_TRIGGER_RUN_ONCE", false);
-        let model_catalog_path = std::env::var("AGENT_TRIGGER_MODEL_CATALOG_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(".relay-agent-trigger/codex-models.json"));
-        let model_discovery_profiles = std::env::var("AGENT_TRIGGER_MODEL_DISCOVERY_PROFILES")
-            .ok()
-            .map(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|profiles| !profiles.is_empty())
-            .unwrap_or_else(|| vec!["default".into()]);
-        let model_discovery_interval = StdDuration::from_secs(
-            std::env::var("AGENT_TRIGGER_MODEL_DISCOVERY_INTERVAL_SECONDS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(60, 86_400))
-                .unwrap_or(900),
-        );
-        let default_auth_discovery_interval = StdDuration::from_secs(
-            std::env::var("AGENT_TRIGGER_CODEX_AUTH_DISCOVERY_INTERVAL_SECONDS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(15, 3_600))
-                .unwrap_or(60),
-        );
-        let mcp_discovery_interval = StdDuration::from_secs(
-            std::env::var("AGENT_TRIGGER_MCP_DISCOVERY_INTERVAL_SECONDS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(15, 3_600))
-                .unwrap_or(60),
-        );
-        let plugin_discovery_interval = StdDuration::from_secs(
-            std::env::var("AGENT_TRIGGER_PLUGIN_DISCOVERY_INTERVAL_SECONDS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(30, 86_400))
-                .unwrap_or(300),
-        );
-        let codex_auto_install = bool_env("AGENT_TRIGGER_CODEX_AUTO_INSTALL", false);
-        let codex_install_url = std::env::var("AGENT_TRIGGER_CODEX_INSTALL_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| default_codex_install_url(std::env::consts::OS).into());
-        if !codex_install_url.starts_with("https://") {
-            return Err(AppError::Validation(
-                "AGENT_TRIGGER_CODEX_INSTALL_URL must use https".into(),
-            ));
-        }
-        let codex_update_registry_url = std::env::var("AGENT_TRIGGER_CODEX_UPDATE_REGISTRY_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "https://registry.npmjs.org/@openai%2Fcodex/latest".into());
-        if !codex_update_registry_url.starts_with("https://") {
-            return Err(AppError::Validation(
-                "AGENT_TRIGGER_CODEX_UPDATE_REGISTRY_URL must use https".into(),
-            ));
-        }
-        let codex_update_check_interval = StdDuration::from_secs(
-            std::env::var("AGENT_TRIGGER_CODEX_UPDATE_CHECK_INTERVAL_SECONDS")
-                .ok()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(|value| value.clamp(300, 86_400))
-                .unwrap_or(3_600),
-        );
-        Ok(Self {
-            lease_owner: format!("{host}:{instance}"),
-            plugin_host_id,
-            hostname: host,
-            poll_interval: StdDuration::from_secs(poll_interval_seconds),
-            run_heartbeat_stale_after_seconds,
-            batch_size,
-            resource_concurrency_limit,
-            logical_cpus,
-            minimum_available_memory_bytes,
-            run_once,
-            model_catalog_path,
-            model_discovery_profiles,
-            model_discovery_interval,
-            default_auth_discovery_interval,
-            mcp_discovery_interval,
-            plugin_discovery_interval,
-            codex_auto_install,
-            codex_install_url,
-            codex_update_registry_url,
-            codex_update_check_interval,
-        })
-    }
-}
-
 mod codex_control;
 mod execution;
 mod execution_result;
 mod relay_skills;
 mod resource_limits;
+mod trigger_config;
+mod wake;
 
 use codex_control::*;
 use execution::*;
 use execution_result::*;
 use relay_skills::*;
 use resource_limits::*;
+use wake::*;
 
 #[cfg(test)]
 mod prompt_tests;

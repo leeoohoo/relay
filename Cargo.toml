@@ -43,6 +43,7 @@ r2d2 = "0.8.10"
 r2d2_postgres = "0.18.2"
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 libc = "0.2.177"
+notify = "8.2.0"
 whoami = "=1.6.1"
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["full"] }

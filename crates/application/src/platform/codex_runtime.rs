@@ -157,6 +157,12 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .claim_due_agent_codex_trigger_configs(lease_owner, now_utc(), limit.clamp(1, 100))
     }
 
+    pub fn next_eligible_agent_codex_trigger_at(
+        &self,
+    ) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
+        self.repo.next_eligible_agent_codex_trigger_at(now_utc())
+    }
+
     pub fn is_agent_codex_trigger_active(&self, agent_id: Uuid) -> AppResult<bool> {
         Ok(self
             .repo

@@ -148,6 +148,37 @@ fn rapid_task_status_wakes_share_the_first_short_coalescing_window() {
 }
 
 #[test]
+fn next_trigger_deadline_respects_leases_and_running_cycles() {
+    let repo = MemoryPlatformRepository::default();
+    let now = now_utc();
+    let company_id = Uuid::new_v4();
+    let agent_id = Uuid::new_v4();
+    seed_logged_in_company(&repo, company_id, now);
+    let mut config = active_trigger_config(company_id, agent_id, Uuid::new_v4(), now);
+    config.next_run_at = now + chrono::Duration::seconds(10);
+    config.lease_expires_at = Some(now + chrono::Duration::seconds(20));
+    repo.inner
+        .write()
+        .expect("memory repo lock poisoned")
+        .agent_codex_trigger_configs
+        .insert(agent_id, config);
+
+    assert_eq!(
+        repo.next_eligible_agent_codex_trigger_at(now)
+            .expect("deadline"),
+        Some(now + chrono::Duration::seconds(20))
+    );
+
+    repo.insert_agent_codex_trigger_run(running_codex_run(agent_id))
+        .expect("running cycle");
+    assert_eq!(
+        repo.next_eligible_agent_codex_trigger_at(now)
+            .expect("running cycle is excluded"),
+        None
+    );
+}
+
+#[test]
 fn codex_trigger_allows_only_one_running_cycle_per_agent() {
     let repo = MemoryPlatformRepository::default();
     let agent_id = Uuid::new_v4();
