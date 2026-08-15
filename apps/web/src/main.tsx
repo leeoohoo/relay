@@ -12,6 +12,7 @@ import "./styles/theme-core.css";
 import "./styles/theme-contrast.css";
 import "./styles/auth-and-console.css";
 import "./styles/communication.css";
+import "./styles/communication-project-context.css";
 import "./styles/compact-workbench.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
