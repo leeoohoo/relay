@@ -3,12 +3,24 @@ use super::*;
 mod capabilities;
 mod run_token_guard;
 mod scheduling;
+mod session_state;
 mod settings;
 mod workspace;
 
 use capabilities::*;
 use run_token_guard::ManagedBrowserRunTokenGuard;
 pub(super) use scheduling::next_trigger_run_at;
+use scheduling::{
+    continuation_retry_delay, executable_tasks_remain, intent_progress_state,
+    made_structured_progress,
+};
+use session_state::{
+    apply_codex_result_to_run, empty_stage_session, fail_run, persist_codex_stage_session,
+};
+pub(super) use session_state::{
+    codex_session_key, codex_session_key_matches, protect_trigger_decision,
+    sanitize_workspace_output,
+};
 pub(super) use settings::resolve_effective_cli_settings;
 use workspace::prepare_project_workspace_with_credential_recovery;
 
@@ -297,10 +309,13 @@ pub(super) async fn execute_trigger(
     let mut worker_retry_counts_as_failure = false;
     let mut worker_capability_upgrade_requested = false;
     let mut worker_retry_after_seconds = 10;
+    let mut worker_continuation_summary = None;
+    let mut worker_no_progress = false;
+    let mut worker_completed_intent = false;
     let intents = platform.list_agent_execution_intents(
         trigger.agent_profile_id,
         Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
-        3,
+        1,
     );
     for mut intent in intents {
         if !platform.is_agent_codex_trigger_active(trigger.agent_profile_id)? {
@@ -325,6 +340,7 @@ pub(super) async fn execute_trigger(
             &format!("正在进入项目工作会话：{}", intent.project_id),
             None,
         );
+        let progress_before = intent_progress_state(platform, trigger, &intent).ok();
         let worker_result = execute_project_intent(
             platform,
             harness,
@@ -364,21 +380,54 @@ pub(super) async fn execute_trigger(
         };
         match worker_result {
             Ok((result, session)) if result.status == CodexRunStatus::Succeeded => {
-                intent.status = AGENT_EXECUTION_INTENT_STATUS_COMPLETED.into();
                 intent.worker_session_id = Some(session.id);
                 intent.result_summary = result
                     .final_message
                     .as_deref()
                     .map(|message| truncate(message, 4_000))
                     .unwrap_or_default();
-                intent.completed_at = Some(now_utc());
-                platform.update_agent_execution_intent(intent)?;
                 run.project_id = session.project_id;
                 run.codex_thread_id = Some(session.codex_thread_id);
                 run.final_message_summary = result
                     .final_message
                     .as_deref()
                     .map(|message| truncate(message, 2_000));
+                let progress_after = intent_progress_state(platform, trigger, &intent).ok();
+                if executable_tasks_remain(progress_after.as_ref()) {
+                    let made_progress =
+                        made_structured_progress(progress_before.as_ref(), progress_after.as_ref());
+                    worker_retry_after_seconds = continuation_retry_delay(
+                        &platform.list_agent_codex_trigger_runs(trigger.agent_profile_id, 20),
+                        run.id,
+                        intent.id,
+                        made_progress,
+                    );
+                    worker_no_progress = !made_progress;
+                    worker_continuation_summary = Some(if made_progress {
+                        "Codex 本轮已结束，但正式任务仍未完成；已保存进展并将从同一项目会话继续"
+                            .into()
+                    } else {
+                        format!(
+                            "正式任务仍未完成，且本轮未检测到任务、Attempt 或 Evidence 变化；已退避 {} 秒后继续",
+                            worker_retry_after_seconds
+                        )
+                    });
+                    intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
+                    intent.error_message = worker_continuation_summary.clone();
+                    intent.claimed_at = None;
+                    intent.completed_at = None;
+                    platform.update_agent_execution_intent(intent)?;
+                    run.waiting_on_type = worker_no_progress.then(|| "progress_backoff".into());
+                    run.state_reason = worker_continuation_summary.clone();
+                    worker_retry_requested = true;
+                    worker_failure = Some(result);
+                    break;
+                }
+                intent.status = AGENT_EXECUTION_INTENT_STATUS_COMPLETED.into();
+                intent.error_message = None;
+                intent.completed_at = Some(now_utc());
+                platform.update_agent_execution_intent(intent)?;
+                worker_completed_intent = true;
             }
             Ok((result, session)) if result.status == CodexRunStatus::TimedOut => {
                 intent.status = AGENT_EXECUTION_INTENT_STATUS_PENDING.into();
@@ -388,24 +437,36 @@ pub(super) async fn execute_trigger(
                     .as_deref()
                     .map(|message| truncate(message, 4_000))
                     .unwrap_or_default();
-                intent.error_message =
-                    Some("本轮达到运行时间上限，Relay 将从当前项目会话继续执行".into());
                 intent.claimed_at = None;
                 intent.completed_at = None;
-                platform.update_agent_execution_intent(intent)?;
                 run.project_id = session.project_id;
                 run.codex_thread_id = Some(session.codex_thread_id);
                 run.final_message_summary = result
                     .final_message
                     .as_deref()
                     .map(|message| truncate(message, 2_000));
-                record_run_activity(
-                    platform,
+                let progress_after = intent_progress_state(platform, trigger, &intent).ok();
+                let made_progress =
+                    made_structured_progress(progress_before.as_ref(), progress_after.as_ref());
+                worker_retry_after_seconds = continuation_retry_delay(
+                    &platform.list_agent_codex_trigger_runs(trigger.agent_profile_id, 20),
                     run.id,
-                    "continuing",
-                    "本轮达到运行时间上限，已保存项目会话，将自动继续",
-                    run.codex_thread_id.clone(),
+                    intent.id,
+                    made_progress,
                 );
+                worker_no_progress = !made_progress;
+                worker_continuation_summary = Some(if made_progress {
+                    "本轮达到运行时间上限，已保存结构化进展并将从同一项目会话继续".into()
+                } else {
+                    format!(
+                        "本轮达到运行时间上限，但未检测到任务、Attempt 或 Evidence 变化；已退避 {} 秒后继续",
+                        worker_retry_after_seconds
+                    )
+                });
+                intent.error_message = worker_continuation_summary.clone();
+                platform.update_agent_execution_intent(intent)?;
+                run.waiting_on_type = worker_no_progress.then(|| "progress_backoff".into());
+                run.state_reason = worker_continuation_summary.clone();
                 worker_retry_requested = true;
                 worker_failure = Some(result);
                 break;
@@ -494,6 +555,21 @@ pub(super) async fn execute_trigger(
             }
         }
     }
+    if worker_completed_intent
+        && !worker_retry_requested
+        && !platform
+            .list_agent_execution_intents(
+                trigger.agent_profile_id,
+                Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
+                1,
+            )
+            .is_empty()
+    {
+        worker_retry_requested = true;
+        worker_retry_after_seconds = 1;
+        worker_continuation_summary =
+            Some("本轮正式任务已完成，队列中仍有其他工作，将公平释放运行槽位后继续".into());
+    }
     if let Err(error) = platform.revoke_agent_codex_run_tokens(run.id) {
         tracing::error!(run_id = %run.id, error = %sanitize_error(&error.to_string()), "failed to revoke Agent Run Token");
     }
@@ -512,6 +588,15 @@ pub(super) async fn execute_trigger(
         .unwrap_or(CodexRunStatus::Succeeded);
     let (final_phase, final_summary) = if worker_capability_upgrade_requested {
         ("continuing", "已按需启用浏览器能力，即将从同一项目会话继续")
+    } else if let Some(summary) = worker_continuation_summary.as_deref() {
+        (
+            if worker_no_progress {
+                "backing_off"
+            } else {
+                "continuing"
+            },
+            summary,
+        )
     } else {
         match final_status {
             CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
@@ -662,7 +747,6 @@ async fn execute_project_intent(
     };
     Ok((result, session))
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn run_codex_stage(
     platform: &TriggerPlatform,
@@ -781,208 +865,4 @@ async fn run_codex_stage(
         *message = sanitize_workspace_output(message, &workspace.path);
     }
     Ok(result)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn persist_codex_stage_session(
-    platform: &TriggerPlatform,
-    agent_id: Uuid,
-    scope_key: &str,
-    session_kind: &str,
-    project_id: Option<Uuid>,
-    workspace: &PreparedGitWorkspace,
-    skills: &PreparedRelaySkills,
-    memories: &[AgentMemory],
-    result: &CodexRunResult,
-    replace_session: bool,
-) -> AppResult<AgentCodexSession> {
-    let thread_id = result.thread_id.clone().ok_or_else(|| {
-        AppError::Validation("successful Codex run did not return a thread ID".into())
-    })?;
-    let existing = platform.get_agent_codex_session(agent_id, scope_key);
-    let now = now_utc();
-    let replace_session = replace_session || result.replaced_failed_session;
-    if replace_session {
-        if let Some(mut archived) = existing.clone() {
-            archived.status = AGENT_CODEX_SESSION_STATUS_ARCHIVED.into();
-            archived.archived_at = Some(now);
-            archived.last_used_at = now;
-            platform.save_agent_codex_session(archived)?;
-        }
-    }
-    let existing = (!replace_session).then_some(existing).flatten();
-    let latest_generation = platform
-        .list_agent_codex_sessions(agent_id, 100)
-        .into_iter()
-        .filter(|session| session.scope_key == scope_key)
-        .map(|session| session.generation)
-        .max()
-        .unwrap_or(0);
-    let summary = result
-        .final_message
-        .as_deref()
-        .map(|message| truncate(message, 1_000))
-        .unwrap_or_default();
-    let session = AgentCodexSession {
-        id: existing
-            .as_ref()
-            .map(|session| session.id)
-            .unwrap_or_else(Uuid::new_v4),
-        agent_profile_id: agent_id,
-        session_kind: session_kind.into(),
-        scope_key: scope_key.into(),
-        project_id,
-        generation: existing
-            .as_ref()
-            .map(|session| session.generation)
-            .unwrap_or(latest_generation + 1),
-        codex_thread_id: thread_id,
-        workspace_key: codex_session_key(workspace),
-        status: AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),
-        summary_short: summary.clone(),
-        checkpoint_json: serde_json::json!({
-            "summary": summary,
-            "project_id": project_id,
-            "branch": workspace.branch,
-            "last_turn_status": match result.status {
-                CodexRunStatus::Succeeded => "succeeded",
-                CodexRunStatus::Failed => "failed",
-                CodexRunStatus::TimedOut => "timed_out",
-                CodexRunStatus::Cancelled => "cancelled",
-            },
-            "continuation_expected": result.status == CodexRunStatus::TimedOut,
-            "updated_at": now,
-        }),
-        skill_bundle_version: skills.version_hash.clone(),
-        memory_snapshot_version: memory_snapshot_version(memories),
-        policy_version: CODEX_SESSION_POLICY_VERSION.into(),
-        created_at: existing
-            .as_ref()
-            .map(|session| session.created_at)
-            .unwrap_or(now),
-        last_used_at: now,
-        archived_at: None,
-    };
-    platform.save_agent_codex_session(session.clone())?;
-    Ok(session)
-}
-
-fn memory_snapshot_version(memories: &[AgentMemory]) -> String {
-    let source = memories
-        .iter()
-        .map(|memory| format!("{}:{}:{}", memory.id, memory.updated_at, memory.topic_key))
-        .collect::<Vec<_>>()
-        .join("\n");
-    hash_secret(&source).chars().take(16).collect()
-}
-
-pub(super) fn sanitize_workspace_output(value: &str, workspace_path: &Path) -> String {
-    let mut sanitized = value.replace(workspace_path.to_string_lossy().as_ref(), ".");
-    if let Ok(canonical_path) = workspace_path.canonicalize() {
-        let canonical_path = canonical_path.to_string_lossy();
-        if canonical_path.as_ref() != workspace_path.to_string_lossy().as_ref() {
-            sanitized = sanitized.replace(canonical_path.as_ref(), ".");
-        }
-    }
-    sanitized = redact_home_user_segment(&sanitized, "/Users/", '/');
-    sanitized = redact_home_user_segment(&sanitized, "/home/", '/');
-    sanitized
-}
-
-fn redact_home_user_segment(value: &str, prefix: &str, separator: char) -> String {
-    let mut output = value.to_string();
-    let mut search_from = 0;
-    while let Some(relative_start) = output[search_from..].find(prefix) {
-        let start = search_from + relative_start;
-        let username_start = start + prefix.len();
-        let Some(relative_end) = output[username_start..].find(separator) else {
-            break;
-        };
-        let end = username_start + relative_end;
-        output.replace_range(start..end, "~");
-        search_from = start + 1;
-    }
-    output
-}
-
-fn empty_stage_session(agent_id: Uuid, project_id: Uuid) -> AgentCodexSession {
-    let now = now_utc();
-    AgentCodexSession {
-        id: Uuid::nil(),
-        agent_profile_id: agent_id,
-        session_kind: AGENT_CODEX_SESSION_KIND_PROJECT.into(),
-        scope_key: format!("project:{project_id}"),
-        project_id: Some(project_id),
-        generation: 1,
-        codex_thread_id: String::new(),
-        workspace_key: String::new(),
-        status: AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),
-        summary_short: String::new(),
-        checkpoint_json: serde_json::json!({}),
-        skill_bundle_version: String::new(),
-        memory_snapshot_version: String::new(),
-        policy_version: CODEX_SESSION_POLICY_VERSION.into(),
-        created_at: now,
-        last_used_at: now,
-        archived_at: None,
-    }
-}
-
-fn apply_codex_result_to_run(run: &mut AgentCodexTriggerRun, result: &CodexRunResult) {
-    run.codex_thread_id = result.thread_id.clone();
-    run.exit_code = result.exit_code;
-    run.finished_at = Some(now_utc());
-    run.final_message_summary = result
-        .final_message
-        .as_deref()
-        .map(|message| truncate(message, 2_000));
-    run.error_message = result
-        .error_message
-        .as_deref()
-        .map(|message| truncate(&sanitize_error(message), 2_000));
-    run.status = match result.status {
-        CodexRunStatus::Succeeded => AGENT_CODEX_RUN_STATUS_SUCCEEDED,
-        CodexRunStatus::Failed => AGENT_CODEX_RUN_STATUS_FAILED,
-        CodexRunStatus::TimedOut => AGENT_CODEX_RUN_STATUS_TIMED_OUT,
-        CodexRunStatus::Cancelled => AGENT_CODEX_RUN_STATUS_CANCELLED,
-    }
-    .into();
-}
-
-pub(super) fn protect_trigger_decision<T>(decision: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
-    catch_unwind(AssertUnwindSafe(decision)).map_err(|_| {
-        AppError::Validation(
-            "Codex trigger could not decide Agent work because the decision handler panicked"
-                .into(),
-        )
-    })?
-}
-
-pub(super) fn codex_session_key(workspace: &PreparedGitWorkspace) -> String {
-    format!("{CODEX_SESSION_POLICY_VERSION}:{}", workspace.worktree_key)
-}
-
-pub(super) fn codex_session_key_matches(saved_key: &str, current_key: &str) -> bool {
-    saved_key == current_key || saved_key.starts_with(&format!("{current_key}:"))
-}
-
-pub(super) fn fail_run(
-    platform: &TriggerPlatform,
-    run: &mut AgentCodexTriggerRun,
-    exit_code: Option<i32>,
-    error_message: String,
-) -> AppResult<()> {
-    run.status = AGENT_CODEX_RUN_STATUS_FAILED.into();
-    run.exit_code = exit_code;
-    run.finished_at = Some(now_utc());
-    run.error_message = Some(truncate(&sanitize_error(&error_message), 2_000));
-    platform.update_agent_codex_trigger_run(run.clone())?;
-    record_run_activity(
-        platform,
-        run.id,
-        "failed",
-        &format!("本轮失败：{}", sanitize_error(&error_message)),
-        run.codex_thread_id.clone(),
-    );
-    Ok(())
 }

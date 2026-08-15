@@ -3,6 +3,32 @@ use ai_chat_domain::company::{
     agent_codex_wake_coalesce_delay_seconds, is_agent_codex_wake_reason,
 };
 
+fn fair_due_agent_ids(
+    mut candidates: Vec<(Uuid, Uuid, chrono::DateTime<chrono::Utc>)>,
+    limit: usize,
+) -> Vec<Uuid> {
+    candidates
+        .sort_by_key(|(agent_id, company_id, next_run_at)| (*company_id, *next_run_at, *agent_id));
+    let mut company_ranks = std::collections::HashMap::<Uuid, usize>::new();
+    let mut ranked = candidates
+        .into_iter()
+        .map(|(agent_id, company_id, next_run_at)| {
+            let rank = company_ranks.entry(company_id).or_default();
+            let ranked = (agent_id, *rank, next_run_at);
+            *rank += 1;
+            ranked
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by_key(|(agent_id, company_rank, next_run_at)| {
+        (*company_rank, *next_run_at, *agent_id)
+    });
+    ranked
+        .into_iter()
+        .take(limit)
+        .map(|(agent_id, _, _)| agent_id)
+        .collect()
+}
+
 impl CodexControlPlatformRepository for MemoryPlatformRepository {
     fn save_company_codex_runner_profile(
         &self,
@@ -344,7 +370,7 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             })
             .map(|membership| membership.company_id)
             .collect::<std::collections::HashSet<_>>();
-        let mut agent_ids = guard
+        let candidates = guard
             .agent_codex_trigger_configs
             .iter()
             .filter(|(_, config)| {
@@ -356,13 +382,11 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
                         .lease_expires_at
                         .is_none_or(|lease_expires_at| lease_expires_at <= now)
             })
-            .map(|(agent_id, config)| (*agent_id, config.next_run_at))
+            .map(|(agent_id, config)| (*agent_id, config.company_id, config.next_run_at))
             .collect::<Vec<_>>();
-        agent_ids.sort_by_key(|(_, next_run_at)| *next_run_at);
-        agent_ids.truncate(limit);
-        Ok(agent_ids
+        Ok(fair_due_agent_ids(candidates, limit)
             .into_iter()
-            .filter_map(|(agent_id, _)| {
+            .filter_map(|agent_id| {
                 let config = guard.agent_codex_trigger_configs.get_mut(&agent_id)?;
                 config.lease_owner = Some(lease_owner.to_string());
                 config.lease_expires_at =
@@ -850,6 +874,34 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             token.expires_at > now && token.revoked_at.is_none_or(|revoked_at| revoked_at > now)
         });
         Ok(before - guard.agent_codex_run_tokens.len())
+    }
+}
+
+#[cfg(test)]
+mod fair_claim_tests {
+    use super::*;
+
+    #[test]
+    fn due_agents_are_round_robined_across_companies() {
+        let company_a = Uuid::from_u128(1);
+        let company_b = Uuid::from_u128(2);
+        let agents = [
+            Uuid::from_u128(11),
+            Uuid::from_u128(12),
+            Uuid::from_u128(13),
+            Uuid::from_u128(21),
+        ];
+        let now = now_utc();
+        let ordered = fair_due_agent_ids(
+            vec![
+                (agents[0], company_a, now),
+                (agents[1], company_a, now),
+                (agents[2], company_a, now),
+                (agents[3], company_b, now),
+            ],
+            3,
+        );
+        assert_eq!(ordered, vec![agents[0], agents[3], agents[1]]);
     }
 }
 

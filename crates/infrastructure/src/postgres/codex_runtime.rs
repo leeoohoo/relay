@@ -180,8 +180,14 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                       )
                     RETURNING intent.id
                 ),
-                due AS (
-                    SELECT config.id
+                eligible AS (
+                    SELECT config.id,
+                           config.company_id,
+                           config.next_run_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY config.company_id
+                               ORDER BY config.next_run_at, config.id
+                           ) AS company_rank
                     FROM agent_codex_trigger_configs config
                     WHERE config.status = 'active'
                       AND config.next_run_at <= $2
@@ -206,8 +212,13 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                             AND active_run.started_at
                                 + make_interval(secs => config.max_run_seconds + 60) > $2
                       )
-                    ORDER BY config.next_run_at, config.id
-                    FOR UPDATE SKIP LOCKED
+                ),
+                due AS (
+                    SELECT config.id
+                    FROM agent_codex_trigger_configs config
+                    INNER JOIN eligible ON eligible.id = config.id
+                    ORDER BY eligible.company_rank, eligible.next_run_at, config.id
+                    FOR UPDATE OF config SKIP LOCKED
                     LIMIT $3
                 )
                 UPDATE agent_codex_trigger_configs config
@@ -929,44 +940,11 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
     }
 
     fn insert_agent_codex_run_token(&self, token: AgentCodexRunToken) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                INSERT INTO agent_codex_run_tokens (
-                    id, run_id, agent_profile_id, token_hash,
-                    expires_at, revoked_at, created_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                "#,
-                &[
-                    &token.id,
-                    &token.run_id,
-                    &token.agent_profile_id,
-                    &token.token_hash,
-                    &token.expires_at,
-                    &token.revoked_at,
-                    &token.created_at,
-                ],
-            )?;
-            Ok(())
-        })
+        super::codex_runtime_tokens::insert_agent_codex_run_token(self, token)
     }
 
     fn find_agent_codex_run_token_by_hash(&self, token_hash: &str) -> Option<AgentCodexRunToken> {
-        self.with_client(|client| {
-            client.query_opt(
-                r#"
-                SELECT id, run_id, agent_profile_id, token_hash,
-                       expires_at, revoked_at, created_at
-                FROM agent_codex_run_tokens
-                WHERE token_hash = $1
-                "#,
-                &[&token_hash],
-            )
-        })
-        .ok()
-        .flatten()
-        .map(map_agent_codex_run_token)
+        super::codex_runtime_tokens::find_agent_codex_run_token_by_hash(self, token_hash)
     }
 
     fn revoke_agent_codex_run_tokens(
@@ -974,17 +952,7 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
         run_id: Uuid,
         revoked_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<()> {
-        self.with_client(|client| {
-            client.execute(
-                r#"
-                UPDATE agent_codex_run_tokens
-                SET revoked_at = $2
-                WHERE run_id = $1 AND revoked_at IS NULL
-                "#,
-                &[&run_id, &revoked_at],
-            )?;
-            Ok(())
-        })
+        super::codex_runtime_tokens::revoke_agent_codex_run_tokens(self, run_id, revoked_at)
     }
 
     fn delete_expired_agent_codex_run_tokens(

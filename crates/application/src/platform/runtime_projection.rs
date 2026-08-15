@@ -58,14 +58,19 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             };
         }
         if let Some(intent) = intents.first() {
+            let backing_off = runs.iter().find(|run| run.activity_phase == "backing_off");
             return AgentRuntimeProjection {
                 state: RUNTIME_STATE_RECOVERING.into(),
-                reason: "任务尚未完成，等待下一轮从项目会话接续".into(),
+                reason: backing_off
+                    .and_then(|run| run.activity_summary.clone())
+                    .unwrap_or_else(|| "任务尚未完成，等待下一轮从项目会话接续".into()),
                 session_kind: Some(AGENT_CODEX_SESSION_KIND_PROJECT.into()),
                 run_id: None,
                 intent_id: Some(intent.id),
                 task_id: intent.task_ids.first().copied(),
-                waiting_on_type: None,
+                waiting_on_type: backing_off
+                    .and_then(|run| run.waiting_on_type.clone())
+                    .or_else(|| backing_off.map(|_| "progress_backoff".into())),
                 waiting_on_id: None,
                 heartbeat_at: None,
                 stale: false,
@@ -86,7 +91,7 @@ fn state_from_run(run: &AgentCodexTriggerRun) -> &'static str {
         "waiting_approval" => RUNTIME_STATE_WAITING_APPROVAL,
         "reporting" | "finishing" => RUNTIME_STATE_REPORTING,
         "preparing" | "starting" | "session" | "planning" | "dispatching" => RUNTIME_STATE_TRIAGING,
-        "continuing" | "retrying" => RUNTIME_STATE_RECOVERING,
+        "continuing" | "retrying" | "backing_off" => RUNTIME_STATE_RECOVERING,
         "failed" | "timed_out" | "lease_lost" => RUNTIME_STATE_FAILED,
         _ if run.session_kind == AGENT_CODEX_SESSION_KIND_PROJECT => RUNTIME_STATE_EXECUTING,
         _ => RUNTIME_STATE_TRIAGING,
@@ -143,5 +148,8 @@ mod tests {
             resumes_run_id: None,
         };
         assert_eq!(state_from_run(&run), RUNTIME_STATE_WAITING_APPROVAL);
+        let mut backing_off = run;
+        backing_off.activity_phase = "backing_off".into();
+        assert_eq!(state_from_run(&backing_off), RUNTIME_STATE_RECOVERING);
     }
 }
