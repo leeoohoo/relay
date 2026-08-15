@@ -33,8 +33,117 @@ relay_host_chrome_exists() {
   return 1
 }
 
+relay_prepare_host_browser_executable() {
+  local state_root="$1"
+  local log_file="$2"
+  local configured="${RELAY_CHROME_EXECUTABLE:-}"
+  local enabled="${RELAY_MANAGED_HEADLESS_SHELL_ENABLED:-true}"
+  local mode="${RELAY_CHROME_DEVTOOLS_MCP_MODE:-auto}"
+  local browser_version="${RELAY_CHROME_HEADLESS_SHELL_VERSION:-152.0.7977.42}"
+  local installer_version="${RELAY_PUPPETEER_BROWSERS_VERSION:-3.2.0}"
+  local installer_root installer_bin browser_root browser_bin
+
+  case "${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}" in
+    0|false|FALSE|no|NO|off|OFF) return 1 ;;
+  esac
+
+  if [[ -n "$configured" ]]; then
+    relay_command_exists "$configured" || return 1
+    printf '%s\n' "$configured"
+    return 0
+  fi
+
+  mode="$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')"
+  case "$mode" in
+    docker) return 1 ;;
+  esac
+  case "$enabled" in
+    0|false|FALSE|no|NO|off|OFF) return 1 ;;
+  esac
+  command -v npm >/dev/null 2>&1 || return 1
+
+  browser_root="$state_root/tools/chrome-headless-shell-$browser_version"
+  browser_bin="$(
+    find "$browser_root" -type f \
+      \( -name chrome-headless-shell -o -name chrome-headless-shell.exe \) \
+      -print -quit 2>/dev/null || true
+  )"
+  if [[ -n "$browser_bin" && -x "$browser_bin" ]] &&
+     "$browser_bin" --version >/dev/null 2>&1; then
+    printf '%s\n' "$browser_bin"
+    return 0
+  fi
+
+  installer_root="$state_root/tools/puppeteer-browsers-$installer_version"
+  installer_bin="$installer_root/node_modules/.bin/browsers"
+  if [[ ! -x "$installer_bin" ]]; then
+    mkdir -p "$installer_root"
+    echo "Preparing lightweight browser installer..." >>"$log_file"
+    npm install \
+      --prefix "$installer_root" \
+      --no-audit \
+      --no-fund \
+      --no-package-lock \
+      --omit=dev \
+      "@puppeteer/browsers@$installer_version" >>"$log_file" 2>&1 || return 1
+  fi
+
+  mkdir -p "$browser_root"
+  echo "Preparing lightweight Chrome Headless Shell $browser_version..." >&2
+  echo "Preparing lightweight Chrome Headless Shell $browser_version..." >>"$log_file"
+  "$installer_bin" install "chrome-headless-shell@$browser_version" \
+    --path "$browser_root" >>"$log_file" 2>&1 || return 1
+  browser_bin="$(
+    find "$browser_root" -type f \
+      \( -name chrome-headless-shell -o -name chrome-headless-shell.exe \) \
+      -print -quit 2>/dev/null || true
+  )"
+  [[ -n "$browser_bin" && -x "$browser_bin" ]] || return 1
+  "$browser_bin" --version >/dev/null 2>&1 || return 1
+  printf '%s\n' "$browser_bin"
+}
+
 relay_host_browser_available() {
   relay_command_exists "${RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND:-npx}" && relay_host_chrome_exists
+}
+
+relay_prepare_host_chrome_devtools_command() {
+  local state_root="$1"
+  local log_file="$2"
+  local configured="${RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND:-npx}"
+  local command_name tool_root tool_bin
+
+  case "${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}" in
+    0|false|FALSE|no|NO|off|OFF) return 1 ;;
+  esac
+
+  command_name="$(basename "$configured")"
+  case "$command_name" in
+    npx|npx.cmd|npx.exe) ;;
+    *)
+      relay_command_exists "$configured" || return 1
+      printf '%s\n' "$configured"
+      return 0
+      ;;
+  esac
+
+  relay_host_chrome_exists || return 1
+  command -v npm >/dev/null 2>&1 || return 1
+  tool_root="$state_root/tools/chrome-devtools-mcp-1.6.0"
+  tool_bin="$tool_root/node_modules/.bin/chrome-devtools-mcp"
+  if [[ ! -x "$tool_bin" ]]; then
+    mkdir -p "$tool_root"
+    echo "Preparing lightweight shared Chrome DevTools MCP runtime..." >>"$log_file"
+    npm install \
+      --prefix "$tool_root" \
+      --no-audit \
+      --no-fund \
+      --no-package-lock \
+      --omit=dev \
+      chrome-devtools-mcp@1.6.0 >>"$log_file" 2>&1 || return 1
+  fi
+  [[ -x "$tool_bin" ]] || return 1
+  printf '%s\n' "$tool_bin"
 }
 
 relay_browser_requires_docker() {

@@ -517,10 +517,22 @@ start_api_watcher() {
 }
 
 start_trigger() {
+  local trigger_state_root prepared_browser_executable prepared_browser_mcp_command
   set_step "starting local Codex Agent Trigger"
   stop_pid trigger
-  relay_cleanup_legacy_chrome_devtools_containers "${RELAY_CHROME_PROFILE_ROOT:-$ROOT_DIR/.relay-agent-trigger/browser-profiles}"
+  trigger_state_root="${AGENT_TRIGGER_STATE_ROOT:-$ROOT_DIR/.relay-agent-trigger}"
+  relay_cleanup_legacy_chrome_devtools_containers "${RELAY_CHROME_PROFILE_ROOT:-$trigger_state_root/browser-profiles}"
+  if prepared_browser_executable="$(
+    relay_prepare_host_browser_executable "$trigger_state_root" "$TRIGGER_LOG"
+  )"; then
+    export RELAY_CHROME_EXECUTABLE="$prepared_browser_executable"
+  fi
   relay_ensure_chrome_devtools_image "$ROOT_DIR"
+  if prepared_browser_mcp_command="$(
+    relay_prepare_host_chrome_devtools_command "$trigger_state_root" "$TRIGGER_LOG"
+  )"; then
+    export RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND="$prepared_browser_mcp_command"
+  fi
   (
     cd "$ROOT_DIR"
     cargo build -p ai-chat-agent-trigger >>"$TRIGGER_LOG" 2>&1
@@ -534,7 +546,7 @@ start_trigger() {
     AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS="$AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS" \
     AGENT_TRIGGER_GIT_CREDENTIALS_ROOT="${AGENT_TRIGGER_GIT_CREDENTIALS_ROOT:-.relay-agent-trigger/git-credentials}" \
     AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT="${AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-200000}" \
-    AGENT_TRIGGER_STATE_ROOT="${AGENT_TRIGGER_STATE_ROOT:-$ROOT_DIR/.relay-agent-trigger}" \
+    AGENT_TRIGGER_STATE_ROOT="$trigger_state_root" \
     RELAY_CHROME_DEVTOOLS_MCP_ENABLED="${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}" \
     RELAY_CHROME_DEVTOOLS_MCP_MODE="${RELAY_CHROME_DEVTOOLS_MCP_MODE:-auto}" \
     RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND="${RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND:-npx}" \

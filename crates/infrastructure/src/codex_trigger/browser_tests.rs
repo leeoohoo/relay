@@ -200,7 +200,7 @@ fn managed_browser_profile_removes_stale_chromium_runtime_files() {
 
 #[test]
 fn host_browser_mcp_connects_to_the_runner_pool_with_page_routing() {
-    let args = host_mcp_args("http://127.0.0.1:19222");
+    let args = host_mcp_args(Path::new("npx"), "http://127.0.0.1:19222");
     assert!(args
         .iter()
         .any(|argument| argument == "--browserUrl=http://127.0.0.1:19222"));
@@ -211,6 +211,15 @@ fn host_browser_mcp_connects_to_the_runner_pool_with_page_routing() {
         .iter()
         .any(|argument| argument == "--allowUnrestrictedPaths"));
     assert!(!args.iter().any(|argument| argument == "--headless"));
+
+    let direct_args = host_mcp_args(
+        Path::new("/opt/relay/chrome-devtools-mcp"),
+        "http://127.0.0.1:19222",
+    );
+    assert!(!direct_args.iter().any(|argument| argument == "--yes"));
+    assert!(!direct_args
+        .iter()
+        .any(|argument| argument == DEFAULT_BROWSER_MCP_PACKAGE));
 }
 
 #[test]
@@ -297,6 +306,14 @@ fn host_browser_is_shared_by_the_trigger_with_one_tab_per_agent() {
             .prompt_hint
             .as_deref()
             .is_some_and(|hint| hint.contains(page_id))));
+    assert_eq!(
+        first.env.get("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"),
+        Some(&"1".to_string())
+    );
+    assert_eq!(
+        first.env.get("CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS"),
+        Some(&"1".to_string())
+    );
     assert_eq!(first.command, second.command);
     drop(runner);
     std::fs::remove_dir_all(root).expect("cleanup host browser profiles");

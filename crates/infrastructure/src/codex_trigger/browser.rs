@@ -8,7 +8,7 @@ use std::{
 
 pub(super) const MANAGED_BROWSER_MCP_NAME: &str = "chrome-devtools";
 const DEFAULT_BROWSER_MCP_IMAGE: &str = "relay/chrome-devtools-mcp:1.6.0";
-const DEFAULT_BROWSER_MCP_PACKAGE: &str = "chrome-devtools-mcp@1.6.0";
+pub(super) const DEFAULT_BROWSER_MCP_PACKAGE: &str = "chrome-devtools-mcp@1.6.0";
 const BROWSER_PROFILE_CONTAINER_PATH: &str = "/relay-browser-profile";
 const HOST_BROWSER_ENDPOINT_FILE: &str = ".relay-devtools-endpoint";
 const HOST_BROWSER_START_TIMEOUT: Duration = Duration::from_secs(12);
@@ -244,16 +244,21 @@ impl BrowserMcpConfig {
     fn host_server(&self, agent_id: Uuid) -> AppResult<ManagedCodexMcpServer> {
         let endpoint = self.ensure_host_browser()?;
         let page_id = self.ensure_agent_browser_page(&endpoint, agent_id)?;
-        let command = self
+        let host_command = self
             .host_mcp_command
             .as_ref()
-            .expect("host mode checks the MCP command")
-            .to_string_lossy()
-            .into_owned();
-        let mut server = managed_server(command, host_mcp_args(&endpoint), 45);
+            .expect("host mode checks the MCP command");
+        let command = host_command.to_string_lossy().into_owned();
+        let mut server = managed_server(command, host_mcp_args(host_command, &endpoint), 45);
         server
             .env
             .insert(RELAY_BROWSER_PAGE_ID_ENV.into(), page_id.clone());
+        server
+            .env
+            .insert("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS".into(), "1".into());
+        server
+            .env
+            .insert("CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS".into(), "1".into());
         server.prompt_hint = Some(format!(
             "此 Trigger 设备上的所有 Agent 共用一个 Chrome。你的专属标签页 pageId 是 `{page_id}`。所有支持 pageId 的 chrome-devtools 页面工具都必须显式传入该 pageId；不要读取或操作其他 pageId。"
         ));
@@ -585,16 +590,23 @@ fn managed_server(
     }
 }
 
-pub(super) fn host_mcp_args(endpoint: &str) -> Vec<String> {
-    vec![
-        "--yes".into(),
-        DEFAULT_BROWSER_MCP_PACKAGE.into(),
+pub(super) fn host_mcp_args(command: &Path, endpoint: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if command
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.to_ascii_lowercase().starts_with("npx"))
+    {
+        args.extend(["--yes".into(), DEFAULT_BROWSER_MCP_PACKAGE.into()]);
+    }
+    args.extend([
         format!("--browserUrl={endpoint}"),
         "--experimentalPageIdRouting".into(),
         "--no-usage-statistics".into(),
         "--no-performance-crux".into(),
         "--allowUnrestrictedPaths".into(),
-    ]
+    ]);
+    args
 }
 
 fn parse_enabled(value: &str) -> bool {

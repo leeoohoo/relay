@@ -46,6 +46,7 @@ export RELAY_HOST_GID="${RELAY_HOST_GID:-$(id -g)}"
 export RELAY_CHROME_DEVTOOLS_MCP_ENABLED="${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}"
 export RELAY_CHROME_DEVTOOLS_MCP_MODE="${RELAY_CHROME_DEVTOOLS_MCP_MODE:-auto}"
 export RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND="${RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND:-npx}"
+export RELAY_MANAGED_HEADLESS_SHELL_ENABLED="${RELAY_MANAGED_HEADLESS_SHELL_ENABLED:-true}"
 export RELAY_CHROME_DEVTOOLS_MCP_IMAGE="${RELAY_CHROME_DEVTOOLS_MCP_IMAGE:-relay/chrome-devtools-mcp:1.6.0}"
 export RELAY_CHROME_PROFILE_ROOT="${RELAY_CHROME_PROFILE_ROOT:-$AGENT_TRIGGER_STATE_ROOT/browser-profiles}"
 export RELAY_CHROME_DOCKER_CPUS="${RELAY_CHROME_DOCKER_CPUS:-1.0}"
@@ -136,7 +137,8 @@ resolve_trigger_binary() {
 
 start_trigger() {
   local trigger_bin postgres_port server_port harness_port trigger_harness_base_url
-  local trigger_harness_public_base_url attempt stable_checks
+  local trigger_harness_public_base_url attempt stable_checks prepared_browser_executable
+  local prepared_browser_mcp_command
   local -a trigger_command
   stop_trigger
   trigger_bin="$(resolve_trigger_binary)"
@@ -149,6 +151,16 @@ start_trigger() {
 
   export DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${postgres_port}/ai_chat"
   export AGENT_TRIGGER_MCP_URL="http://127.0.0.1:${server_port}/mcp"
+  if prepared_browser_executable="$(
+    relay_prepare_host_browser_executable "$AGENT_TRIGGER_STATE_ROOT" "$TRIGGER_LOG"
+  )"; then
+    export RELAY_CHROME_EXECUTABLE="$prepared_browser_executable"
+  fi
+  if prepared_browser_mcp_command="$(
+    relay_prepare_host_chrome_devtools_command "$AGENT_TRIGGER_STATE_ROOT" "$TRIGGER_LOG"
+  )"; then
+    export RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND="$prepared_browser_mcp_command"
+  fi
   trigger_harness_base_url="${HARNESS_BASE_URL:-}"
   trigger_harness_public_base_url="${HARNESS_PUBLIC_BASE_URL:-$trigger_harness_base_url}"
   if [[ "$HARNESS_MODE" == "self_hosted" ]]; then
@@ -181,6 +193,7 @@ start_trigger() {
     "RELAY_CHROME_DEVTOOLS_MCP_ENABLED=$RELAY_CHROME_DEVTOOLS_MCP_ENABLED"
     "RELAY_CHROME_DEVTOOLS_MCP_MODE=$RELAY_CHROME_DEVTOOLS_MCP_MODE"
     "RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND=$RELAY_CHROME_DEVTOOLS_MCP_HOST_COMMAND"
+    "RELAY_MANAGED_HEADLESS_SHELL_ENABLED=$RELAY_MANAGED_HEADLESS_SHELL_ENABLED"
     "RELAY_CHROME_DEVTOOLS_MCP_DOCKER_COMMAND=${RELAY_CHROME_DEVTOOLS_MCP_DOCKER_COMMAND:-docker}"
     "RELAY_CHROME_EXECUTABLE=${RELAY_CHROME_EXECUTABLE:-}"
     "RELAY_CHROME_DEVTOOLS_MCP_IMAGE=$RELAY_CHROME_DEVTOOLS_MCP_IMAGE"
@@ -249,6 +262,12 @@ start_all() {
   bash "$ROOT_DIR/scripts/start_dev.sh" down >/dev/null 2>&1 || true
   stop_trigger
   relay_cleanup_legacy_chrome_devtools_containers "$RELAY_CHROME_PROFILE_ROOT"
+  local prepared_browser_executable
+  if prepared_browser_executable="$(
+    relay_prepare_host_browser_executable "$AGENT_TRIGGER_STATE_ROOT" "$TRIGGER_LOG"
+  )"; then
+    export RELAY_CHROME_EXECUTABLE="$prepared_browser_executable"
+  fi
   bash "$ROOT_DIR/scripts/start_docker.sh" up --harness "$HARNESS_MODE"
   start_trigger
   local server_port
