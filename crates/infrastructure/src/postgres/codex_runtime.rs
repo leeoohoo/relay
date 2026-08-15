@@ -786,12 +786,12 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 INSERT INTO agent_execution_intents (
                     id, company_id, agent_profile_id, project_id, worker_session_id,
                     source_event_ids, task_ids, action_type, objective, acceptance_criteria,
-                    priority, dedupe_key, status, result_summary, error_message,
+                    required_capabilities, priority, dedupe_key, status, result_summary, error_message,
                     created_at, claimed_at, completed_at
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17, $18
+                    $13, $14, $15, $16, $17, $18, $19
                 )
                 "#,
                 &[
@@ -805,6 +805,7 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                     &intent.action_type,
                     &intent.objective,
                     &Json(&intent.acceptance_criteria),
+                    &Json(&intent.required_capabilities),
                     &intent.priority,
                     &intent.dedupe_key,
                     &intent.status,
@@ -825,16 +826,18 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 r#"
                 UPDATE agent_execution_intents
                 SET worker_session_id = $2,
-                    status = $3,
-                    result_summary = $4,
-                    error_message = $5,
-                    claimed_at = $6,
-                    completed_at = $7
+                    required_capabilities = $3,
+                    status = $4,
+                    result_summary = $5,
+                    error_message = $6,
+                    claimed_at = $7,
+                    completed_at = $8
                 WHERE id = $1
                 "#,
                 &[
                     &intent.id,
                     &intent.worker_session_id,
+                    &Json(&intent.required_capabilities),
                     &intent.status,
                     &intent.result_summary,
                     &intent.error_message,
@@ -852,7 +855,7 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 r#"
                 SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
                        source_event_ids, task_ids, action_type, objective, acceptance_criteria,
-                       priority, dedupe_key, status, result_summary, error_message,
+                       required_capabilities, priority, dedupe_key, status, result_summary, error_message,
                        created_at, claimed_at, completed_at
                 FROM agent_execution_intents
                 WHERE id = $1
@@ -875,7 +878,7 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 r#"
                 SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
                        source_event_ids, task_ids, action_type, objective, acceptance_criteria,
-                       priority, dedupe_key, status, result_summary, error_message,
+                       required_capabilities, priority, dedupe_key, status, result_summary, error_message,
                        created_at, claimed_at, completed_at
                 FROM agent_execution_intents
                 WHERE agent_profile_id = $1 AND dedupe_key = $2
@@ -899,7 +902,7 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                 r#"
                 SELECT id, company_id, agent_profile_id, project_id, worker_session_id,
                        source_event_ids, task_ids, action_type, objective, acceptance_criteria,
-                       priority, dedupe_key, status, result_summary, error_message,
+                       required_capabilities, priority, dedupe_key, status, result_summary, error_message,
                        created_at, claimed_at, completed_at
                 FROM agent_execution_intents
                 WHERE agent_profile_id = $1

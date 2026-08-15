@@ -296,6 +296,7 @@ fn human_managers_create_assign_and_update_project_tasks() {
         action_type: "execute".into(),
         objective: "恢复进行中的任务".into(),
         acceptance_criteria: vec!["任务完成".into()],
+        required_capabilities: vec![],
         priority: "high".into(),
         dedupe_key: "recover-orphaned-in-progress-task".into(),
         status: AGENT_EXECUTION_INTENT_STATUS_FAILED.into(),

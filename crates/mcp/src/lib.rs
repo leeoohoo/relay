@@ -267,6 +267,11 @@ enum AgentWorkSessionOperation {
         objective: String,
         #[serde(default)]
         acceptance_criteria: Vec<String>,
+        #[serde(default)]
+        #[schemars(
+            description = "Optional execution capabilities. Add browser only when this work is expected to require UI interaction, browser automation, screenshots, or browser-based E2E validation. Ordinary code, backend, documentation, and coordination work should leave this empty."
+        )]
+        required_capabilities: Vec<String>,
         priority: Option<String>,
         #[schemars(
             description = "Stable logical-work key. Repeating the same dispatch returns the existing Intent; use a new key when the objective, project, tasks, acceptance criteria, or priority changes."
@@ -277,6 +282,14 @@ enum AgentWorkSessionOperation {
             description = "Create a new generation for this project's worker session instead of resuming the active Codex thread. Use only when the existing session has stale permissions or unrecoverable internal state; Relay preserves the project, branch, tasks, and latest checkpoint summary."
         )]
         replace_session: bool,
+    },
+    CapabilityRequest {
+        company_id: Uuid,
+        intent_id: Uuid,
+        #[schemars(
+            description = "Capability required to continue the current project work. Currently only browser is supported. Request it only when the active worker discovers that browser interaction or browser-based validation is actually necessary."
+        )]
+        capability: String,
     },
 }
 
@@ -976,3 +989,5 @@ mod project_contract_tests;
 mod task_contract_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_session_tests;

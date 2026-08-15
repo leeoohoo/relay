@@ -482,8 +482,9 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
 
     pub fn create_agent_execution_intent(
         &self,
-        intent: AgentExecutionIntent,
+        mut intent: AgentExecutionIntent,
     ) -> AppResult<AgentExecutionIntent> {
+        normalize_execution_capabilities(&mut intent.required_capabilities)?;
         self.ensure_agent_can_act(intent.agent_profile_id)?;
         let membership = self.get_active_company_agent_membership(intent.agent_profile_id)?;
         if membership.company_id != intent.company_id {
@@ -569,6 +570,48 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .list_agent_execution_intents(agent_id, status, limit.clamp(1, 100))
     }
 
+    pub fn get_agent_execution_intent(&self, intent_id: Uuid) -> Option<AgentExecutionIntent> {
+        self.repo.get_agent_execution_intent(intent_id)
+    }
+
+    pub fn request_agent_execution_intent_capability(
+        &self,
+        agent_id: Uuid,
+        company_id: Uuid,
+        intent_id: Uuid,
+        capability: &str,
+    ) -> AppResult<AgentExecutionIntent> {
+        let capability = capability.trim().to_ascii_lowercase();
+        if capability != AGENT_EXECUTION_CAPABILITY_BROWSER {
+            return Err(AppError::Validation(
+                "execution capability must currently be browser".into(),
+            ));
+        }
+        let mut intent = self
+            .repo
+            .get_agent_execution_intent(intent_id)
+            .ok_or_else(|| AppError::NotFound("execution intent not found".into()))?;
+        if intent.agent_profile_id != agent_id || intent.company_id != company_id {
+            return Err(AppError::Unauthorized(
+                "execution intent does not belong to this Agent and company".into(),
+            ));
+        }
+        if !matches!(
+            intent.status.as_str(),
+            AGENT_EXECUTION_INTENT_STATUS_PENDING | AGENT_EXECUTION_INTENT_STATUS_RUNNING
+        ) {
+            return Err(AppError::Conflict(
+                "execution capability can only be requested for pending or running work".into(),
+            ));
+        }
+        if !intent.required_capabilities.contains(&capability) {
+            intent.required_capabilities.push(capability);
+            normalize_execution_capabilities(&mut intent.required_capabilities)?;
+            self.repo.update_agent_execution_intent(intent.clone())?;
+        }
+        Ok(intent)
+    }
+
     pub fn update_agent_execution_intent(&self, intent: AgentExecutionIntent) -> AppResult<()> {
         self.repo.update_agent_execution_intent(intent)
     }
@@ -636,6 +679,7 @@ fn resolve_deduplicated_execution_intent(
         && existing.action_type == requested.action_type
         && existing.objective == requested.objective
         && existing.acceptance_criteria == requested.acceptance_criteria
+        && existing.required_capabilities == requested.required_capabilities
         && existing.priority == requested.priority;
     if same_work {
         return Ok(existing);
@@ -644,6 +688,24 @@ fn resolve_deduplicated_execution_intent(
         "dedupe_key '{}' already belongs to execution intent {} (status: {}); inspect that intent or use a new dedupe_key for different work",
         requested.dedupe_key, existing.id, existing.status
     )))
+}
+
+fn normalize_execution_capabilities(capabilities: &mut Vec<String>) -> AppResult<()> {
+    for capability in capabilities.iter_mut() {
+        *capability = capability.trim().to_ascii_lowercase();
+    }
+    capabilities.retain(|capability| !capability.is_empty());
+    capabilities.sort();
+    capabilities.dedup();
+    if capabilities
+        .iter()
+        .any(|capability| capability != AGENT_EXECUTION_CAPABILITY_BROWSER)
+    {
+        return Err(AppError::Validation(
+            "execution capabilities currently support only browser".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn same_uuid_members(left: &[Uuid], right: &[Uuid]) -> bool {

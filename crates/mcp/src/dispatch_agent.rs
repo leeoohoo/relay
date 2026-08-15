@@ -394,6 +394,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                         task_ids,
                         objective,
                         acceptance_criteria,
+                        required_capabilities,
                         priority,
                         dedupe_key,
                         replace_session,
@@ -435,6 +436,7 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             .into(),
                             objective,
                             acceptance_criteria,
+                            required_capabilities,
                             priority,
                             dedupe_key,
                             status: AGENT_EXECUTION_INTENT_STATUS_PENDING.into(),
@@ -453,6 +455,29 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> McpGateway<R, V> {
                             "intent": intent,
                             "deduplicated": deduplicated,
                             "replacement_requested": replace_session,
+                        }))
+                    }
+                    AgentWorkSessionOperation::CapabilityRequest {
+                        company_id,
+                        intent_id,
+                        capability,
+                    } => {
+                        if membership.company_id != company_id {
+                            return Err(AppError::Unauthorized(
+                                "Agent does not belong to the requested company".into(),
+                            ));
+                        }
+                        let intent = self.platform.request_agent_execution_intent_capability(
+                            agent_id,
+                            company_id,
+                            intent_id,
+                            &capability,
+                        )?;
+                        Ok(json!({
+                            "intent": intent,
+                            "capability": capability.trim().to_ascii_lowercase(),
+                            "restart_required": true,
+                            "instruction": "Finish this turn now. Relay will resume the same project work session with the requested capability enabled."
                         }))
                     }
                 }

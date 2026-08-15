@@ -537,6 +537,7 @@ pub(super) fn map_agent_execution_intent(row: Row) -> AgentExecutionIntent {
     let source_event_ids: Json<Vec<Uuid>> = row.get("source_event_ids");
     let task_ids: Json<Vec<Uuid>> = row.get("task_ids");
     let acceptance_criteria: Json<Vec<String>> = row.get("acceptance_criteria");
+    let required_capabilities: Json<Vec<String>> = row.get("required_capabilities");
     AgentExecutionIntent {
         id: row.get("id"),
         company_id: row.get("company_id"),
@@ -548,6 +549,7 @@ pub(super) fn map_agent_execution_intent(row: Row) -> AgentExecutionIntent {
         action_type: row.get("action_type"),
         objective: row.get("objective"),
         acceptance_criteria: acceptance_criteria.0,
+        required_capabilities: required_capabilities.0,
         priority: row.get("priority"),
         dedupe_key: row.get("dedupe_key"),
         status: row.get("status"),

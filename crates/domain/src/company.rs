@@ -229,6 +229,7 @@ pub const AGENT_EXECUTION_INTENT_STATUS_RUNNING: &str = "running";
 pub const AGENT_EXECUTION_INTENT_STATUS_COMPLETED: &str = "completed";
 pub const AGENT_EXECUTION_INTENT_STATUS_FAILED: &str = "failed";
 pub const AGENT_EXECUTION_INTENT_STATUS_CANCELLED: &str = "cancelled";
+pub const AGENT_EXECUTION_CAPABILITY_BROWSER: &str = "browser";
 
 pub fn is_agent_codex_wake_reason(value: &str) -> bool {
     matches!(
@@ -636,6 +637,8 @@ pub struct AgentExecutionIntent {
     pub action_type: String,
     pub objective: String,
     pub acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    pub required_capabilities: Vec<String>,
     pub priority: String,
     pub dedupe_key: String,
     pub status: String,

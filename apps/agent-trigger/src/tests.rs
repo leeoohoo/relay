@@ -22,17 +22,6 @@ fn only_authoritative_heartbeat_failures_stop_a_codex_run() {
 }
 
 #[test]
-fn automatic_resource_limit_stays_conservative() {
-    assert!((1..=4).contains(&default_resource_concurrency_limit()));
-    assert_eq!(resource_concurrency_limit_for(1), 1);
-    assert_eq!(resource_concurrency_limit_for(4), 1);
-    assert_eq!(resource_concurrency_limit_for(8), 2);
-    assert_eq!(resource_concurrency_limit_for(12), 3);
-    assert_eq!(resource_concurrency_limit_for(16), 4);
-    assert_eq!(resource_concurrency_limit_for(64), 4);
-}
-
-#[test]
 fn website_always_allow_key_is_scoped_to_project_and_origin() {
     let agent_id = Uuid::new_v4();
     let project_id = Uuid::new_v4();
@@ -429,6 +418,7 @@ fn prompts_treat_identity_as_authenticated_session_state() {
         action_type: "execute".into(),
         objective: "完成任务".into(),
         acceptance_criteria: vec![],
+        required_capabilities: vec![],
         priority: "normal".into(),
         dedupe_key: "test".into(),
         status: "pending".into(),
@@ -450,9 +440,25 @@ fn prompts_treat_identity_as_authenticated_session_state() {
     assert!(worker_prompt.contains("不要重新确认、询问或汇报自己的身份"));
     assert!(worker_prompt.contains("company.task execution_get"));
     assert!(worker_prompt.contains("execution.readiness.can_start=true"));
+    assert!(worker_prompt.contains("本轮未加载浏览器运行时"));
+    assert!(worker_prompt.contains("capability_request"));
     assert!(worker_prompt.contains(&format!("company_id={}", project.company_id)));
     assert!(worker_prompt.contains(&format!("project_id={}", project.id)));
     assert!(!worker_prompt.contains("先调用 agent.bootstrap"));
+
+    let mut browser_intent = intent;
+    browser_intent.required_capabilities = vec![AGENT_EXECUTION_CAPABILITY_BROWSER.into()];
+    let browser_prompt = build_worker_prompt(WorkerPromptContext {
+        agent: &agent,
+        job_title: "软件工程师",
+        project: &project,
+        intent: &browser_intent,
+        workspace: &workspace,
+        relay_skills: &skills,
+        previous_checkpoint: None,
+    });
+    assert!(browser_prompt.contains("本轮已启用 browser capability"));
+    assert!(!browser_prompt.contains("本轮未加载浏览器运行时"));
 }
 
 #[test]
@@ -484,7 +490,7 @@ fn project_worker_session_keeps_inbox_work_in_the_control_session() {
     assert!(english.contains("control session"));
     assert!(english.contains("Relay-managed `chrome-devtools` MCP"));
     assert!(english.contains("`.relay/browser-artifacts/`"));
-    assert!(english.contains("Do not use Codex desktop Browser/Chrome"));
+    assert!(english.contains("Never use Codex desktop Browser/Chrome"));
     assert!(english.contains("Relay-managed `$TMPDIR`"));
     assert!(english.contains("Never address `/tmp`, `/private/tmp`"));
     assert!(english.contains("use only values exposed by the tool schema"));

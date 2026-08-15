@@ -1,7 +1,11 @@
 use super::*;
 
+mod capabilities;
+mod settings;
 mod workspace;
 
+use capabilities::*;
+pub(super) use settings::resolve_effective_cli_settings;
 use workspace::prepare_project_workspace_with_credential_recovery;
 
 pub(super) async fn process_claimed_trigger(
@@ -12,7 +16,7 @@ pub(super) async fn process_claimed_trigger(
     codex_control: &CodexControlStore,
     service_config: &TriggerServiceConfig,
     trigger: AgentCodexTriggerConfig,
-) {
+) -> Uuid {
     let execution = execute_trigger(
         platform,
         harness,
@@ -66,49 +70,7 @@ pub(super) async fn process_claimed_trigger(
             "Codex trigger cycle failed"
         );
     }
-}
-
-pub(super) fn resolve_effective_cli_settings(
-    trigger: &AgentCodexTriggerConfig,
-    company: &CompanyCodexCliSettings,
-) -> EffectiveCodexCliSettings {
-    EffectiveCodexCliSettings {
-        model: trigger.model.clone().or_else(|| company.model.clone()),
-        reasoning_effort: trigger
-            .reasoning_effort
-            .clone()
-            .or_else(|| company.reasoning_effort.clone()),
-        reasoning_summary: trigger
-            .reasoning_summary
-            .clone()
-            .or_else(|| Some(company.reasoning_summary.clone())),
-        verbosity: trigger
-            .verbosity
-            .clone()
-            .or_else(|| company.verbosity.clone()),
-        personality: trigger
-            .personality
-            .clone()
-            .or_else(|| company.personality.clone()),
-        service_tier: company.service_tier.clone(),
-        sandbox_mode: if trigger.sandbox_mode == AGENT_CODEX_SETTING_INHERIT {
-            company.sandbox_mode.clone()
-        } else {
-            trigger.sandbox_mode.clone()
-        },
-        approval_policy: if trigger.approval_policy == AGENT_CODEX_SETTING_INHERIT {
-            company.approval_policy.clone()
-        } else {
-            trigger.approval_policy.clone()
-        },
-        network_access: company.network_access,
-        web_search: company.web_search.clone(),
-        feature_multi_agent: company.feature_multi_agent,
-        feature_remote_plugin: company.feature_remote_plugin,
-        feature_hooks: company.feature_hooks,
-        feature_goals: company.feature_goals,
-        feature_shell_tool: company.feature_shell_tool,
-    }
+    trigger.agent_profile_id
 }
 
 pub(super) fn next_trigger_run_at(
@@ -286,6 +248,7 @@ pub(super) async fn execute_trigger(
             &control_settings,
             &token.plaintext_token,
             false,
+            false,
         )
         .await;
         let control_result = match control_result {
@@ -342,6 +305,8 @@ pub(super) async fn execute_trigger(
     let mut worker_failure = None;
     let mut worker_retry_requested = false;
     let mut worker_retry_counts_as_failure = false;
+    let mut worker_capability_upgrade_requested = false;
+    let mut worker_retry_after_seconds = 10;
     let intents = platform.list_agent_execution_intents(
         trigger.agent_profile_id,
         Some(AGENT_EXECUTION_INTENT_STATUS_PENDING),
@@ -385,6 +350,28 @@ pub(super) async fn execute_trigger(
             &intent,
         )
         .await;
+        let worker_result = match handle_browser_capability_upgrade(
+            platform,
+            &mut run,
+            &mut intent,
+            worker_result,
+        )? {
+            BrowserCapabilityUpgrade::Unchanged(result) => result,
+            BrowserCapabilityUpgrade::RetryAfterResult(result) => {
+                worker_retry_requested = true;
+                worker_capability_upgrade_requested = true;
+                worker_retry_after_seconds = 1;
+                worker_failure = Some(result);
+                break;
+            }
+            BrowserCapabilityUpgrade::RetryAfterError => {
+                return Ok(TriggerExecution {
+                    succeeded: true,
+                    error_message: None,
+                    retry_after_seconds: Some(1),
+                });
+            }
+        };
         match worker_result {
             Ok((result, session)) if result.status == CodexRunStatus::Succeeded => {
                 intent.status = AGENT_EXECUTION_INTENT_STATUS_COMPLETED.into();
@@ -533,17 +520,21 @@ pub(super) async fn execute_trigger(
         .as_ref()
         .map(|result| result.status)
         .unwrap_or(CodexRunStatus::Succeeded);
-    let (final_phase, final_summary) = match final_status {
-        CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
-        CodexRunStatus::Failed if worker_retry_requested => {
-            ("retrying", "临时服务故障，已保留工作进度并即将重试")
+    let (final_phase, final_summary) = if worker_capability_upgrade_requested {
+        ("continuing", "已按需启用浏览器能力，即将从同一项目会话继续")
+    } else {
+        match final_status {
+            CodexRunStatus::Succeeded => ("completed", "Codex 已完成本轮工作"),
+            CodexRunStatus::Failed if worker_retry_requested => {
+                ("retrying", "临时服务故障，已保留工作进度并即将重试")
+            }
+            CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
+            CodexRunStatus::TimedOut if worker_retry_requested => {
+                ("continuing", "已保存当前进度，即将从同一项目会话继续")
+            }
+            CodexRunStatus::TimedOut => ("timed_out", "Codex 本轮执行超时"),
+            CodexRunStatus::Cancelled => ("cancelled", "项目已暂停，Codex 本轮已停止"),
         }
-        CodexRunStatus::Failed => ("failed", "Codex 本轮执行失败"),
-        CodexRunStatus::TimedOut if worker_retry_requested => {
-            ("continuing", "已保存当前进度，即将从同一项目会话继续")
-        }
-        CodexRunStatus::TimedOut => ("timed_out", "Codex 本轮执行超时"),
-        CodexRunStatus::Cancelled => ("cancelled", "项目已暂停，Codex 本轮已停止"),
     };
     record_run_activity(
         platform,
@@ -558,7 +549,7 @@ pub(super) async fn execute_trigger(
         error_message: (!worker_retry_requested || worker_retry_counts_as_failure)
             .then_some(run.error_message)
             .flatten(),
-        retry_after_seconds: worker_retry_requested.then_some(10),
+        retry_after_seconds: worker_retry_requested.then_some(worker_retry_after_seconds),
     })
 }
 
@@ -652,6 +643,10 @@ async fn execute_project_intent(
         settings,
         run_token,
         replace_session,
+        intent
+            .required_capabilities
+            .iter()
+            .any(|capability| capability == AGENT_EXECUTION_CAPABILITY_BROWSER),
     )
     .await?;
     let session = if matches!(
@@ -693,6 +688,7 @@ async fn run_codex_stage(
     settings: &EffectiveCodexCliSettings,
     run_token: &str,
     replace_session: bool,
+    browser_enabled: bool,
 ) -> AppResult<CodexRunResult> {
     let session_key = codex_session_key(workspace);
     let existing_thread_id = (!replace_session)
@@ -703,6 +699,7 @@ async fn run_codex_stage(
                 .then_some(session.codex_thread_id)
         });
     let managed_mcp_servers = project_id
+        .filter(|_| browser_enabled)
         .map(|project_id| {
             codex_runner.managed_browser_mcp_server(
                 trigger.company_id,

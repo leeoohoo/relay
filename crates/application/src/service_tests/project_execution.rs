@@ -556,6 +556,7 @@ fn company_agents_can_run_projects_with_synced_group_tasks_and_status() {
         action_type: AGENT_EXECUTION_INTENT_ACTION_EXECUTE.into(),
         objective: "暂停后保留并等待恢复".into(),
         acceptance_criteria: vec!["恢复项目后继续执行".into()],
+        required_capabilities: vec![],
         priority: "high".into(),
         dedupe_key: "pause-preserves-pending-intent".into(),
         status: AGENT_EXECUTION_INTENT_STATUS_PENDING.into(),

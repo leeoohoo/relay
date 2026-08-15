@@ -20,7 +20,7 @@ pub fn standard_mcp_tools() -> Vec<Tool> {
         ),
         action_tool::<AgentWorkSessionToolInput>(
             "agent.work_session",
-            "List this Agent's control/project Codex sessions, inspect a session checkpoint, or dispatch structured work to a project-bound worker session. Use dispatch only when project execution is necessary; the Relay backend resolves the actual thread from agent_id plus project_id. Repeating dispatch with the same dedupe_key and work returns the existing Intent instead of failing or creating duplicate work.",
+            "List this Agent's control/project Codex sessions, inspect a session checkpoint, dispatch structured work to a project-bound worker session, or request an on-demand capability for active work. Include browser at dispatch only when UI interaction or browser validation is expected. A worker that later discovers a real browser requirement uses capability_request and ends the Turn so Relay can resume the same project session with the browser runtime enabled.",
         ),
         read_only_tool::<AgentInboxWaitInput>(
             "agent.inbox.wait",
@@ -514,7 +514,9 @@ pub(super) fn is_mutating_tool(tool: &str, input: &Value) -> bool {
     match tool {
         "agent.profile.update" | "agent.inbox.ack" => true,
         "agent.memory" => !matches!(input_action(input), Some("overview" | "search" | "get")),
-        "agent.work_session" => matches!(input_action(input), Some("dispatch")),
+        "agent.work_session" => {
+            matches!(input_action(input), Some("dispatch" | "capability_request"))
+        }
         "company.chat" => !matches!(input_action(input), Some("history" | "unread")),
         "company.project" => !matches!(input_action(input), Some("get" | "list")),
         "company.task" => !matches!(

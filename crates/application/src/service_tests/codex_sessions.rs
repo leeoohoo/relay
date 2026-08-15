@@ -147,6 +147,7 @@ fn repeated_execution_intent_dedupe_key_returns_existing_work() {
         action_type: "execute".into(),
         objective: "完成同一个项目目标".into(),
         acceptance_criteria: vec!["结果可验证".into()],
+        required_capabilities: vec![],
         priority: "high".into(),
         dedupe_key: "same-logical-work".into(),
         status: AGENT_EXECUTION_INTENT_STATUS_PENDING.into(),
@@ -177,6 +178,25 @@ fn repeated_execution_intent_dedupe_key_returns_existing_work() {
             if message.contains("already belongs to execution intent")
                 && message.contains("use a new dedupe_key")
     ));
+
+    let upgraded = app
+        .request_agent_execution_intent_capability(
+            agent.agent_profile.id,
+            company.company.id,
+            created.id,
+            "browser",
+        )
+        .expect("active intent should accept the browser capability");
+    assert_eq!(upgraded.required_capabilities, vec!["browser"]);
+    assert!(matches!(
+        app.request_agent_execution_intent_capability(
+            agent.agent_profile.id,
+            company.company.id,
+            created.id,
+            "shell"
+        ),
+        Err(AppError::Validation(message)) if message.contains("browser")
+    ));
 }
 
 #[test]
@@ -194,6 +214,7 @@ fn retryable_execution_failure_returns_the_intent_to_pending() {
         action_type: "execute".into(),
         objective: "继续未完成的项目任务".into(),
         acceptance_criteria: vec!["任务完成并验证".into()],
+        required_capabilities: vec![],
         priority: "high".into(),
         dedupe_key: "retry-temporary-codex-failure".into(),
         status: AGENT_EXECUTION_INTENT_STATUS_RUNNING.into(),
@@ -249,6 +270,7 @@ fn non_retryable_execution_failure_remains_terminal() {
         action_type: "execute".into(),
         objective: "执行无效请求".into(),
         acceptance_criteria: Vec::new(),
+        required_capabilities: Vec::new(),
         priority: "normal".into(),
         dedupe_key: "terminal-validation-failure".into(),
         status: AGENT_EXECUTION_INTENT_STATUS_FAILED.into(),

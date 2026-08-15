@@ -34,13 +34,13 @@ use ai_chat_domain::{
         AGENT_CODEX_RUN_STATUS_TIMED_OUT, AGENT_CODEX_SANDBOX_READ_ONLY,
         AGENT_CODEX_SESSION_KIND_CONTROL, AGENT_CODEX_SESSION_KIND_PROJECT,
         AGENT_CODEX_SESSION_STATUS_ACTIVE, AGENT_CODEX_SESSION_STATUS_ARCHIVED,
-        AGENT_CODEX_SETTING_INHERIT, AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION,
-        AGENT_EXECUTION_INTENT_STATUS_COMPLETED, AGENT_EXECUTION_INTENT_STATUS_FAILED,
-        AGENT_EXECUTION_INTENT_STATUS_PENDING, AGENT_EXECUTION_INTENT_STATUS_RUNNING,
-        AGENT_TOOL_APPROVAL_STATUS_APPROVED, AGENT_TOOL_APPROVAL_STATUS_EXECUTED,
-        AGENT_TOOL_APPROVAL_STATUS_EXPIRED, AGENT_TOOL_APPROVAL_STATUS_FAILED,
-        AGENT_TOOL_APPROVAL_STATUS_REJECTED, CODEX_PLUGIN_OPERATION_REFRESH,
-        COMPANY_SKILL_LANGUAGE_EN,
+        AGENT_CODEX_SETTING_INHERIT, AGENT_EXECUTION_CAPABILITY_BROWSER,
+        AGENT_EXECUTION_INTENT_ACTION_REPLACE_SESSION, AGENT_EXECUTION_INTENT_STATUS_COMPLETED,
+        AGENT_EXECUTION_INTENT_STATUS_FAILED, AGENT_EXECUTION_INTENT_STATUS_PENDING,
+        AGENT_EXECUTION_INTENT_STATUS_RUNNING, AGENT_TOOL_APPROVAL_STATUS_APPROVED,
+        AGENT_TOOL_APPROVAL_STATUS_EXECUTED, AGENT_TOOL_APPROVAL_STATUS_EXPIRED,
+        AGENT_TOOL_APPROVAL_STATUS_FAILED, AGENT_TOOL_APPROVAL_STATUS_REJECTED,
+        CODEX_PLUGIN_OPERATION_REFRESH, COMPANY_SKILL_LANGUAGE_EN,
     },
 };
 use ai_chat_infrastructure::{
@@ -90,6 +90,7 @@ struct TriggerServiceConfig {
     run_heartbeat_stale_after_seconds: i64,
     batch_size: usize,
     resource_concurrency_limit: usize,
+    minimum_available_memory_bytes: u64,
     run_once: bool,
     model_catalog_path: PathBuf,
     model_discovery_profiles: Vec<String>,
@@ -558,6 +559,7 @@ async fn run_trigger_loop(
     );
 
     let mut running = FuturesUnordered::new();
+    let mut running_agents = HashSet::new();
     let mut plugin_operations = FuturesUnordered::new();
     let mut shutdown = Box::pin(shutdown_signal());
     let mut next_model_discovery = tokio::time::Instant::now();
@@ -567,6 +569,9 @@ async fn run_trigger_loop(
     let mut next_update_check = tokio::time::Instant::now();
     let mut next_watchdog = tokio::time::Instant::now();
     let mut next_browser_cleanup = tokio::time::Instant::now();
+    let mut next_memory_probe = tokio::time::Instant::now();
+    let mut available_memory = None;
+    let mut memory_pressure_active = false;
     publish_codex_runtime_probe(codex_control, codex_runner)?;
     if codex_runner.detect_version().is_none() && config.codex_auto_install {
         let runtime = codex_control.runtime()?;
@@ -581,9 +586,15 @@ async fn run_trigger_loop(
     }
     loop {
         if tokio::time::Instant::now() >= next_browser_cleanup {
-            match codex_runner.prune_idle_managed_browsers() {
-                Ok(count) if count > 0 => {
-                    tracing::info!(count, "stopped idle managed browser processes")
+            match codex_runner.prune_idle_managed_browsers(&running_agents) {
+                Ok((stopped_browsers, closed_pages))
+                    if stopped_browsers > 0 || closed_pages > 0 =>
+                {
+                    tracing::info!(
+                        stopped_browsers,
+                        closed_pages,
+                        "pruned idle managed browser resources"
+                    )
                 }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(
@@ -592,6 +603,31 @@ async fn run_trigger_loop(
                 ),
             }
             next_browser_cleanup = tokio::time::Instant::now() + StdDuration::from_secs(60);
+        }
+        if tokio::time::Instant::now() >= next_memory_probe {
+            available_memory = available_memory_bytes();
+            let pressure_now = memory_bounded_claim_slots(
+                1,
+                available_memory,
+                config.minimum_available_memory_bytes,
+            ) == 0;
+            if pressure_now != memory_pressure_active {
+                if pressure_now {
+                    tracing::warn!(
+                        available_memory_mb = available_memory.map(|bytes| bytes / 1024 / 1024),
+                        minimum_available_memory_mb =
+                            config.minimum_available_memory_bytes / 1024 / 1024,
+                        "memory pressure paused new Agent Trigger claims"
+                    );
+                } else if memory_pressure_active {
+                    tracing::info!(
+                        available_memory_mb = available_memory.map(|bytes| bytes / 1024 / 1024),
+                        "memory pressure recovered; Agent Trigger claims resumed"
+                    );
+                }
+                memory_pressure_active = pressure_now;
+            }
+            next_memory_probe = tokio::time::Instant::now() + StdDuration::from_secs(10);
         }
         if tokio::time::Instant::now() >= next_watchdog {
             match platform
@@ -688,12 +724,18 @@ async fn run_trigger_loop(
             }
         };
         let effective_batch_size = requested_batch_size.min(config.resource_concurrency_limit);
-        let available_slots = effective_batch_size.saturating_sub(running.len());
+        let concurrency_slots = effective_batch_size.saturating_sub(running.len());
+        let available_slots = memory_bounded_claim_slots(
+            concurrency_slots,
+            available_memory,
+            config.minimum_available_memory_bytes,
+        );
         if available_slots > 0 {
             let claimed = platform
                 .claim_due_agent_codex_triggers(&config.lease_owner, available_slots)
                 .map_err(anyhow::Error::msg)?;
             for trigger in claimed {
+                running_agents.insert(trigger.agent_profile_id);
                 running.push(process_claimed_trigger(
                     platform,
                     harness,
@@ -707,7 +749,9 @@ async fn run_trigger_loop(
         }
 
         if config.run_once {
-            while running.next().await.is_some() {}
+            while let Some(agent_id) = running.next().await {
+                running_agents.remove(&agent_id);
+            }
             while plugin_operations.next().await.is_some() {}
             break;
         }
@@ -720,7 +764,12 @@ async fn run_trigger_loop(
         } else {
             tokio::select! {
                 _ = tokio::time::sleep(config.poll_interval) => false,
-                _ = running.next(), if !running.is_empty() => false,
+                completed_agent = running.next(), if !running.is_empty() => {
+                    if let Some(agent_id) = completed_agent {
+                        running_agents.remove(&agent_id);
+                    }
+                    false
+                },
                 _ = plugin_operations.next(), if !plugin_operations.is_empty() => false,
                 _ = &mut shutdown => true,
             }
@@ -816,6 +865,7 @@ impl TriggerServiceConfig {
             .and_then(|value| value.parse::<usize>().ok())
             .map(|value| value.clamp(1, 32))
             .unwrap_or_else(default_resource_concurrency_limit);
+        let minimum_available_memory_bytes = minimum_available_memory_bytes_from_env();
         let run_once = bool_env("AGENT_TRIGGER_RUN_ONCE", false);
         let model_catalog_path = std::env::var("AGENT_TRIGGER_MODEL_CATALOG_PATH")
             .map(PathBuf::from)
@@ -894,6 +944,7 @@ impl TriggerServiceConfig {
             run_heartbeat_stale_after_seconds,
             batch_size,
             resource_concurrency_limit,
+            minimum_available_memory_bytes,
             run_once,
             model_catalog_path,
             model_discovery_profiles,
@@ -909,26 +960,17 @@ impl TriggerServiceConfig {
     }
 }
 
-fn default_resource_concurrency_limit() -> usize {
-    let logical_cpus = std::thread::available_parallelism()
-        .map(|value| value.get())
-        .unwrap_or(2);
-    resource_concurrency_limit_for(logical_cpus)
-}
-
-fn resource_concurrency_limit_for(logical_cpus: usize) -> usize {
-    (logical_cpus / 4).clamp(1, 4)
-}
-
 mod codex_control;
 mod execution;
 mod execution_result;
 mod relay_skills;
+mod resource_limits;
 
 use codex_control::*;
 use execution::*;
 use execution_result::*;
 use relay_skills::*;
+use resource_limits::*;
 
 #[cfg(test)]
 mod prompt_tests;
