@@ -134,15 +134,13 @@ pub(super) async fn execute_trigger(
     let agent = platform.get_agent_profile_by_id(trigger.agent_profile_id)?;
     let control_workspace = workspace_manager
         .prepare_general_workspace(trigger.company_id, trigger.agent_profile_id)?;
-    let control_session_id = platform
-        .get_agent_codex_session(trigger.agent_profile_id, "control")
-        .map(|session| session.id);
+    let control_session = platform.get_agent_codex_session(trigger.agent_profile_id, "control");
     let control_memories = platform
         .agent_long_term_memories_for_control_session_with_verified_identity(
             &agent,
             &membership,
             trigger.company_id,
-            control_session_id,
+            control_session.as_ref().map(|session| session.id),
         )?;
     let skill_language = platform.effective_company_skill_language(trigger.company_id);
     let control_skills = prepare_relay_skills(
@@ -247,7 +245,7 @@ pub(super) async fn execute_trigger(
             trigger,
             &run,
             &control_workspace,
-            "control",
+            control_session.as_ref(),
             None,
             control_prompt,
             &control_skills,
@@ -303,6 +301,7 @@ pub(super) async fn execute_trigger(
             &control_memories,
             &control_result,
             false,
+            control_session,
         )?;
         run.codex_thread_id = Some(control_session.codex_thread_id.clone());
         run.final_message_summary = control_result
@@ -718,7 +717,7 @@ async fn execute_project_intent(
         trigger,
         run,
         &workspace,
-        &scope_key,
+        existing_session.as_ref(),
         Some(intent.project_id),
         prompt,
         &skills,
@@ -748,10 +747,10 @@ async fn execute_project_intent(
             &memories,
             &result,
             replace_session,
+            existing_session,
         )?
     } else {
-        platform
-            .get_agent_codex_session(trigger.agent_profile_id, &scope_key)
+        existing_session
             .unwrap_or_else(|| empty_stage_session(trigger.agent_profile_id, intent.project_id))
     };
     Ok((result, session))
@@ -763,7 +762,7 @@ async fn run_codex_stage(
     trigger: &AgentCodexTriggerConfig,
     run: &AgentCodexTriggerRun,
     workspace: &PreparedGitWorkspace,
-    scope_key: &str,
+    existing_session: Option<&AgentCodexSession>,
     project_id: Option<Uuid>,
     prompt: String,
     _skills: &PreparedRelaySkills,
@@ -776,11 +775,11 @@ async fn run_codex_stage(
 ) -> AppResult<CodexRunResult> {
     let session_key = codex_session_key(workspace);
     let existing_thread_id = (!replace_session)
-        .then(|| platform.get_agent_codex_session(trigger.agent_profile_id, scope_key))
+        .then_some(existing_session)
         .flatten()
         .and_then(|session| {
             codex_session_key_matches(&session.workspace_key, &session_key)
-                .then_some(session.codex_thread_id)
+                .then(|| session.codex_thread_id.clone())
         });
     let managed_mcp_servers = project_id
         .filter(|_| browser_enabled)

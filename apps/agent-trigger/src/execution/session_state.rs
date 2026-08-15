@@ -11,11 +11,11 @@ pub(super) fn persist_codex_stage_session(
     memories: &[AgentMemory],
     result: &CodexRunResult,
     replace_session: bool,
+    existing: Option<AgentCodexSession>,
 ) -> AppResult<AgentCodexSession> {
     let thread_id = result.thread_id.clone().ok_or_else(|| {
         AppError::Validation("successful Codex run did not return a thread ID".into())
     })?;
-    let existing = platform.get_agent_codex_session(agent_id, scope_key);
     let now = now_utc();
     let replace_session = replace_session || result.replaced_failed_session;
     if replace_session {
@@ -26,14 +26,22 @@ pub(super) fn persist_codex_stage_session(
             platform.save_agent_codex_session(archived)?;
         }
     }
+    let previous_generation = existing.as_ref().map(|session| session.generation);
     let existing = (!replace_session).then_some(existing).flatten();
-    let latest_generation = platform
-        .list_agent_codex_sessions(agent_id, 100)
-        .into_iter()
-        .filter(|session| session.scope_key == scope_key)
-        .map(|session| session.generation)
-        .max()
-        .unwrap_or(0);
+    let generation = if let Some(session) = existing.as_ref() {
+        session.generation
+    } else if let Some(previous_generation) = previous_generation {
+        previous_generation.saturating_add(1)
+    } else {
+        platform
+            .list_agent_codex_sessions(agent_id, 100)
+            .into_iter()
+            .filter(|session| session.scope_key == scope_key)
+            .map(|session| session.generation)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+    };
     let summary = result
         .final_message
         .as_deref()
@@ -48,10 +56,7 @@ pub(super) fn persist_codex_stage_session(
         session_kind: session_kind.into(),
         scope_key: scope_key.into(),
         project_id,
-        generation: existing
-            .as_ref()
-            .map(|session| session.generation)
-            .unwrap_or(latest_generation + 1),
+        generation,
         codex_thread_id: thread_id,
         workspace_key: codex_session_key(workspace),
         status: AGENT_CODEX_SESSION_STATUS_ACTIVE.into(),
