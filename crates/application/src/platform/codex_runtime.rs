@@ -425,7 +425,6 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
         agent_id: Uuid,
         expires_at: DateTime<Utc>,
     ) -> AppResult<AgentCodexRunTokenIssue> {
-        self.ensure_agent_can_act(agent_id)?;
         if expires_at <= now_utc() {
             return Err(AppError::Validation(
                 "Codex run token expiry must be in the future".into(),

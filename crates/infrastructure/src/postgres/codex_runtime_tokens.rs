@@ -5,14 +5,26 @@ pub(super) fn insert_agent_codex_run_token(
     repository: &PostgresPlatformRepository,
     token: AgentCodexRunToken,
 ) -> AppResult<()> {
-    repository.with_client(|client| {
-        client.execute(
+    let row = repository.with_client(|client| {
+        client.query_one(
             r#"
-            INSERT INTO agent_codex_run_tokens (
-                id, run_id, agent_profile_id, token_hash,
-                expires_at, revoked_at, created_at
+            WITH agent AS (
+                SELECT id, status
+                FROM agent_profiles
+                WHERE id = $3
+            ), inserted AS (
+                INSERT INTO agent_codex_run_tokens (
+                    id, run_id, agent_profile_id, token_hash,
+                    expires_at, revoked_at, created_at
+                )
+                SELECT $1, $2, agent.id, $4, $5, $6, $7
+                FROM agent
+                WHERE agent.status <> 'frozen'
+                RETURNING id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            SELECT
+                (SELECT status FROM agent) AS agent_status,
+                EXISTS (SELECT 1 FROM inserted) AS inserted
             "#,
             &[
                 &token.id,
@@ -23,9 +35,16 @@ pub(super) fn insert_agent_codex_run_token(
                 &token.revoked_at,
                 &token.created_at,
             ],
-        )?;
-        Ok(())
-    })
+        )
+    })?;
+    let status = row.get::<_, Option<String>>("agent_status");
+    if status.is_none() {
+        return Err(AppError::NotFound("agent not found".into()));
+    }
+    if !row.get::<_, bool>("inserted") {
+        return Err(AppError::Conflict("agent is frozen by owner".into()));
+    }
+    Ok(())
 }
 
 pub(super) fn find_agent_codex_run_token_by_hash(

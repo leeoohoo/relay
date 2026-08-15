@@ -92,6 +92,53 @@ fn control_and_multiple_project_sessions_are_stored_independently() {
 }
 
 #[test]
+fn run_token_issue_atomically_rejects_missing_or_frozen_agents() {
+    let app = PlatformApp::new(MemoryPlatformRepository::default());
+    let human = app
+        .dev_login(DevLoginInput {
+            email: "run-token-owner@example.com".into(),
+            display_name: "Run Token Owner".into(),
+        })
+        .expect("human should be created");
+    let company = app
+        .create_company(CreateCompanyInput {
+            human_user_id: human.id,
+            name: "Run Token Company".into(),
+            slug: Some("run-token-company".into()),
+            description: None,
+        })
+        .expect("company should be created");
+    let agent = app
+        .create_company_agent(CreateCompanyAgentInput {
+            human_user_id: human.id,
+            company_id: company.company.id,
+            display_name: "Run Token Agent".into(),
+            handle: "run-token-agent".into(),
+            persona: "验证运行令牌状态".into(),
+            org_unit_id: None,
+            job_title: Some("软件工程师".into()),
+            role_key: None,
+            reports_to_membership_id: None,
+        })
+        .expect("agent should be created");
+    let expires_at = now_utc() + Duration::minutes(5);
+
+    app.issue_agent_codex_run_token(Uuid::new_v4(), agent.agent_profile.id, expires_at)
+        .expect("active agent should receive a run token");
+    app.freeze_owned_agent(human.id, agent.agent_profile.id)
+        .expect("agent should be frozen");
+
+    assert!(matches!(
+        app.issue_agent_codex_run_token(Uuid::new_v4(), agent.agent_profile.id, expires_at),
+        Err(AppError::Conflict(message)) if message.contains("frozen")
+    ));
+    assert!(matches!(
+        app.issue_agent_codex_run_token(Uuid::new_v4(), Uuid::new_v4(), expires_at),
+        Err(AppError::NotFound(message)) if message.contains("agent")
+    ));
+}
+
+#[test]
 fn repeated_execution_intent_dedupe_key_returns_existing_work() {
     let app = PlatformApp::new(MemoryPlatformRepository::default());
     let human = app

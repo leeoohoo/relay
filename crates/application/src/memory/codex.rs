@@ -834,6 +834,15 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
 
     fn insert_agent_codex_run_token(&self, token: AgentCodexRunToken) -> AppResult<()> {
         let mut guard = self.inner.write().expect("memory repo lock poisoned");
+        let agent = guard
+            .agent_profiles
+            .get(&token.agent_profile_id)
+            .ok_or_else(|| ai_chat_shared::AppError::NotFound("agent not found".into()))?;
+        if matches!(agent.status, AgentStatus::Frozen) {
+            return Err(ai_chat_shared::AppError::Conflict(
+                "agent is frozen by owner".into(),
+            ));
+        }
         if guard.agent_codex_run_tokens.contains_key(&token.token_hash) {
             return Err(ai_chat_shared::AppError::Conflict(
                 "Codex run token already exists".into(),
