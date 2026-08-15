@@ -544,7 +544,20 @@ async fn run_trigger_loop(
         discovery_fingerprint,
         configured_discovery_delays,
     );
-    let mut blocking_maintenance = BlockingMaintenance::new(initial_discovery_delays);
+    let initial_update_delay = codex_control
+        .runtime()
+        .ok()
+        .and_then(|runtime| runtime.last_checked_at)
+        .and_then(|last_checked_at| {
+            now_utc()
+                .signed_duration_since(last_checked_at)
+                .to_std()
+                .ok()
+        })
+        .map(|age| config.codex_update_check_interval.saturating_sub(age))
+        .unwrap_or_default();
+    let mut blocking_maintenance =
+        BlockingMaintenance::new(initial_discovery_delays, initial_update_delay);
     let mut next_discovery_fingerprint_check =
         tokio::time::Instant::now() + config.discovery_fingerprint_interval;
     let mut next_watchdog = tokio::time::Instant::now();

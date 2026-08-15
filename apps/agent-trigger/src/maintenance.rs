@@ -34,14 +34,17 @@ impl DueMaintenance {
 }
 
 impl BlockingMaintenance {
-    pub(super) fn new(initial_delays: discovery::CodexDiscoveryDelays) -> Self {
+    pub(super) fn new(
+        initial_delays: discovery::CodexDiscoveryDelays,
+        initial_update_delay: StdDuration,
+    ) -> Self {
         let now = tokio::time::Instant::now();
         Self {
             next_model_discovery: now + initial_delays.models,
             next_default_auth_discovery: now + initial_delays.auth,
             next_mcp_discovery: now + initial_delays.mcp,
             next_plugin_discovery: now + initial_delays.plugins,
-            next_update_check: now,
+            next_update_check: now + initial_update_delay,
             job: None,
         }
     }
@@ -237,7 +240,10 @@ mod tests {
 
     #[test]
     fn discovery_changes_only_advance_affected_deadlines() {
-        let mut maintenance = BlockingMaintenance::new(discovery::CodexDiscoveryDelays::default());
+        let mut maintenance = BlockingMaintenance::new(
+            discovery::CodexDiscoveryDelays::default(),
+            StdDuration::ZERO,
+        );
         let future = tokio::time::Instant::now() + StdDuration::from_secs(3600);
         maintenance.next_model_discovery = future;
         maintenance.next_default_auth_discovery = future;
@@ -253,5 +259,15 @@ mod tests {
         assert_eq!(maintenance.next_default_auth_discovery, future);
         assert!(maintenance.next_mcp_discovery < future);
         assert!(maintenance.next_plugin_discovery < future);
+    }
+
+    #[test]
+    fn cached_update_check_keeps_its_remaining_delay_after_restart() {
+        let before = tokio::time::Instant::now();
+        let maintenance = BlockingMaintenance::new(
+            discovery::CodexDiscoveryDelays::default(),
+            StdDuration::from_secs(3_600),
+        );
+        assert!(maintenance.next_update_check >= before + StdDuration::from_secs(3_599));
     }
 }
