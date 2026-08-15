@@ -620,7 +620,10 @@ impl CodexRuntimePlatformRepository for PostgresPlatformRepository {
                         state_reason = 'run_heartbeat_lost: Trigger 进程没有继续报告心跳',
                         error_message = 'run_heartbeat_lost: Trigger process heartbeat stopped'
                     WHERE status = 'running'
-                      AND COALESCE(heartbeat_at, last_activity_at, started_at) < $2
+                      AND GREATEST(
+                          COALESCE(heartbeat_at, started_at),
+                          COALESCE(last_activity_at, started_at)
+                      ) < $2
                     RETURNING id, trigger_config_id, agent_profile_id
                 ),
                 released_configs AS (

@@ -56,7 +56,7 @@ pub const CODEX_APPROVAL_POLICY_NEVER: &str = "never";
 pub const CODEX_SANDBOX_WORKSPACE_WRITE: &str = "workspace_write";
 pub const AGENT_TRIGGER_BATCH_SIZE_MIN: usize = 1;
 pub const AGENT_TRIGGER_BATCH_SIZE_MAX: usize = 100;
-pub const AGENT_TRIGGER_BATCH_SIZE_DEFAULT: usize = 10;
+pub const AGENT_TRIGGER_BATCH_SIZE_DEFAULT: usize = 2;
 
 pub fn agent_trigger_batch_size_from_env() -> usize {
     std::env::var("AGENT_TRIGGER_BATCH_SIZE")

@@ -807,6 +807,26 @@ pub(super) fn truncate(value: &str, max_characters: usize) -> String {
     value.chars().take(max_characters).collect()
 }
 
+pub(super) struct ProcessTreeGuard {
+    process_id: Option<u32>,
+}
+
+impl ProcessTreeGuard {
+    pub(super) fn new(process_id: Option<u32>) -> Self {
+        Self { process_id }
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.process_id = None;
+    }
+}
+
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        kill_process_tree(self.process_id);
+    }
+}
+
 #[cfg(unix)]
 pub(super) fn terminate_process_tree(process_id: Option<u32>) {
     if let Some(process_id) = process_id {
@@ -817,7 +837,13 @@ pub(super) fn terminate_process_tree(process_id: Option<u32>) {
 }
 
 #[cfg(not(unix))]
-pub(super) fn terminate_process_tree(_process_id: Option<u32>) {}
+pub(super) fn terminate_process_tree(process_id: Option<u32>) {
+    if let Some(process_id) = process_id {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &process_id.to_string(), "/T"])
+            .status();
+    }
+}
 
 #[cfg(unix)]
 pub(super) fn kill_process_tree(process_id: Option<u32>) {
@@ -830,4 +856,45 @@ pub(super) fn kill_process_tree(process_id: Option<u32>) {
 }
 
 #[cfg(not(unix))]
-pub(super) fn kill_process_tree(_process_id: Option<u32>) {}
+pub(super) fn kill_process_tree(process_id: Option<u32>) {
+    if let Some(process_id) = process_id {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &process_id.to_string(), "/T", "/F"])
+            .status();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_tree_guard_tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn dropping_process_guard_kills_the_spawned_process_group() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut child = command.spawn().expect("spawn guarded process group");
+
+        let guard = ProcessTreeGuard::new(Some(child.id()));
+        drop(guard);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if child.try_wait().expect("inspect guarded process").is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "guarded process group did not stop"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}

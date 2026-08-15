@@ -37,6 +37,8 @@ export HUMAN_FOLDER_REFERENCE_HOST_ROOT="${HUMAN_FOLDER_REFERENCE_HOST_ROOT:-$RE
 export HUMAN_FOLDER_REFERENCE_MOUNT_ROOT="${HUMAN_FOLDER_REFERENCE_MOUNT_ROOT:-$RELAY_HOST_IMPORT_CONTAINER_ROOT}"
 export HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS="${HUMAN_FOLDER_REFERENCE_ALLOWED_ROOTS:-$RELAY_HOST_IMPORT_CONTAINER_ROOT}"
 export AGENT_TRIGGER_STATE_ROOT="${AGENT_TRIGGER_STATE_ROOT:-$RELAY_DATA_HOME/.relay-agent-trigger}"
+export AGENT_TRIGGER_BATCH_SIZE="${AGENT_TRIGGER_BATCH_SIZE:-2}"
+export AGENT_TRIGGER_RUN_HEARTBEAT_STALE_SECONDS="${AGENT_TRIGGER_RUN_HEARTBEAT_STALE_SECONDS:-180}"
 export RELAY_HARNESS_CREDENTIALS_ROOT="${RELAY_HARNESS_CREDENTIALS_ROOT:-$RELAY_DATA_HOME/.relay/harness-credentials}"
 export RELAY_MESSAGE_ATTACHMENTS_ROOT="${RELAY_MESSAGE_ATTACHMENTS_ROOT:-$RELAY_DATA_HOME/.relay/attachments}"
 export RELAY_HOST_UID="${RELAY_HOST_UID:-$(id -u)}"
@@ -48,6 +50,7 @@ export RELAY_CHROME_DEVTOOLS_MCP_IMAGE="${RELAY_CHROME_DEVTOOLS_MCP_IMAGE:-relay
 export RELAY_CHROME_PROFILE_ROOT="${RELAY_CHROME_PROFILE_ROOT:-$AGENT_TRIGGER_STATE_ROOT/browser-profiles}"
 export RELAY_CHROME_DOCKER_CPUS="${RELAY_CHROME_DOCKER_CPUS:-1.0}"
 export RELAY_CHROME_DOCKER_MEMORY="${RELAY_CHROME_DOCKER_MEMORY:-768m}"
+export RELAY_CHROME_IDLE_TIMEOUT_SECONDS="${RELAY_CHROME_IDLE_TIMEOUT_SECONDS:-900}"
 
 relay_prepare_managed_directories \
   "$RUNTIME_DIR" \
@@ -75,19 +78,40 @@ trigger_is_running() {
   [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1
 }
 
+collect_descendant_pids() {
+  local parent_pid="$1"
+  local child_pid
+  while IFS= read -r child_pid; do
+    [[ -n "$child_pid" ]] || continue
+    collect_descendant_pids "$child_pid"
+    printf '%s\n' "$child_pid"
+  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+}
+
 stop_trigger() {
-  local pid
-  if [[ "$(uname -s)" == "Darwin" ]]; then
-    launchctl remove "$TRIGGER_LAUNCH_LABEL" >/dev/null 2>&1 || true
-  fi
+  local pid descendants child_pid
   pid="$(read_trigger_pid)"
   if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+    descendants="$(collect_descendant_pids "$pid")"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      launchctl remove "$TRIGGER_LAUNCH_LABEL" >/dev/null 2>&1 || true
+    fi
     kill "$pid" >/dev/null 2>&1 || true
+    for child_pid in $descendants; do
+      kill "$child_pid" >/dev/null 2>&1 || true
+    done
     for _ in {1..20}; do
       kill -0 "$pid" >/dev/null 2>&1 || break
       sleep 0.25
     done
     kill -9 "$pid" >/dev/null 2>&1 || true
+    for child_pid in $descendants; do
+      if kill -0 "$child_pid" >/dev/null 2>&1; then
+        kill -9 "$child_pid" >/dev/null 2>&1 || true
+      fi
+    done
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    launchctl remove "$TRIGGER_LAUNCH_LABEL" >/dev/null 2>&1 || true
   fi
   rm -f "$TRIGGER_PID_FILE"
 }
@@ -149,6 +173,9 @@ start_trigger() {
     "AGENT_TRIGGER_MANAGED_PROJECTS_ROOT=$AGENT_TRIGGER_MANAGED_PROJECTS_ROOT"
     "AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS=$AGENT_TRIGGER_ALLOWED_LOCAL_ROOTS"
     "AGENT_TRIGGER_STATE_ROOT=$AGENT_TRIGGER_STATE_ROOT"
+    "AGENT_TRIGGER_BATCH_SIZE=$AGENT_TRIGGER_BATCH_SIZE"
+    "AGENT_TRIGGER_RESOURCE_CONCURRENCY_LIMIT=${AGENT_TRIGGER_RESOURCE_CONCURRENCY_LIMIT:-}"
+    "AGENT_TRIGGER_RUN_HEARTBEAT_STALE_SECONDS=$AGENT_TRIGGER_RUN_HEARTBEAT_STALE_SECONDS"
     "AGENT_TRIGGER_GIT_CREDENTIALS_ROOT=$AGENT_TRIGGER_STATE_ROOT/git-credentials"
     "AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT=${AGENT_TRIGGER_CODEX_AUTO_COMPACT_TOKEN_LIMIT:-200000}"
     "RELAY_CHROME_DEVTOOLS_MCP_ENABLED=$RELAY_CHROME_DEVTOOLS_MCP_ENABLED"
@@ -160,6 +187,7 @@ start_trigger() {
     "RELAY_CHROME_PROFILE_ROOT=$RELAY_CHROME_PROFILE_ROOT"
     "RELAY_CHROME_DOCKER_CPUS=$RELAY_CHROME_DOCKER_CPUS"
     "RELAY_CHROME_DOCKER_MEMORY=$RELAY_CHROME_DOCKER_MEMORY"
+    "RELAY_CHROME_IDLE_TIMEOUT_SECONDS=$RELAY_CHROME_IDLE_TIMEOUT_SECONDS"
     "RELAY_HOST_UID=$RELAY_HOST_UID"
     "RELAY_HOST_GID=$RELAY_HOST_GID"
     "AGENT_TRIGGER_RUN_ONCE=false"

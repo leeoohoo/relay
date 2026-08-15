@@ -24,9 +24,14 @@ impl<R: PlatformRepository, V: OwnershipProofVerifier> PlatformApp<R, V> {
             .iter()
             .find(|run| run.status == AGENT_CODEX_RUN_STATUS_RUNNING)
         {
-            let heartbeat_at = run.heartbeat_at.or(run.last_activity_at);
+            let heartbeat_at = match (run.heartbeat_at, run.last_activity_at) {
+                (Some(heartbeat), Some(activity)) => Some(heartbeat.max(activity)),
+                (Some(heartbeat), None) => Some(heartbeat),
+                (None, Some(activity)) => Some(activity),
+                (None, None) => None,
+            };
             let stale =
-                heartbeat_at.is_none_or(|at| now.signed_duration_since(at).num_seconds() > 20);
+                heartbeat_at.is_none_or(|at| now.signed_duration_since(at).num_seconds() > 60);
             return AgentRuntimeProjection {
                 state: if stale {
                     RUNTIME_STATE_RECOVERING

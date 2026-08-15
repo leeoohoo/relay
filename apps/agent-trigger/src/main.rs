@@ -87,7 +87,9 @@ struct TriggerServiceConfig {
     plugin_host_id: String,
     hostname: String,
     poll_interval: StdDuration,
+    run_heartbeat_stale_after_seconds: i64,
     batch_size: usize,
+    resource_concurrency_limit: usize,
     run_once: bool,
     model_catalog_path: PathBuf,
     model_discovery_profiles: Vec<String>,
@@ -224,23 +226,57 @@ impl CodexProgressHandler for PlatformCodexProgressHandler {
     }
 }
 
-async fn run_with_heartbeat<F, T>(platform: &TriggerPlatform, run_id: Uuid, future: F) -> T
+async fn run_with_heartbeat<F, T>(
+    platform: &TriggerPlatform,
+    run_id: Uuid,
+    future: F,
+) -> AppResult<T>
 where
     F: std::future::Future<Output = T>,
 {
-    tokio::pin!(future);
-    let mut heartbeat = tokio::time::interval(StdDuration::from_secs(5));
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            output = &mut future => return output,
-            _ = heartbeat.tick() => {
-                if let Err(error) = platform.heartbeat_agent_codex_trigger_run(run_id) {
-                    tracing::debug!(run_id = %run_id, error = %sanitize_error(&error.to_string()), "Codex run heartbeat stopped");
-                }
+    platform.heartbeat_agent_codex_trigger_run(run_id)?;
+    let heartbeat_platform = platform.clone();
+    let (stop_sender, stop_receiver) = std::sync::mpsc::channel::<()>();
+    let (failure_sender, mut failure_receiver) = tokio::sync::oneshot::channel::<AppError>();
+    std::thread::Builder::new()
+        .name(format!("relay-run-heartbeat-{run_id}"))
+        .spawn(move || loop {
+            match stop_receiver.recv_timeout(StdDuration::from_secs(5)) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             }
-        }
-    }
+            if let Err(error) = heartbeat_platform.heartbeat_agent_codex_trigger_run(run_id) {
+                if heartbeat_error_is_fatal(&error) {
+                    let _ = failure_sender.send(error);
+                    break;
+                }
+                tracing::warn!(
+                    run_id = %run_id,
+                    error = %sanitize_error(&error.to_string()),
+                    "Codex run heartbeat temporarily failed"
+                );
+            }
+        })
+        .map_err(|error| {
+            AppError::Internal(format!("cannot start run heartbeat worker: {error}"))
+        })?;
+
+    tokio::pin!(future);
+    let result = tokio::select! {
+        output = &mut future => Ok(output),
+        failure = &mut failure_receiver => Err(failure.unwrap_or_else(|_| {
+            AppError::Conflict("Codex run heartbeat worker stopped unexpectedly".into())
+        })),
+    };
+    let _ = stop_sender.send(());
+    result
+}
+
+fn heartbeat_error_is_fatal(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Conflict(_) | AppError::NotFound(_) | AppError::Unauthorized(_)
+    )
 }
 
 #[async_trait]
@@ -508,12 +544,15 @@ async fn run_trigger_loop(
     codex_control: &CodexControlStore,
     config: &TriggerServiceConfig,
 ) -> anyhow::Result<()> {
-    let initial_batch_size = effective_agent_trigger_batch_size(codex_control, config.batch_size)
-        .unwrap_or(config.batch_size);
+    let requested_initial_batch_size =
+        effective_agent_trigger_batch_size(codex_control, config.batch_size)
+            .unwrap_or(config.batch_size);
+    let initial_batch_size = requested_initial_batch_size.min(config.resource_concurrency_limit);
     tracing::info!(
         lease_owner = %config.lease_owner,
         poll_interval_seconds = config.poll_interval.as_secs(),
         environment_batch_size = config.batch_size,
+        resource_concurrency_limit = config.resource_concurrency_limit,
         effective_batch_size = initial_batch_size,
         "local Codex Agent Trigger started"
     );
@@ -527,6 +566,7 @@ async fn run_trigger_loop(
     let mut next_plugin_discovery = tokio::time::Instant::now();
     let mut next_update_check = tokio::time::Instant::now();
     let mut next_watchdog = tokio::time::Instant::now();
+    let mut next_browser_cleanup = tokio::time::Instant::now();
     publish_codex_runtime_probe(codex_control, codex_runner)?;
     if codex_runner.detect_version().is_none() && config.codex_auto_install {
         let runtime = codex_control.runtime()?;
@@ -540,8 +580,23 @@ async fn run_trigger_loop(
         }
     }
     loop {
+        if tokio::time::Instant::now() >= next_browser_cleanup {
+            match codex_runner.prune_idle_managed_browsers() {
+                Ok(count) if count > 0 => {
+                    tracing::info!(count, "stopped idle managed browser processes")
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    error = %sanitize_error(&error.to_string()),
+                    "failed to stop idle managed browser processes"
+                ),
+            }
+            next_browser_cleanup = tokio::time::Instant::now() + StdDuration::from_secs(60);
+        }
         if tokio::time::Instant::now() >= next_watchdog {
-            match platform.watchdog_stale_agent_codex_trigger_runs(30) {
+            match platform
+                .watchdog_stale_agent_codex_trigger_runs(config.run_heartbeat_stale_after_seconds)
+            {
                 Ok(count) if count > 0 => {
                     tracing::warn!(stale_runs = count, "Watchdog recovered stale Codex runs")
                 }
@@ -618,7 +673,7 @@ async fn run_trigger_loop(
                 }
             }
         }
-        let effective_batch_size = match effective_agent_trigger_batch_size(
+        let requested_batch_size = match effective_agent_trigger_batch_size(
             codex_control,
             config.batch_size,
         ) {
@@ -632,6 +687,7 @@ async fn run_trigger_loop(
                 config.batch_size
             }
         };
+        let effective_batch_size = requested_batch_size.min(config.resource_concurrency_limit);
         let available_slots = effective_batch_size.saturating_sub(running.len());
         if available_slots > 0 {
             let claimed = platform
@@ -748,7 +804,18 @@ impl TriggerServiceConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .map(|value| value.clamp(1, 60))
             .unwrap_or(2);
+        let run_heartbeat_stale_after_seconds =
+            std::env::var("AGENT_TRIGGER_RUN_HEARTBEAT_STALE_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .map(|value| value.clamp(60, 900))
+                .unwrap_or(180);
         let batch_size = agent_trigger_batch_size_from_env();
+        let resource_concurrency_limit = std::env::var("AGENT_TRIGGER_RESOURCE_CONCURRENCY_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .map(|value| value.clamp(1, 32))
+            .unwrap_or_else(default_resource_concurrency_limit);
         let run_once = bool_env("AGENT_TRIGGER_RUN_ONCE", false);
         let model_catalog_path = std::env::var("AGENT_TRIGGER_MODEL_CATALOG_PATH")
             .map(PathBuf::from)
@@ -824,7 +891,9 @@ impl TriggerServiceConfig {
             plugin_host_id,
             hostname: host,
             poll_interval: StdDuration::from_secs(poll_interval_seconds),
+            run_heartbeat_stale_after_seconds,
             batch_size,
+            resource_concurrency_limit,
             run_once,
             model_catalog_path,
             model_discovery_profiles,
@@ -838,6 +907,17 @@ impl TriggerServiceConfig {
             codex_update_check_interval,
         })
     }
+}
+
+fn default_resource_concurrency_limit() -> usize {
+    let logical_cpus = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(2);
+    resource_concurrency_limit_for(logical_cpus)
+}
+
+fn resource_concurrency_limit_for(logical_cpus: usize) -> usize {
+    (logical_cpus / 4).clamp(1, 4)
 }
 
 mod codex_control;

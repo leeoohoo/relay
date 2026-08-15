@@ -785,7 +785,7 @@ async fn run_codex_stage(
             }) as Arc<dyn CodexCancellationHandler>),
         }),
     )
-    .await?;
+    .await??;
     if let Some(message) = result.final_message.as_mut() {
         *message = sanitize_workspace_output(message, &workspace.path);
     }

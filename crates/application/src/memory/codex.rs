@@ -607,12 +607,7 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             .agent_codex_trigger_runs
             .values_mut()
             .filter(|run| run.status == AGENT_CODEX_RUN_STATUS_RUNNING)
-            .filter(|run| {
-                run.heartbeat_at
-                    .or(run.last_activity_at)
-                    .unwrap_or(run.started_at)
-                    < stale_before
-            })
+            .filter(|run| latest_run_liveness(run) < stale_before)
             .map(|run| {
                 run.status = AGENT_CODEX_RUN_STATUS_LEASE_LOST.into();
                 run.finished_at = Some(now);
@@ -799,5 +794,14 @@ impl CodexRuntimePlatformRepository for MemoryPlatformRepository {
             token.expires_at > now && token.revoked_at.is_none_or(|revoked_at| revoked_at > now)
         });
         Ok(before - guard.agent_codex_run_tokens.len())
+    }
+}
+
+fn latest_run_liveness(run: &AgentCodexTriggerRun) -> chrono::DateTime<chrono::Utc> {
+    match (run.heartbeat_at, run.last_activity_at) {
+        (Some(heartbeat), Some(activity)) => heartbeat.max(activity),
+        (Some(heartbeat), None) => heartbeat,
+        (None, Some(activity)) => activity,
+        (None, None) => run.started_at,
     }
 }

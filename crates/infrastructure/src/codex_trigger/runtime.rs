@@ -217,6 +217,7 @@ impl CodexTriggerRunner {
             ))
         })?;
         let process_id = child.id();
+        let mut process_guard = ProcessTreeGuard::new(process_id);
         let stdout = child
             .stdout
             .take()
@@ -274,6 +275,7 @@ impl CodexTriggerRunner {
                 }
             }
         };
+        process_guard.disarm();
         let events = stdout_task.await.map_err(join_error)??;
         let stderr = stderr_task.await.map_err(join_error)??;
         let mut error_message = events.error_message.clone();
@@ -410,6 +412,7 @@ impl CodexTriggerRunner {
             ))
         })?;
         let process_id = child.id();
+        let mut process_guard = ProcessTreeGuard::new(process_id);
         let mut stdin = child.stdin.take().ok_or_else(|| {
             AppError::Validation("Codex app-server stdin pipe was not available".into())
         })?;
@@ -482,6 +485,7 @@ impl CodexTriggerRunner {
                 }
             }
         };
+        process_guard.disarm();
         let stderr = stderr_task.await.map_err(join_error)??;
         if outcome.status == CodexRunStatus::Failed && !stderr.trim().is_empty() {
             let stderr = sanitize_error(&stderr);

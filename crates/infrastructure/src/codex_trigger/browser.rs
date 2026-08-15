@@ -44,6 +44,7 @@ impl BrowserMcpMode {
 struct HostBrowserProcess {
     endpoint: String,
     child: Option<Child>,
+    last_used_at: std::time::Instant,
 }
 
 impl Drop for HostBrowserProcess {
@@ -66,6 +67,7 @@ pub(super) struct BrowserMcpConfig {
     profile_root: PathBuf,
     docker_cpus: String,
     docker_memory: String,
+    host_browser_idle_timeout: Duration,
     pool: Arc<Mutex<HashMap<(Uuid, Uuid), HostBrowserProcess>>>,
 }
 
@@ -81,6 +83,7 @@ impl BrowserMcpConfig {
             profile_root: PathBuf::from(".relay-agent-trigger/browser-profiles"),
             docker_cpus: "1.0".into(),
             docker_memory: "768m".into(),
+            host_browser_idle_timeout: Duration::from_secs(15 * 60),
             pool: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -121,6 +124,13 @@ impl BrowserMcpConfig {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "768m".into());
+        let host_browser_idle_timeout = Duration::from_secs(
+            std::env::var("RELAY_CHROME_IDLE_TIMEOUT_SECONDS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|value| value.clamp(60, 86_400))
+                .unwrap_or(15 * 60),
+        );
         validate_safe_value(&docker_command, "Chrome DevTools MCP Docker command", 1_024)?;
         validate_safe_value(&image, "Chrome DevTools MCP image", 256)?;
         validate_safe_value(&docker_cpus, "Chrome Docker CPU limit", 32)?;
@@ -148,6 +158,7 @@ impl BrowserMcpConfig {
             profile_root,
             docker_cpus,
             docker_memory,
+            host_browser_idle_timeout,
             pool: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -164,6 +175,7 @@ impl BrowserMcpConfig {
             profile_root,
             docker_cpus: "1.0".into(),
             docker_memory: "768m".into(),
+            host_browser_idle_timeout: Duration::from_secs(15 * 60),
             pool: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -183,6 +195,7 @@ impl BrowserMcpConfig {
             profile_root,
             docker_cpus: "1.0".into(),
             docker_memory: "768m".into(),
+            host_browser_idle_timeout: Duration::from_secs(15 * 60),
             pool: Arc::new(Mutex::new(HashMap::new())),
         };
         config.uses_host().then_some(config)
@@ -251,6 +264,7 @@ impl BrowserMcpConfig {
         })?;
         if let Some(process) = pool.get_mut(&key) {
             if browser_endpoint_ready(&process.endpoint) {
+                process.last_used_at = std::time::Instant::now();
                 if process
                     .child
                     .as_mut()
@@ -276,6 +290,7 @@ impl BrowserMcpConfig {
                 HostBrowserProcess {
                     endpoint: endpoint.clone(),
                     child: None,
+                    last_used_at: std::time::Instant::now(),
                 },
             );
             return Ok(endpoint);
@@ -331,6 +346,7 @@ impl BrowserMcpConfig {
                     HostBrowserProcess {
                         endpoint: endpoint.clone(),
                         child: Some(child),
+                        last_used_at: std::time::Instant::now(),
                     },
                 );
                 return Ok(endpoint);
@@ -348,6 +364,18 @@ impl BrowserMcpConfig {
             "managed host browser did not become ready within {} seconds",
             HOST_BROWSER_START_TIMEOUT.as_secs()
         )))
+    }
+
+    fn prune_idle_host_browsers(&self) -> AppResult<usize> {
+        let mut pool = self.pool.lock().map_err(|_| {
+            AppError::Internal("managed browser process pool lock was poisoned".into())
+        })?;
+        let before = pool.len();
+        let now = std::time::Instant::now();
+        pool.retain(|_, process| {
+            now.saturating_duration_since(process.last_used_at) < self.host_browser_idle_timeout
+        });
+        Ok(before - pool.len())
     }
 
     fn docker_server(
@@ -424,6 +452,10 @@ impl CodexTriggerRunner {
     ) -> AppResult<Option<ManagedCodexMcpServer>> {
         self.browser_mcp
             .server(company_id, agent_id, project_id, workspace)
+    }
+
+    pub fn prune_idle_managed_browsers(&self) -> AppResult<usize> {
+        self.browser_mcp.prune_idle_host_browsers()
     }
 
     pub(super) async fn managed_browser_mcp_view(&self) -> Option<CodexMcpServerView> {
@@ -728,4 +760,43 @@ fn browser_container_user(profile: &Path) -> Option<String> {
 #[cfg(not(unix))]
 fn browser_container_user(_profile: &Path) -> Option<String> {
     None
+}
+
+#[cfg(test)]
+mod idle_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn idle_browser_cleanup_keeps_recent_profiles() {
+        let mut config = BrowserMcpConfig::disabled();
+        config.host_browser_idle_timeout = Duration::from_secs(60);
+        let now = std::time::Instant::now();
+        let company_id = Uuid::new_v4();
+        let stale_agent_id = Uuid::new_v4();
+        let recent_agent_id = Uuid::new_v4();
+        {
+            let mut pool = config.pool.lock().expect("browser pool");
+            pool.insert(
+                (company_id, stale_agent_id),
+                HostBrowserProcess {
+                    endpoint: "http://127.0.0.1:19001".into(),
+                    child: None,
+                    last_used_at: now - Duration::from_secs(61),
+                },
+            );
+            pool.insert(
+                (company_id, recent_agent_id),
+                HostBrowserProcess {
+                    endpoint: "http://127.0.0.1:19002".into(),
+                    child: None,
+                    last_used_at: now,
+                },
+            );
+        }
+
+        assert_eq!(config.prune_idle_host_browsers().expect("prune"), 1);
+        let pool = config.pool.lock().expect("browser pool");
+        assert!(!pool.contains_key(&(company_id, stale_agent_id)));
+        assert!(pool.contains_key(&(company_id, recent_agent_id)));
+    }
 }

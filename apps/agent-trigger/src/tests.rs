@@ -5,6 +5,34 @@ use ai_chat_domain::agent_identity::AgentStatus;
 use super::*;
 
 #[test]
+fn only_authoritative_heartbeat_failures_stop_a_codex_run() {
+    assert!(heartbeat_error_is_fatal(&AppError::Conflict(
+        "lease lost".into()
+    )));
+    assert!(heartbeat_error_is_fatal(&AppError::NotFound("run".into())));
+    assert!(heartbeat_error_is_fatal(&AppError::Unauthorized(
+        "scope".into()
+    )));
+    assert!(!heartbeat_error_is_fatal(&AppError::Internal(
+        "database busy".into()
+    )));
+    assert!(!heartbeat_error_is_fatal(&AppError::RateLimited(
+        "retry".into()
+    )));
+}
+
+#[test]
+fn automatic_resource_limit_stays_conservative() {
+    assert!((1..=4).contains(&default_resource_concurrency_limit()));
+    assert_eq!(resource_concurrency_limit_for(1), 1);
+    assert_eq!(resource_concurrency_limit_for(4), 1);
+    assert_eq!(resource_concurrency_limit_for(8), 2);
+    assert_eq!(resource_concurrency_limit_for(12), 3);
+    assert_eq!(resource_concurrency_limit_for(16), 4);
+    assert_eq!(resource_concurrency_limit_for(64), 4);
+}
+
+#[test]
 fn website_always_allow_key_is_scoped_to_project_and_origin() {
     let agent_id = Uuid::new_v4();
     let project_id = Uuid::new_v4();

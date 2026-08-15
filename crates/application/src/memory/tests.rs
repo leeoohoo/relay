@@ -215,6 +215,31 @@ fn watchdog_recovers_stale_run_lease_and_running_intent() {
 }
 
 #[test]
+fn watchdog_uses_the_latest_heartbeat_or_activity_timestamp() {
+    let repo = MemoryPlatformRepository::default();
+    let now = now_utc();
+    let agent_id = Uuid::new_v4();
+    let mut run = running_codex_run(agent_id);
+    run.heartbeat_at = Some(now - chrono::Duration::minutes(2));
+    run.last_activity_at = Some(now - chrono::Duration::seconds(5));
+    {
+        let mut guard = repo.inner.write().expect("memory repo lock poisoned");
+        guard.agent_codex_trigger_runs.insert(run.id, run.clone());
+    }
+
+    let recovered = repo
+        .watchdog_stale_agent_codex_trigger_runs(now, now - chrono::Duration::seconds(60))
+        .expect("watchdog should inspect liveness");
+
+    assert_eq!(recovered, 0);
+    let guard = repo.inner.read().expect("memory repo lock poisoned");
+    assert_eq!(
+        guard.agent_codex_trigger_runs.get(&run.id).unwrap().status,
+        AGENT_CODEX_RUN_STATUS_RUNNING
+    );
+}
+
+#[test]
 fn due_codex_trigger_requires_a_logged_in_company_human() {
     let repo = MemoryPlatformRepository::default();
     let company_id = Uuid::new_v4();
