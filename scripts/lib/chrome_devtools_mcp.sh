@@ -33,6 +33,26 @@ relay_host_chrome_exists() {
   return 1
 }
 
+relay_browser_install_retry_due() {
+  local failure_marker="$1"
+  local retry_seconds="$2"
+  local failed_at now
+  [[ -f "$failure_marker" ]] || return 0
+  IFS= read -r failed_at <"$failure_marker" || return 0
+  [[ "$failed_at" =~ ^[0-9]+$ ]] || return 0
+  now="$(date +%s)"
+  (( now - failed_at >= retry_seconds ))
+}
+
+relay_record_browser_install_failure() {
+  local browser_root="$1"
+  local failure_marker="$2"
+  [[ -n "$browser_root" && "$browser_root" != "/" ]] || return 1
+  rm -rf -- "$browser_root"
+  mkdir -p "$browser_root"
+  printf '%s\n' "$(date +%s)" >"$failure_marker"
+}
+
 relay_prepare_host_browser_executable() {
   local state_root="$1"
   local log_file="$2"
@@ -41,7 +61,8 @@ relay_prepare_host_browser_executable() {
   local mode="${RELAY_CHROME_DEVTOOLS_MCP_MODE:-auto}"
   local browser_version="${RELAY_CHROME_HEADLESS_SHELL_VERSION:-152.0.7977.42}"
   local installer_version="${RELAY_PUPPETEER_BROWSERS_VERSION:-3.2.0}"
-  local installer_root installer_bin browser_root browser_bin
+  local retry_seconds="${RELAY_CHROME_INSTALL_RETRY_SECONDS:-21600}"
+  local installer_root installer_bin browser_root browser_bin failure_marker
 
   case "${RELAY_CHROME_DEVTOOLS_MCP_ENABLED:-true}" in
     0|false|FALSE|no|NO|off|OFF) return 1 ;;
@@ -60,9 +81,10 @@ relay_prepare_host_browser_executable() {
   case "$enabled" in
     0|false|FALSE|no|NO|off|OFF) return 1 ;;
   esac
-  command -v npm >/dev/null 2>&1 || return 1
+  [[ "$retry_seconds" =~ ^[0-9]+$ ]] || retry_seconds=21600
 
   browser_root="$state_root/tools/chrome-headless-shell-$browser_version"
+  failure_marker="$browser_root/.install-failed-at"
   browser_bin="$(
     find "$browser_root" -type f \
       \( -name chrome-headless-shell -o -name chrome-headless-shell.exe \) \
@@ -70,9 +92,15 @@ relay_prepare_host_browser_executable() {
   )"
   if [[ -n "$browser_bin" && -x "$browser_bin" ]] &&
      "$browser_bin" --version >/dev/null 2>&1; then
+    rm -f "$failure_marker"
     printf '%s\n' "$browser_bin"
     return 0
   fi
+  if ! relay_browser_install_retry_due "$failure_marker" "$retry_seconds"; then
+    echo "Managed Chrome Headless Shell install is in retry backoff; using the available host or Docker fallback." >>"$log_file"
+    return 1
+  fi
+  command -v npm >/dev/null 2>&1 || return 1
 
   installer_root="$state_root/tools/puppeteer-browsers-$installer_version"
   installer_bin="$installer_root/node_modules/.bin/browsers"
@@ -88,18 +116,26 @@ relay_prepare_host_browser_executable() {
       "@puppeteer/browsers@$installer_version" >>"$log_file" 2>&1 || return 1
   fi
 
+  rm -rf -- "$browser_root"
   mkdir -p "$browser_root"
   echo "Preparing lightweight Chrome Headless Shell $browser_version..." >&2
   echo "Preparing lightweight Chrome Headless Shell $browser_version..." >>"$log_file"
   "$installer_bin" install "chrome-headless-shell@$browser_version" \
-    --path "$browser_root" >>"$log_file" 2>&1 || return 1
+    --path "$browser_root" >>"$log_file" 2>&1 || {
+      relay_record_browser_install_failure "$browser_root" "$failure_marker" || true
+      return 1
+    }
   browser_bin="$(
     find "$browser_root" -type f \
       \( -name chrome-headless-shell -o -name chrome-headless-shell.exe \) \
       -print -quit 2>/dev/null || true
   )"
-  [[ -n "$browser_bin" && -x "$browser_bin" ]] || return 1
-  "$browser_bin" --version >/dev/null 2>&1 || return 1
+  if [[ -z "$browser_bin" || ! -x "$browser_bin" ]] ||
+     ! "$browser_bin" --version >/dev/null 2>&1; then
+    relay_record_browser_install_failure "$browser_root" "$failure_marker" || true
+    return 1
+  fi
+  rm -f "$failure_marker"
   printf '%s\n' "$browser_bin"
 }
 
