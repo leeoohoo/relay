@@ -167,6 +167,7 @@ mod tests {
             event_type: event_type.map(str::to_string),
             aggregate_type: aggregate_type.map(str::to_string),
             aggregate_id,
+            execution_requested: None,
         }
     }
 

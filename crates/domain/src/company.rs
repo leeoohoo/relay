@@ -805,6 +805,8 @@ pub struct CompanyRealtimeSignal {
     pub aggregate_type: Option<String>,
     #[serde(default)]
     pub aggregate_id: Option<Uuid>,
+    #[serde(default)]
+    pub execution_requested: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

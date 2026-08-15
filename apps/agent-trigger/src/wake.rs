@@ -72,7 +72,7 @@ impl RealtimeWakeFilter {
         *last_sequence = signal.sequence_id;
         match signal.event_type.as_deref() {
             Some("codex.trigger.updated") => QueueChecks {
-                agents: true,
+                agents: signal.execution_requested.unwrap_or(true),
                 ..QueueChecks::default()
             },
             Some("codex.plugin.operation.updated") => QueueChecks {
@@ -220,6 +220,7 @@ mod tests {
             event_type: event_type.map(str::to_string),
             aggregate_type: None,
             aggregate_id: None,
+            execution_requested: None,
         }
     }
 
@@ -309,5 +310,17 @@ mod tests {
             .expect("file event");
         let _ = std::fs::remove_dir_all(root);
         assert!(checks.control);
+    }
+
+    #[test]
+    fn trigger_runtime_updates_do_not_reclaim_without_new_execution_work() {
+        let mut filter = RealtimeWakeFilter::default();
+        let mut runtime_update = signal(1, Some("codex.trigger.updated"));
+        runtime_update.execution_requested = Some(false);
+        assert_eq!(filter.classify(runtime_update), QueueChecks::default());
+
+        let mut requested = signal(2, Some("codex.trigger.updated"));
+        requested.execution_requested = Some(true);
+        assert!(filter.classify(requested).agents);
     }
 }
