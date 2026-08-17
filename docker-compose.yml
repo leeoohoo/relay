@@ -28,6 +28,10 @@ services:
       context: .
       dockerfile: Dockerfile.server
       target: migrator
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-}
     command: /app/scripts/run_pg_migrations.sh ensure
     environment:
       DATABASE_URL: ${SERVER_DATABASE_URL:-postgres://postgres:postgres@postgres:5432/ai_chat}
@@ -108,6 +112,10 @@ services:
       context: .
       dockerfile: Dockerfile.server
       network: ${DOCKER_BUILD_NETWORK:-default}
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-}
     container_name: ai-chat-server
     user: "${RELAY_HOST_UID:-1000}:${RELAY_HOST_GID:-1000}"
     environment:

@@ -159,6 +159,25 @@ prepare_docker_build_network() {
   export DOCKER_BUILD_NETWORK
 }
 
+prepare_docker_build_proxy() {
+  local detected_http_proxy detected_https_proxy detected_no_proxy
+
+  detected_http_proxy="$(docker info --format '{{.HTTPProxy}}' 2>/dev/null || true)"
+  detected_https_proxy="$(docker info --format '{{.HTTPSProxy}}' 2>/dev/null || true)"
+  detected_no_proxy="$(docker info --format '{{.NoProxy}}' 2>/dev/null || true)"
+  [[ "$detected_http_proxy" == "<no value>" ]] && detected_http_proxy=""
+  [[ "$detected_https_proxy" == "<no value>" ]] && detected_https_proxy=""
+  [[ "$detected_no_proxy" == "<no value>" ]] && detected_no_proxy=""
+
+  export DOCKER_BUILD_HTTP_PROXY="${DOCKER_BUILD_HTTP_PROXY:-${detected_http_proxy:-${HTTP_PROXY:-}}}"
+  export DOCKER_BUILD_HTTPS_PROXY="${DOCKER_BUILD_HTTPS_PROXY:-${detected_https_proxy:-${HTTPS_PROXY:-}}}"
+  export DOCKER_BUILD_NO_PROXY="${DOCKER_BUILD_NO_PROXY:-${detected_no_proxy:-${NO_PROXY:-}}}"
+
+  if [[ -n "$DOCKER_BUILD_HTTP_PROXY" || -n "$DOCKER_BUILD_HTTPS_PROXY" ]]; then
+    echo "Using Docker daemon proxy settings for image builds."
+  fi
+}
+
 existing_host_port_for() {
   local container_name="$1"
   local container_port="$2"
@@ -543,6 +562,7 @@ case "$MODE" in
     ensure_docker_daemon
     prepare_shared_directories
     prepare_docker_build_network
+    prepare_docker_build_proxy
     prepare_harness_mode
     preflight_docker_images
     relay_ensure_chrome_devtools_image "$ROOT_DIR" "$DOCKER_BUILD_NETWORK"
@@ -560,6 +580,7 @@ case "$MODE" in
     ensure_docker_daemon
     prepare_shared_directories
     prepare_docker_build_network
+    prepare_docker_build_proxy
     prepare_harness_mode
     preflight_docker_images
     relay_ensure_chrome_devtools_image "$ROOT_DIR" "$DOCKER_BUILD_NETWORK"
